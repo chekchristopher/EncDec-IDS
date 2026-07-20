@@ -1,0 +1,972 @@
+{
+  "users": [
+    {
+      "id": "usr_1",
+      "email": "chekchris85@gmail.com",
+      "passwordHash": "$2b$10$IL0SP1z30.HfU0cdKzV53uLKLTChnqbM2dncIlcxl3qx7DbeByu.y",
+      "name": "Chris Analyst",
+      "role": "admin",
+      "status": "active",
+      "mfaEnabled": true,
+      "createdAt": "2026-07-19T13:11:16.995Z"
+    },
+    {
+      "id": "usr_2",
+      "email": "analyst@enterprise.sec",
+      "passwordHash": "$2b$10$wnY6TRZhg3FPAclEpbz2N.qcWLyCWsaYbCaHU64flrL7WqJuDuNAC",
+      "name": "Alex SecOps",
+      "role": "analyst",
+      "status": "active",
+      "mfaEnabled": false,
+      "createdAt": "2026-07-19T13:11:17.093Z"
+    }
+  ],
+  "hosts": [
+    {
+      "id": "hst_1",
+      "name": "portal.coou.edu.ng",
+      "os": "linux",
+      "ipAddress": "104.24.12.83",
+      "status": "online",
+      "lastSeen": "2026-07-19T13:44:20.955Z",
+      "agentVersion": "v4.0.1-vigil",
+      "cpuUsage": 11,
+      "memoryUsage": 10,
+      "diskUsage": 68,
+      "createdAt": "2026-07-19T13:11:17.093Z"
+    },
+    {
+      "id": "hst_2",
+      "name": "finance-db-win",
+      "os": "windows",
+      "ipAddress": "192.168.1.102",
+      "status": "online",
+      "lastSeen": "2026-07-19T13:44:20.955Z",
+      "agentVersion": "v4.0.1-vigil",
+      "cpuUsage": 96,
+      "memoryUsage": 73,
+      "diskUsage": 41,
+      "createdAt": "2026-07-19T13:11:17.093Z"
+    },
+    {
+      "id": "hst_3",
+      "name": "dev-workstation-mac",
+      "os": "macos",
+      "ipAddress": "192.168.1.150",
+      "status": "offline",
+      "lastSeen": "2026-07-19T12:11:17.093Z",
+      "agentVersion": "v4.0.0-vigil",
+      "cpuUsage": 0,
+      "memoryUsage": 0,
+      "diskUsage": 89,
+      "createdAt": "2026-07-19T13:11:17.093Z"
+    }
+  ],
+  "rules": [
+    {
+      "id": "rul_1",
+      "name": "Detect Excessive SSH Failures",
+      "type": "signature",
+      "target": "host",
+      "severity": "critical",
+      "enabled": true,
+      "definition": "{\"event\":\"failed_login\",\"threshold\":5,\"timeWindow\":60}",
+      "mitreMapping": "T1110.001 (Brute Force: Credential Stuffing)",
+      "createdAt": "2026-07-19T13:11:17.093Z",
+      "createdBy": "System"
+    },
+    {
+      "id": "rul_2",
+      "name": "Detect DNS Tunneling Activity",
+      "type": "anomaly",
+      "target": "network",
+      "severity": "high",
+      "enabled": true,
+      "definition": "{\"protocol\":\"DNS\",\"payloadSize\":512}",
+      "mitreMapping": "T1071.004 (C2: DNS Tunneling)",
+      "createdAt": "2026-07-19T13:11:17.093Z",
+      "createdBy": "System"
+    },
+    {
+      "id": "rul_3",
+      "name": "Unauthorized USB Device Connected",
+      "type": "behavior",
+      "target": "host",
+      "severity": "medium",
+      "enabled": true,
+      "definition": "{\"action\":\"usb_connect\"}",
+      "mitreMapping": "T1200 (Hardware Additions)",
+      "createdAt": "2026-07-19T13:11:17.093Z",
+      "createdBy": "System"
+    }
+  ],
+  "alerts": [
+    {
+      "id": "alt_qu2oo60n9",
+      "timestamp": "2026-07-19T13:44:20.955Z",
+      "severity": "high",
+      "title": "Port Scan in Progress",
+      "description": "Host detected rapid port probing on ports 1-1024. Target host: portal.coou.edu.ng.",
+      "category": "Port Scan",
+      "source": "104.24.12.8377",
+      "target": "portal.coou.edu.ng",
+      "status": "unhandled",
+      "mitreMapping": "T1046"
+    },
+    {
+      "id": "alt_4fwwxwefj",
+      "timestamp": "2026-07-19T13:44:04.445Z",
+      "severity": "high",
+      "title": "Potential Malware Beaconing",
+      "description": "Repetitive outbound connections over HTTP matching common beaconing intervals. Target host: portal.coou.edu.ng.",
+      "category": "Malware Traffic",
+      "source": "104.24.12.8396",
+      "target": "portal.coou.edu.ng",
+      "status": "unhandled",
+      "mitreMapping": "T1059"
+    },
+    {
+      "id": "alt_3iphqjjre",
+      "timestamp": "2026-07-19T13:43:53.940Z",
+      "severity": "high",
+      "title": "Port Scan in Progress",
+      "description": "Host detected rapid port probing on ports 1-1024. Target host: finance-db-win.",
+      "category": "Port Scan",
+      "source": "104.24.12.8332",
+      "target": "finance-db-win",
+      "status": "unhandled",
+      "mitreMapping": "T1046"
+    },
+    {
+      "id": "alt_w2ojaceao",
+      "timestamp": "2026-07-19T13:43:32.931Z",
+      "severity": "high",
+      "title": "Port Scan in Progress",
+      "description": "Host detected rapid port probing on ports 1-1024. Target host: finance-db-win.",
+      "category": "Port Scan",
+      "source": "192.168.1.41",
+      "target": "finance-db-win",
+      "status": "unhandled",
+      "mitreMapping": "T1046"
+    },
+    {
+      "id": "alt_jtm0yoxry",
+      "timestamp": "2026-07-19T13:43:29.931Z",
+      "severity": "high",
+      "title": "Port Scan in Progress",
+      "description": "Host detected rapid port probing on ports 1-1024. Target host: finance-db-win.",
+      "category": "Port Scan",
+      "source": "104.24.12.8332",
+      "target": "finance-db-win",
+      "status": "unhandled",
+      "mitreMapping": "T1046"
+    },
+    {
+      "id": "alt_ucx8eufh1",
+      "timestamp": "2026-07-19T13:42:17.896Z",
+      "severity": "medium",
+      "title": "Brute Force Attempt on SMB",
+      "description": "Multiple login failures detected over SMB. Target host: finance-db-win.",
+      "category": "Brute Force",
+      "source": "192.168.1.48",
+      "target": "finance-db-win",
+      "status": "unhandled",
+      "mitreMapping": "T1110"
+    },
+    {
+      "id": "alt_1l0fp09zl",
+      "timestamp": "2026-07-19T13:42:05.889Z",
+      "severity": "high",
+      "title": "Potential Malware Beaconing",
+      "description": "Repetitive outbound connections over HTTP matching common beaconing intervals. Target host: portal.coou.edu.ng.",
+      "category": "Malware Traffic",
+      "source": "192.168.1.38",
+      "target": "portal.coou.edu.ng",
+      "status": "unhandled",
+      "mitreMapping": "T1059"
+    },
+    {
+      "id": "alt_zbyteny8f",
+      "timestamp": "2026-07-19T13:41:13.364Z",
+      "severity": "high",
+      "title": "Potential Malware Beaconing",
+      "description": "Repetitive outbound connections over HTTP matching common beaconing intervals. Target host: finance-db-win.",
+      "category": "Malware Traffic",
+      "source": "192.168.1.181",
+      "target": "finance-db-win",
+      "status": "unhandled",
+      "mitreMapping": "T1059"
+    },
+    {
+      "id": "alt_20vh5nbn9",
+      "timestamp": "2026-07-19T13:41:11.864Z",
+      "severity": "medium",
+      "title": "Suspicious Cron Job Modification",
+      "description": "An unexpected cron job was registered on portal.coou.edu.ng. Target host: finance-db-win.",
+      "category": "Privilege Escalation",
+      "source": "192.168.1.68",
+      "target": "finance-db-win",
+      "status": "unhandled",
+      "mitreMapping": "T1059"
+    },
+    {
+      "id": "alt_k2cxq5ip8",
+      "timestamp": "2026-07-19T13:40:35.840Z",
+      "severity": "high",
+      "title": "Port Scan in Progress",
+      "description": "Host detected rapid port probing on ports 1-1024. Target host: finance-db-win.",
+      "category": "Port Scan",
+      "source": "192.168.1.141",
+      "target": "finance-db-win",
+      "status": "unhandled",
+      "mitreMapping": "T1046"
+    },
+    {
+      "id": "alt_nlbapajk4",
+      "timestamp": "2026-07-19T13:40:32.838Z",
+      "severity": "medium",
+      "title": "Suspicious Cron Job Modification",
+      "description": "An unexpected cron job was registered on portal.coou.edu.ng. Target host: portal.coou.edu.ng.",
+      "category": "Privilege Escalation",
+      "source": "104.24.12.8382",
+      "target": "portal.coou.edu.ng",
+      "status": "unhandled",
+      "mitreMapping": "T1059"
+    },
+    {
+      "id": "alt_xv5b3edm3",
+      "timestamp": "2026-07-19T13:40:19.335Z",
+      "severity": "high",
+      "title": "Potential Malware Beaconing",
+      "description": "Repetitive outbound connections over HTTP matching common beaconing intervals. Target host: portal.coou.edu.ng.",
+      "category": "Malware Traffic",
+      "source": "192.168.1.27",
+      "target": "portal.coou.edu.ng",
+      "status": "unhandled",
+      "mitreMapping": "T1059"
+    },
+    {
+      "id": "alt_djfkdrs48",
+      "timestamp": "2026-07-19T13:40:07.328Z",
+      "severity": "medium",
+      "title": "Suspicious Cron Job Modification",
+      "description": "An unexpected cron job was registered on portal.coou.edu.ng. Target host: finance-db-win.",
+      "category": "Privilege Escalation",
+      "source": "192.168.1.76",
+      "target": "finance-db-win",
+      "status": "unhandled",
+      "mitreMapping": "T1059"
+    },
+    {
+      "id": "alt_3xabz2c4n",
+      "timestamp": "2026-07-19T13:39:58.322Z",
+      "severity": "medium",
+      "title": "Suspicious Cron Job Modification",
+      "description": "An unexpected cron job was registered on portal.coou.edu.ng. Target host: finance-db-win.",
+      "category": "Privilege Escalation",
+      "source": "192.168.1.92",
+      "target": "finance-db-win",
+      "status": "unhandled",
+      "mitreMapping": "T1059"
+    },
+    {
+      "id": "alt_esxpusxx7",
+      "timestamp": "2026-07-19T13:39:19.300Z",
+      "severity": "medium",
+      "title": "Brute Force Attempt on SMB",
+      "description": "Multiple login failures detected over SMB. Target host: portal.coou.edu.ng.",
+      "category": "Brute Force",
+      "source": "104.24.12.8324",
+      "target": "portal.coou.edu.ng",
+      "status": "unhandled",
+      "mitreMapping": "T1110"
+    },
+    {
+      "id": "alt_xmxg9ez0l",
+      "timestamp": "2026-07-19T13:39:16.299Z",
+      "severity": "high",
+      "title": "Port Scan in Progress",
+      "description": "Host detected rapid port probing on ports 1-1024. Target host: finance-db-win.",
+      "category": "Port Scan",
+      "source": "104.24.12.8325",
+      "target": "finance-db-win",
+      "status": "unhandled",
+      "mitreMapping": "T1046"
+    },
+    {
+      "id": "alt_yu34licp2",
+      "timestamp": "2026-07-19T13:38:38.786Z",
+      "severity": "high",
+      "title": "Potential Malware Beaconing",
+      "description": "Repetitive outbound connections over HTTP matching common beaconing intervals. Target host: portal.coou.edu.ng.",
+      "category": "Malware Traffic",
+      "source": "192.168.1.22",
+      "target": "portal.coou.edu.ng",
+      "status": "unhandled",
+      "mitreMapping": "T1059"
+    },
+    {
+      "id": "alt_pdntfbk29",
+      "timestamp": "2026-07-19T13:37:47.763Z",
+      "severity": "medium",
+      "title": "Suspicious Cron Job Modification",
+      "description": "An unexpected cron job was registered on portal.coou.edu.ng. Target host: finance-db-win.",
+      "category": "Privilege Escalation",
+      "source": "104.24.12.8399",
+      "target": "finance-db-win",
+      "status": "unhandled",
+      "mitreMapping": "T1059"
+    },
+    {
+      "id": "alt_x0aa3llar",
+      "timestamp": "2026-07-19T13:37:40.258Z",
+      "severity": "medium",
+      "title": "Brute Force Attempt on SMB",
+      "description": "Multiple login failures detected over SMB. Target host: portal.coou.edu.ng.",
+      "category": "Brute Force",
+      "source": "192.168.1.47",
+      "target": "portal.coou.edu.ng",
+      "status": "unhandled",
+      "mitreMapping": "T1110"
+    },
+    {
+      "id": "alt_dl84tzr30",
+      "timestamp": "2026-07-19T13:37:31.255Z",
+      "severity": "high",
+      "title": "Port Scan in Progress",
+      "description": "Host detected rapid port probing on ports 1-1024. Target host: finance-db-win.",
+      "category": "Port Scan",
+      "source": "104.24.12.8323",
+      "target": "finance-db-win",
+      "status": "unhandled",
+      "mitreMapping": "T1046"
+    },
+    {
+      "id": "alt_qmhr5o5se",
+      "timestamp": "2026-07-19T13:37:10.246Z",
+      "severity": "high",
+      "title": "Port Scan in Progress",
+      "description": "Host detected rapid port probing on ports 1-1024. Target host: portal.coou.edu.ng.",
+      "category": "Port Scan",
+      "source": "192.168.1.79",
+      "target": "portal.coou.edu.ng",
+      "status": "unhandled",
+      "mitreMapping": "T1046"
+    },
+    {
+      "id": "alt_rmttyrbxo",
+      "timestamp": "2026-07-19T13:36:17.725Z",
+      "severity": "medium",
+      "title": "Brute Force Attempt on SMB",
+      "description": "Multiple login failures detected over SMB. Target host: portal.coou.edu.ng.",
+      "category": "Brute Force",
+      "source": "104.24.12.8333",
+      "target": "portal.coou.edu.ng",
+      "status": "unhandled",
+      "mitreMapping": "T1110"
+    },
+    {
+      "id": "alt_pa1da7b4x",
+      "timestamp": "2026-07-19T13:35:16.199Z",
+      "severity": "medium",
+      "title": "Brute Force Attempt on SMB",
+      "description": "Multiple login failures detected over SMB. Target host: finance-db-win.",
+      "category": "Brute Force",
+      "source": "192.168.1.47",
+      "target": "finance-db-win",
+      "status": "unhandled",
+      "mitreMapping": "T1110"
+    },
+    {
+      "id": "alt_w2su6qixy",
+      "timestamp": "2026-07-19T13:34:56.691Z",
+      "severity": "medium",
+      "title": "Brute Force Attempt on SMB",
+      "description": "Multiple login failures detected over SMB. Target host: portal.coou.edu.ng.",
+      "category": "Brute Force",
+      "source": "192.168.1.95",
+      "target": "portal.coou.edu.ng",
+      "status": "unhandled",
+      "mitreMapping": "T1110"
+    },
+    {
+      "id": "alt_4cvq2q3l1",
+      "timestamp": "2026-07-19T13:34:40.184Z",
+      "severity": "high",
+      "title": "Port Scan in Progress",
+      "description": "Host detected rapid port probing on ports 1-1024. Target host: finance-db-win.",
+      "category": "Port Scan",
+      "source": "192.168.1.78",
+      "target": "finance-db-win",
+      "status": "resolved",
+      "mitreMapping": "T1046"
+    },
+    {
+      "id": "alt_yc7z3fcw4",
+      "timestamp": "2026-07-19T13:34:29.679Z",
+      "severity": "medium",
+      "title": "Brute Force Attempt on SMB",
+      "description": "Multiple login failures detected over SMB. Target host: finance-db-win.",
+      "category": "Brute Force",
+      "source": "104.24.12.8321",
+      "target": "finance-db-win",
+      "status": "escalated",
+      "mitreMapping": "T1110"
+    },
+    {
+      "id": "alt_p4f471uvr",
+      "timestamp": "2026-07-19T13:33:37.158Z",
+      "severity": "medium",
+      "title": "Suspicious Cron Job Modification",
+      "description": "An unexpected cron job was registered on portal.coou.edu.ng. Target host: finance-db-win.",
+      "category": "Privilege Escalation",
+      "source": "192.168.1.23",
+      "target": "finance-db-win",
+      "status": "resolved",
+      "mitreMapping": "T1059"
+    },
+    {
+      "id": "alt_5maxm35mk",
+      "timestamp": "2026-07-19T13:33:35.659Z",
+      "severity": "high",
+      "title": "Port Scan in Progress",
+      "description": "Host detected rapid port probing on ports 1-1024. Target host: finance-db-win.",
+      "category": "Port Scan",
+      "source": "192.168.1.200",
+      "target": "finance-db-win",
+      "status": "unhandled",
+      "mitreMapping": "T1046"
+    },
+    {
+      "id": "alt_ju7iq82gj",
+      "timestamp": "2026-07-19T13:33:29.656Z",
+      "severity": "high",
+      "title": "Potential Malware Beaconing",
+      "description": "Repetitive outbound connections over HTTP matching common beaconing intervals. Target host: finance-db-win.",
+      "category": "Malware Traffic",
+      "source": "104.24.12.8370",
+      "target": "finance-db-win",
+      "status": "resolved",
+      "mitreMapping": "T1059"
+    },
+    {
+      "id": "alt_kshe4jzo1",
+      "timestamp": "2026-07-19T13:33:17.651Z",
+      "severity": "high",
+      "title": "Port Scan in Progress",
+      "description": "Host detected rapid port probing on ports 1-1024. Target host: finance-db-win.",
+      "category": "Port Scan",
+      "source": "192.168.1.90",
+      "target": "finance-db-win",
+      "status": "unhandled",
+      "mitreMapping": "T1046"
+    },
+    {
+      "id": "alt_0afkemmar",
+      "timestamp": "2026-07-19T13:32:58.142Z",
+      "severity": "medium",
+      "title": "Brute Force Attempt on SMB",
+      "description": "Multiple login failures detected over SMB. Target host: finance-db-win.",
+      "category": "Brute Force",
+      "source": "192.168.1.64",
+      "target": "finance-db-win",
+      "status": "escalated",
+      "mitreMapping": "T1110"
+    },
+    {
+      "id": "alt_ssnbcgm1i",
+      "timestamp": "2026-07-19T13:32:34.129Z",
+      "severity": "medium",
+      "title": "Brute Force Attempt on SMB",
+      "description": "Multiple login failures detected over SMB. Target host: finance-db-win.",
+      "category": "Brute Force",
+      "source": "104.24.12.8317",
+      "target": "finance-db-win",
+      "status": "unhandled",
+      "mitreMapping": "T1110"
+    },
+    {
+      "id": "alt_7d36hwz40",
+      "timestamp": "2026-07-19T13:32:07.116Z",
+      "severity": "high",
+      "title": "Potential Malware Beaconing",
+      "description": "Repetitive outbound connections over HTTP matching common beaconing intervals. Target host: finance-db-win.",
+      "category": "Malware Traffic",
+      "source": "192.168.1.79",
+      "target": "finance-db-win",
+      "status": "unhandled",
+      "mitreMapping": "T1059"
+    },
+    {
+      "id": "alt_dqf8d8e4g",
+      "timestamp": "2026-07-19T13:31:44.603Z",
+      "severity": "high",
+      "title": "Potential Malware Beaconing",
+      "description": "Repetitive outbound connections over HTTP matching common beaconing intervals. Target host: finance-db-win.",
+      "category": "Malware Traffic",
+      "source": "192.168.1.36",
+      "target": "finance-db-win",
+      "status": "unhandled",
+      "mitreMapping": "T1059"
+    },
+    {
+      "id": "alt_xf4ttkdi4",
+      "timestamp": "2026-07-19T13:31:08.590Z",
+      "severity": "medium",
+      "title": "Suspicious Cron Job Modification",
+      "description": "An unexpected cron job was registered on portal.coou.edu.ng. Target host: finance-db-win.",
+      "category": "Privilege Escalation",
+      "source": "104.24.12.8394",
+      "target": "finance-db-win",
+      "status": "unhandled",
+      "mitreMapping": "T1059"
+    },
+    {
+      "id": "alt_nrwgmu43q",
+      "timestamp": "2026-07-19T13:29:53.554Z",
+      "severity": "medium",
+      "title": "Suspicious Cron Job Modification",
+      "description": "An unexpected cron job was registered on portal.coou.edu.ng. Target host: finance-db-win.",
+      "category": "Privilege Escalation",
+      "source": "192.168.1.65",
+      "target": "finance-db-win",
+      "status": "unhandled",
+      "mitreMapping": "T1059"
+    },
+    {
+      "id": "alt_gskhcp2b3",
+      "timestamp": "2026-07-19T13:29:28.041Z",
+      "severity": "high",
+      "title": "Port Scan in Progress",
+      "description": "Host detected rapid port probing on ports 1-1024. Target host: portal.coou.edu.ng.",
+      "category": "Port Scan",
+      "source": "104.24.12.8392",
+      "target": "portal.coou.edu.ng",
+      "status": "unhandled",
+      "mitreMapping": "T1046"
+    },
+    {
+      "id": "alt_zt6l5bg6g",
+      "timestamp": "2026-07-19T13:29:04.031Z",
+      "severity": "medium",
+      "title": "Brute Force Attempt on SMB",
+      "description": "Multiple login failures detected over SMB. Target host: portal.coou.edu.ng.",
+      "category": "Brute Force",
+      "source": "192.168.1.102",
+      "target": "portal.coou.edu.ng",
+      "status": "unhandled",
+      "mitreMapping": "T1110"
+    },
+    {
+      "id": "alt_veaolkx65",
+      "timestamp": "2026-07-19T13:28:38.513Z",
+      "severity": "medium",
+      "title": "Suspicious Cron Job Modification",
+      "description": "An unexpected cron job was registered on portal.coou.edu.ng. Target host: portal.coou.edu.ng.",
+      "category": "Privilege Escalation",
+      "source": "192.168.1.84",
+      "target": "portal.coou.edu.ng",
+      "status": "unhandled",
+      "mitreMapping": "T1059"
+    },
+    {
+      "id": "alt_eycocztso",
+      "timestamp": "2026-07-19T13:28:34.011Z",
+      "severity": "medium",
+      "title": "Suspicious Cron Job Modification",
+      "description": "An unexpected cron job was registered on portal.coou.edu.ng. Target host: finance-db-win.",
+      "category": "Privilege Escalation",
+      "source": "104.24.12.8363",
+      "target": "finance-db-win",
+      "status": "unhandled",
+      "mitreMapping": "T1059"
+    },
+    {
+      "id": "alt_yxxthgt8a",
+      "timestamp": "2026-07-19T13:28:20.504Z",
+      "severity": "medium",
+      "title": "Suspicious Cron Job Modification",
+      "description": "An unexpected cron job was registered on portal.coou.edu.ng. Target host: finance-db-win.",
+      "category": "Privilege Escalation",
+      "source": "104.24.12.8346",
+      "target": "finance-db-win",
+      "status": "unhandled",
+      "mitreMapping": "T1059"
+    },
+    {
+      "id": "alt_0h62w2r2x",
+      "timestamp": "2026-07-19T13:27:35.482Z",
+      "severity": "medium",
+      "title": "Brute Force Attempt on SMB",
+      "description": "Multiple login failures detected over SMB. Target host: finance-db-win.",
+      "category": "Brute Force",
+      "source": "192.168.1.78",
+      "target": "finance-db-win",
+      "status": "unhandled",
+      "mitreMapping": "T1110"
+    },
+    {
+      "id": "alt_7rjj95lqd",
+      "timestamp": "2026-07-19T13:26:50.460Z",
+      "severity": "medium",
+      "title": "Brute Force Attempt on SMB",
+      "description": "Multiple login failures detected over SMB. Target host: portal.coou.edu.ng.",
+      "category": "Brute Force",
+      "source": "192.168.1.202",
+      "target": "portal.coou.edu.ng",
+      "status": "escalated",
+      "mitreMapping": "T1110"
+    },
+    {
+      "id": "alt_mifv2deyi",
+      "timestamp": "2026-07-19T13:26:45.958Z",
+      "severity": "medium",
+      "title": "Suspicious Cron Job Modification",
+      "description": "An unexpected cron job was registered on portal.coou.edu.ng. Target host: portal.coou.edu.ng.",
+      "category": "Privilege Escalation",
+      "source": "104.24.12.835",
+      "target": "portal.coou.edu.ng",
+      "status": "escalated",
+      "mitreMapping": "T1059"
+    },
+    {
+      "id": "alt_bilx5tjjf",
+      "timestamp": "2026-07-19T13:26:20.445Z",
+      "severity": "medium",
+      "title": "Brute Force Attempt on SMB",
+      "description": "Multiple login failures detected over SMB. Target host: finance-db-win.",
+      "category": "Brute Force",
+      "source": "104.24.12.8325",
+      "target": "finance-db-win",
+      "status": "unhandled",
+      "mitreMapping": "T1110"
+    },
+    {
+      "id": "alt_lt8ttevvu",
+      "timestamp": "2026-07-19T13:25:38.418Z",
+      "severity": "high",
+      "title": "Potential Malware Beaconing",
+      "description": "Repetitive outbound connections over HTTP matching common beaconing intervals. Target host: portal.coou.edu.ng.",
+      "category": "Malware Traffic",
+      "source": "104.24.12.8337",
+      "target": "portal.coou.edu.ng",
+      "status": "unhandled",
+      "mitreMapping": "T1059"
+    },
+    {
+      "id": "alt_2pj6y7ykj",
+      "timestamp": "2026-07-19T13:25:21.909Z",
+      "severity": "high",
+      "title": "Potential Malware Beaconing",
+      "description": "Repetitive outbound connections over HTTP matching common beaconing intervals. Target host: portal.coou.edu.ng.",
+      "category": "Malware Traffic",
+      "source": "192.168.1.55",
+      "target": "portal.coou.edu.ng",
+      "status": "unhandled",
+      "mitreMapping": "T1059"
+    },
+    {
+      "id": "alt_6sevg2xrk",
+      "timestamp": "2026-07-19T13:24:56.398Z",
+      "severity": "medium",
+      "title": "Suspicious Cron Job Modification",
+      "description": "An unexpected cron job was registered on portal.coou.edu.ng. Target host: portal.coou.edu.ng.",
+      "category": "Privilege Escalation",
+      "source": "104.24.12.8318",
+      "target": "portal.coou.edu.ng",
+      "status": "unhandled",
+      "mitreMapping": "T1059"
+    },
+    {
+      "id": "alt_b57e6c75y",
+      "timestamp": "2026-07-19T13:23:18.839Z",
+      "severity": "medium",
+      "title": "Brute Force Attempt on SMB",
+      "description": "Multiple login failures detected over SMB. Target host: finance-db-win.",
+      "category": "Brute Force",
+      "source": "192.168.1.34",
+      "target": "finance-db-win",
+      "status": "unhandled",
+      "mitreMapping": "T1110"
+    },
+    {
+      "id": "alt_v79ga567e",
+      "timestamp": "2026-07-19T13:23:15.838Z",
+      "severity": "high",
+      "title": "Potential Malware Beaconing",
+      "description": "Repetitive outbound connections over HTTP matching common beaconing intervals. Target host: finance-db-win.",
+      "category": "Malware Traffic",
+      "source": "104.24.12.8397",
+      "target": "finance-db-win",
+      "status": "unhandled",
+      "mitreMapping": "T1059"
+    }
+  ],
+  "threats": [
+    {
+      "id": "thr_05fa9iywt",
+      "timestamp": "2026-07-19T13:34:33.172Z",
+      "score": 50,
+      "actor": "Detected Intrusive Pivot",
+      "vector": "Brute Force",
+      "status": "active",
+      "associatedAlerts": [
+        "alt_yc7z3fcw4"
+      ],
+      "mitreMapping": "T1110"
+    },
+    {
+      "id": "thr_8p0y9g1x3",
+      "timestamp": "2026-07-19T13:33:09.424Z",
+      "score": 50,
+      "actor": "Detected Intrusive Pivot",
+      "vector": "Brute Force",
+      "status": "active",
+      "associatedAlerts": [
+        "alt_0afkemmar"
+      ],
+      "mitreMapping": "T1110"
+    },
+    {
+      "id": "thr_rtpisdghe",
+      "timestamp": "2026-07-19T13:26:55.095Z",
+      "score": 50,
+      "actor": "Detected Intrusive Pivot",
+      "vector": "Brute Force",
+      "status": "active",
+      "associatedAlerts": [
+        "alt_7rjj95lqd"
+      ],
+      "mitreMapping": "T1110"
+    },
+    {
+      "id": "thr_rpiuwucec",
+      "timestamp": "2026-07-19T13:26:51.106Z",
+      "score": 50,
+      "actor": "Detected Intrusive Pivot",
+      "vector": "Privilege Escalation",
+      "status": "active",
+      "associatedAlerts": [
+        "alt_mifv2deyi"
+      ],
+      "mitreMapping": "T1059"
+    },
+    {
+      "id": "thr_1",
+      "timestamp": "2026-07-19T13:11:17.093Z",
+      "score": 87,
+      "actor": "APT29 (Cozy Bear) Shadow",
+      "vector": "External DNS Payload Staging",
+      "status": "under_investigation",
+      "associatedAlerts": [
+        "alt_2"
+      ],
+      "mitreMapping": "T1071"
+    }
+  ],
+  "apiKeys": [
+    {
+      "id": "key_1",
+      "name": "Core Gw Linux Agent Key",
+      "keyPrefix": "ids_agent_4fa2",
+      "role": "agent",
+      "createdAt": "2026-07-19T13:11:17.093Z",
+      "expiresAt": "2027-07-19T13:11:17.093Z"
+    }
+  ],
+  "auditLogs": [
+    {
+      "id": "aud_39an048a6",
+      "timestamp": "2026-07-19T13:34:49.624Z",
+      "userId": "usr_1",
+      "userEmail": "chekchris85@gmail.com",
+      "action": "Resolved Alert Triage",
+      "resource": "Port Scan in Progress",
+      "ipAddress": "127.0.0.1",
+      "status": "success"
+    },
+    {
+      "id": "aud_17ox5zfh0",
+      "timestamp": "2026-07-19T13:34:33.173Z",
+      "userId": "usr_1",
+      "userEmail": "chekchris85@gmail.com",
+      "action": "Escalated Threat Incident",
+      "resource": "Brute Force Attempt on SMB",
+      "ipAddress": "127.0.0.1",
+      "status": "success"
+    },
+    {
+      "id": "aud_xcl6yad3u",
+      "timestamp": "2026-07-19T13:34:01.954Z",
+      "userId": "usr_1",
+      "userEmail": "chekchris85@gmail.com",
+      "action": "Resolved Alert Triage",
+      "resource": "Suspicious Cron Job Modification",
+      "ipAddress": "127.0.0.1",
+      "status": "success"
+    },
+    {
+      "id": "aud_1qxz6b2pt",
+      "timestamp": "2026-07-19T13:33:30.606Z",
+      "userId": "usr_1",
+      "userEmail": "chekchris85@gmail.com",
+      "action": "Resolved Alert Triage",
+      "resource": "Potential Malware Beaconing",
+      "ipAddress": "127.0.0.1",
+      "status": "success"
+    },
+    {
+      "id": "aud_xnjokr9e4",
+      "timestamp": "2026-07-19T13:33:09.425Z",
+      "userId": "usr_1",
+      "userEmail": "chekchris85@gmail.com",
+      "action": "Escalated Threat Incident",
+      "resource": "Brute Force Attempt on SMB",
+      "ipAddress": "127.0.0.1",
+      "status": "success"
+    },
+    {
+      "id": "aud_5wn9c75b7",
+      "timestamp": "2026-07-19T13:26:55.095Z",
+      "userId": "usr_1",
+      "userEmail": "chekchris85@gmail.com",
+      "action": "Escalated Threat Incident",
+      "resource": "Brute Force Attempt on SMB",
+      "ipAddress": "127.0.0.1",
+      "status": "success"
+    },
+    {
+      "id": "aud_btvlljjtz",
+      "timestamp": "2026-07-19T13:26:51.107Z",
+      "userId": "usr_1",
+      "userEmail": "chekchris85@gmail.com",
+      "action": "Escalated Threat Incident",
+      "resource": "Suspicious Cron Job Modification",
+      "ipAddress": "127.0.0.1",
+      "status": "success"
+    },
+    {
+      "id": "aud_eyvqp5oau",
+      "timestamp": "2026-07-19T13:25:50.075Z",
+      "userId": "usr_1",
+      "userEmail": "chekchris85@gmail.com",
+      "action": "Console Authentication Success",
+      "resource": "Operator Console",
+      "ipAddress": "127.0.0.1",
+      "status": "success"
+    }
+  ],
+  "liveActivities": [
+    {
+      "id": "act_sv8x1ock8",
+      "timestamp": "2026-07-19T13:34:49.624Z",
+      "userId": "usr_1",
+      "userEmail": "chekchris85@gmail.com",
+      "action": "resolved_alert_triage",
+      "details": "Resolved Alert Triage on resource: Port Scan in Progress [SUCCESS]"
+    },
+    {
+      "id": "act_m6ors48kj",
+      "timestamp": "2026-07-19T13:34:33.173Z",
+      "userId": "usr_1",
+      "userEmail": "chekchris85@gmail.com",
+      "action": "escalated_threat_incident",
+      "details": "Escalated Threat Incident on resource: Brute Force Attempt on SMB [SUCCESS]"
+    },
+    {
+      "id": "act_59sr1lwa1",
+      "timestamp": "2026-07-19T13:34:01.954Z",
+      "userId": "usr_1",
+      "userEmail": "chekchris85@gmail.com",
+      "action": "resolved_alert_triage",
+      "details": "Resolved Alert Triage on resource: Suspicious Cron Job Modification [SUCCESS]"
+    },
+    {
+      "id": "act_kbnjzkgqs",
+      "timestamp": "2026-07-19T13:33:30.606Z",
+      "userId": "usr_1",
+      "userEmail": "chekchris85@gmail.com",
+      "action": "resolved_alert_triage",
+      "details": "Resolved Alert Triage on resource: Potential Malware Beaconing [SUCCESS]"
+    },
+    {
+      "id": "act_5k5irenek",
+      "timestamp": "2026-07-19T13:33:09.425Z",
+      "userId": "usr_1",
+      "userEmail": "chekchris85@gmail.com",
+      "action": "escalated_threat_incident",
+      "details": "Escalated Threat Incident on resource: Brute Force Attempt on SMB [SUCCESS]"
+    },
+    {
+      "id": "act_xanp45d5l",
+      "timestamp": "2026-07-19T13:26:55.095Z",
+      "userId": "usr_1",
+      "userEmail": "chekchris85@gmail.com",
+      "action": "escalated_threat_incident",
+      "details": "Escalated Threat Incident on resource: Brute Force Attempt on SMB [SUCCESS]"
+    },
+    {
+      "id": "act_or0w9fuly",
+      "timestamp": "2026-07-19T13:26:51.107Z",
+      "userId": "usr_1",
+      "userEmail": "chekchris85@gmail.com",
+      "action": "escalated_threat_incident",
+      "details": "Escalated Threat Incident on resource: Suspicious Cron Job Modification [SUCCESS]"
+    },
+    {
+      "id": "act_r5txpza9e",
+      "timestamp": "2026-07-19T13:25:50.075Z",
+      "userId": "usr_1",
+      "userEmail": "chekchris85@gmail.com",
+      "action": "console_authentication_success",
+      "details": "Console Authentication Success on resource: Operator Console [SUCCESS]"
+    },
+    {
+      "id": "act_1",
+      "timestamp": "2026-07-19T13:11:17.093Z",
+      "userId": "usr_1",
+      "userEmail": "chekchris85@gmail.com",
+      "action": "login",
+      "details": "Logged into the console from IP 10.0.0.5"
+    }
+  ],
+  "threatIntel": [
+    {
+      "id": "feed_1",
+      "type": "ip",
+      "value": "198.51.100.42",
+      "threatType": "C2 Server",
+      "source": "AlienVault OTX Feed",
+      "confidence": 92,
+      "addedAt": "2026-07-19T13:11:17.093Z"
+    },
+    {
+      "id": "feed_2",
+      "type": "domain",
+      "value": "malware-staging-node.cc",
+      "threatType": "Phishing / Malware Host",
+      "source": "Mandiant Threat Feed",
+      "confidence": 85,
+      "addedAt": "2026-07-19T13:11:17.093Z"
+    }
+  ],
+  "mlModels": [
+    {
+      "id": "ml_1",
+      "name": "Isolation Forest Anomaly Classifier",
+      "type": "isolation_forest",
+      "accuracy": 98.4,
+      "status": "active",
+      "lastTrained": "2026-07-18T13:11:17.093Z"
+    },
+    {
+      "id": "ml_2",
+      "name": "Autoencoder Deep Reconstructor",
+      "type": "autoencoder",
+      "accuracy": 96.1,
+      "status": "training",
+      "lastTrained": "2026-07-19T13:11:17.093Z"
+    }
+  ],
+  "quarantine": []
+}

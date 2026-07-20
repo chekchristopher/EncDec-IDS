@@ -1,0 +1,8 @@
+{
+  "name": "EncDec IDS",
+  "description": "Enterprise-ready Hybrid Intrusion Detection System (HIDS/NIDS) with real-time monitoring, security analytics, and client-side visualization.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
