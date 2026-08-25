@@ -6,17 +6,18 @@
 import React from 'react';
 import { 
   LayoutDashboard, Activity, Terminal, ShieldAlert, FileText, 
-  Settings, LogOut, Lock, Database, X 
+  Settings, LogOut, Lock, Database, X, UserPen, ArrowRightLeft 
 } from 'lucide-react';
 
 interface SidebarProps {
   activeView: string;
   onViewChange: (view: string) => void;
-  currentUser: { email: string; name: string; role: string } | null;
+  currentUser: { email: string; name: string; role: string; avatarUrl?: string } | null;
   onLogout: () => void;
   adminPasskeyPassed: boolean;
   isOpen: boolean;
   onClose: () => void;
+  onOpenProfile?: () => void;
 }
 
 export default function Sidebar({ 
@@ -26,9 +27,12 @@ export default function Sidebar({
   onLogout,
   adminPasskeyPassed,
   isOpen,
-  onClose
+  onClose,
+  onOpenProfile
 }: SidebarProps) {
   
+  const isAdmin = currentUser?.role === 'admin';
+
   const menuItems = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
     { id: 'network', label: 'Network IDS', icon: Activity },
@@ -36,10 +40,9 @@ export default function Sidebar({
     { id: 'threatIntel', label: 'Threat Intel', icon: ShieldAlert },
     { id: 'reports', label: 'Reports', icon: FileText },
     { id: 'logs', label: 'Audit Trail', icon: Database },
+    ...(isAdmin ? [{ id: 'dualDatabase', label: 'Dual DB (SQL + Firebase)', icon: ArrowRightLeft }] : []),
     { id: 'settings', label: 'Security Settings', icon: Settings },
   ];
-
-  const isAdmin = currentUser?.role === 'admin';
 
   const handleNavItemClick = (id: string) => {
     onViewChange(id);
@@ -65,7 +68,7 @@ export default function Sidebar({
       >
         
         {/* Brand Header */}
-        <div className="px-6 mb-8 flex justify-between items-center">
+        <div className="px-6 mb-6 flex justify-between items-center shrink-0">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded bg-cyan-500/10 flex items-center justify-center border border-cyan-500/30">
               <ShieldAlert className="w-5 h-5 text-cyan-400" />
@@ -87,7 +90,7 @@ export default function Sidebar({
         </div>
 
       {/* Navigation Links */}
-      <nav className="flex-1 space-y-1 px-3">
+      <nav className="flex-1 overflow-y-auto min-h-0 space-y-1 px-3 py-1 my-1">
         {menuItems.map((item) => {
           const IconComponent = item.icon;
           const isActive = activeView === item.id;
@@ -133,19 +136,43 @@ export default function Sidebar({
       </nav>
 
       {/* Operator profile card at bottom */}
-      <div className="px-4 mt-auto">
-        <div className="p-4 bg-slate-950/50 rounded border border-white/5 mb-4">
-          <div className="flex items-center gap-3 mb-2">
-            <div className="w-8 h-8 rounded-full bg-cyan-950 flex items-center justify-center border border-cyan-500/20 text-xs font-bold text-cyan-400">
-              {currentUser?.name ? currentUser.name.split(' ').map(n => n[0]).join('') : 'OP'}
+      <div className="px-4 mt-auto shrink-0">
+        <button
+          onClick={onOpenProfile}
+          type="button"
+          className="w-full text-left p-3.5 bg-slate-950/70 hover:bg-slate-950 border border-white/5 hover:border-cyan-500/30 rounded-lg mb-4 transition-all duration-200 group cursor-pointer shadow-sm relative overflow-hidden focus-visible:ring-2 focus-visible:ring-cyan-400 focus-visible:outline-none"
+          title="Click to view and edit profile"
+          aria-label="View and edit operator profile"
+          id="sidebar-profile-card"
+        >
+          <div className="flex items-center gap-3">
+            <div className="relative shrink-0">
+              <div className="w-9 h-9 rounded-full bg-cyan-950 flex items-center justify-center border border-cyan-500/30 text-xs font-bold text-cyan-400 overflow-hidden shadow-inner">
+                {currentUser?.avatarUrl ? (
+                  <img src={currentUser.avatarUrl} alt="Avatar" className="w-full h-full object-cover" />
+                ) : (
+                  currentUser?.name ? currentUser.name.split(' ').map(n => n[0]).join('') : 'OP'
+                )}
+              </div>
+              <div className="absolute -bottom-0.5 -right-0.5 p-0.5 rounded-full bg-slate-900 border border-cyan-500/40 text-cyan-400 opacity-80 group-hover:opacity-100">
+                <UserPen className="w-2.5 h-2.5" />
+              </div>
             </div>
+
             <div className="min-w-0 flex-1">
-              <p className="text-xs font-semibold text-white truncate">{currentUser?.name || 'Operator'}</p>
-              <p className="text-[10px] font-mono text-cyan-400/80 truncate uppercase">{currentUser?.role || 'analyst'}</p>
+              <div className="flex items-center justify-between">
+                <p className="text-xs font-bold text-white truncate group-hover:text-cyan-300 transition-colors">{currentUser?.name || 'Operator'}</p>
+              </div>
+              <p className="text-[9px] font-mono text-cyan-400/80 truncate uppercase tracking-wider">{currentUser?.role || 'analyst'}</p>
+              <p className="text-[9px] font-mono text-slate-500 truncate mt-0.5">{currentUser?.email}</p>
             </div>
           </div>
-          <p className="text-[10px] font-mono text-slate-500 truncate">{currentUser?.email}</p>
-        </div>
+
+          <div className="mt-2 pt-1.5 border-t border-white/5 flex items-center justify-between text-[9px] text-slate-400 group-hover:text-cyan-400 transition-colors">
+            <span>Edit Profile & Avatar</span>
+            <span>→</span>
+          </div>
+        </button>
 
         {/* Sign Out Action */}
         <button

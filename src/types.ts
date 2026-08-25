@@ -13,6 +13,8 @@ export interface User {
   status: 'active' | 'suspended';
   mfaEnabled: boolean;
   mfaSecret?: string;
+  avatarUrl?: string;
+  lastNameChangeDate?: string;
   createdAt: string;
 }
 
@@ -167,6 +169,7 @@ export interface AuditLog {
   timestamp: string;
   userId: string;
   userEmail: string;
+  userRole?: string;
   action: string;
   resource: string;
   ipAddress: string;
@@ -178,6 +181,7 @@ export interface LiveActivity {
   timestamp: string;
   userId: string;
   userEmail: string;
+  userRole?: string;
   action: string; // 'login' | 'started_scan' | etc.
   details: string;
 }
@@ -210,3 +214,61 @@ export interface QuarantineItem {
   isolatedAt: string;
   isolatedBy: string;
 }
+
+export interface EmailLog {
+  id: string;
+  timestamp: string;
+  recipient: string;
+  senderEmail?: string;
+  senderUserId?: string;
+  subject: string;
+  bodyText: string;
+  type: 'registration' | 'login' | string;
+  role: string;
+  status: 'sent' | 'queued' | 'simulated';
+}
+
+export interface MssqlConfig {
+  server: string;
+  port: number;
+  database: string;
+  authType: 'windows' | 'sql';
+  domain?: string;
+  user: string;
+  password?: string;
+  encrypt: boolean;
+  trustServerCertificate: boolean;
+  enabled: boolean;
+}
+
+export interface DualDatabaseStatus {
+  firebase: {
+    enabled: boolean;
+    connected: boolean;
+    projectId?: string;
+    databaseId?: string;
+    collectionsCount: number;
+    lastSynced?: string;
+  };
+  mssql: {
+    enabled: boolean;
+    connected: boolean;
+    server?: string;
+    database?: string;
+    authType?: 'windows' | 'sql';
+    domain?: string;
+    user?: string;
+    lastSynced?: string;
+    tableCounts: {
+      users: number;
+      alerts: number;
+      auditLogs: number;
+      emailLogs: number;
+      rules: number;
+      hosts: number;
+      threatIntel: number;
+    };
+    error?: string;
+  };
+}
+

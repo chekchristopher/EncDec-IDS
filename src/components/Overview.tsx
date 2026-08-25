@@ -57,6 +57,33 @@ export default function Overview({
   return (
     <div className="space-y-6" id="dashboard-overview-container">
       
+      {/* Target Focus Banner */}
+      <div className="p-4 bg-slate-900/90 border border-cyan-500/30 rounded-lg flex flex-col md:flex-row items-start md:items-center justify-between gap-3 shadow-lg relative overflow-hidden">
+        <div className="absolute top-0 right-0 w-64 h-full bg-cyan-500/5 blur-xl pointer-events-none" />
+        <div className="flex items-center gap-3 relative z-10">
+          <div className="w-10 h-10 rounded-lg bg-cyan-950 border border-cyan-500/40 flex items-center justify-center text-cyan-400 shrink-0">
+            <ShieldCheck className="w-5 h-5 animate-pulse" />
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-mono font-bold text-slate-400 uppercase tracking-wider">Primary Target:</span>
+              <span className="text-sm font-bold font-mono text-cyan-300">portal.coou.edu.ng</span>
+              <span className="px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-[9px] font-mono font-semibold uppercase flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+                Live Monitoring Active
+              </span>
+            </div>
+            <p className="text-[11px] text-slate-400 mt-0.5">
+              Chukwuemeka Odumegwu Ojukwu University Portal • Primary IP: <code className="text-cyan-400 font-mono">104.24.12.83</code> • Dedicated Agent Node Online
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2 text-xs font-mono text-slate-400 relative z-10 shrink-0">
+          <span className="text-[10px] uppercase text-slate-500">Sensor Status:</span>
+          <span className="text-emerald-400 font-bold">100% COVERAGE</span>
+        </div>
+      </div>
+
       {/* Overview Bento Grid */}
       <section className="grid grid-cols-1 md:grid-cols-4 gap-4">
         
@@ -250,16 +277,16 @@ export default function Overview({
         </div>
 
         {/* Desktop Table View */}
-        <div className="overflow-x-auto hidden md:block">
+        <div className="overflow-x-auto max-h-[380px] overflow-y-auto pr-1 hidden md:block" id="alert-triage-table-container">
           <table className="w-full text-left border-collapse">
-            <thead>
-              <tr className="border-b border-white/5 text-[10px] font-mono text-slate-500 uppercase tracking-wider">
-                <th className="py-2.5 px-4">Timestamp</th>
-                <th className="py-2.5 px-4">Severity</th>
-                <th className="py-2.5 px-4">Alert Trigger</th>
-                <th className="py-2.5 px-4">Vector Classification</th>
-                <th className="py-2.5 px-4">Source Asset</th>
-                <th className="py-2.5 px-4">Triage Actions</th>
+            <thead className="bg-slate-900 sticky top-0 z-10">
+              <tr className="border-b border-white/10 text-[10px] font-mono text-slate-400 uppercase tracking-wider">
+                <th className="py-2.5 px-4 bg-slate-900">Timestamp</th>
+                <th className="py-2.5 px-4 bg-slate-900">Severity</th>
+                <th className="py-2.5 px-4 bg-slate-900">Alert Trigger</th>
+                <th className="py-2.5 px-4 bg-slate-900">Vector Classification</th>
+                <th className="py-2.5 px-4 bg-slate-900">Source Asset</th>
+                <th className="py-2.5 px-4 bg-slate-900">Triage Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-white/5 text-xs font-mono">
@@ -271,31 +298,31 @@ export default function Overview({
                 </tr>
               ) : (
                 alerts.map((alert) => (
-                  <tr key={alert.id} className="hover:bg-white/[0.01] transition-colors group">
-                    <td className="py-3.5 px-4 text-slate-400">
+                  <tr key={alert.id} className="hover:bg-white/[0.02] transition-colors group">
+                    <td className="py-3.5 px-4 text-slate-400 whitespace-nowrap">
                       {new Date(alert.timestamp).toLocaleTimeString()}
                     </td>
-                    <td className="py-3.5 px-4">
+                    <td className="py-3.5 px-4 whitespace-nowrap">
                       <span className={`px-2 py-0.5 rounded text-[9px] uppercase border ${severityColors[alert.severity as keyof typeof severityColors] || ''}`}>
                         {alert.severity}
                       </span>
                     </td>
                     <td className="py-3.5 px-4 font-semibold text-white">
-                      {alert.title}
+                      <span className="block truncate max-w-xs">{alert.title}</span>
                       <p className="text-[10px] text-slate-400 font-normal mt-0.5 max-w-xs truncate" title={alert.description}>
                         {alert.description}
                       </p>
                     </td>
-                    <td className="py-3.5 px-4 text-cyan-400">
+                    <td className="py-3.5 px-4 text-cyan-400 whitespace-nowrap">
                       {alert.category}
                       {alert.mitreMapping && (
                         <span className="block text-[9px] text-slate-500 mt-0.5">MITRE: {alert.mitreMapping}</span>
                       )}
                     </td>
-                    <td className="py-3.5 px-4 text-slate-300">
-                      {alert.source} ➡️ {alert.target || 'N/A'}
+                    <td className="py-3.5 px-4 text-slate-300 whitespace-nowrap">
+                      <span className="truncate max-w-[180px] inline-block">{alert.source} ➡️ {alert.target || 'N/A'}</span>
                     </td>
-                    <td className="py-3.5 px-4">
+                    <td className="py-3.5 px-4 whitespace-nowrap">
                       {alert.status === 'unhandled' ? (
                         <div className="flex gap-2">
                           <button 
@@ -341,7 +368,7 @@ export default function Overview({
         </div>
 
         {/* Mobile Cards View */}
-        <div className="grid grid-cols-1 gap-4 md:hidden">
+        <div className="grid grid-cols-1 gap-4 md:hidden max-h-[380px] overflow-y-auto pr-1">
           {alerts.length === 0 ? (
             <p className="text-center py-8 text-slate-500 font-mono text-xs">
               ✅ No alerts detected on monitored hosts and networks.

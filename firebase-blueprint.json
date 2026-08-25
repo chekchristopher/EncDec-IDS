@@ -1,0 +1,249 @@
+{
+  "entities": {
+    "user": {
+      "title": "User",
+      "description": "A system operator or analyst user account",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "email": { "type": "string" },
+        "passwordHash": { "type": "string" },
+        "name": { "type": "string" },
+        "role": { "type": "string" },
+        "status": { "type": "string" },
+        "mfaEnabled": { "type": "boolean" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "email", "passwordHash", "name", "role", "status", "createdAt"]
+    },
+    "host": {
+      "title": "Host",
+      "description": "An endpoint host monitored by the IDS",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "os": { "type": "string" },
+        "ipAddress": { "type": "string" },
+        "status": { "type": "string" },
+        "lastSeen": { "type": "string" },
+        "agentVersion": { "type": "string" },
+        "cpuUsage": { "type": "number" },
+        "memoryUsage": { "type": "number" },
+        "diskUsage": { "type": "number" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "name", "os", "ipAddress", "status", "lastSeen", "cpuUsage", "memoryUsage", "diskUsage"]
+    },
+    "rule": {
+      "title": "Rule",
+      "description": "A detection signature or behavior rule",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "type": { "type": "string" },
+        "target": { "type": "string" },
+        "severity": { "type": "string" },
+        "enabled": { "type": "boolean" },
+        "definition": { "type": "string" },
+        "mitreMapping": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "createdBy": { "type": "string" }
+      },
+      "required": ["id", "name", "type", "target", "severity", "enabled", "definition", "createdAt", "createdBy"]
+    },
+    "alert": {
+      "title": "Alert",
+      "description": "A security alert triggered by rules",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "timestamp": { "type": "string" },
+        "severity": { "type": "string" },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "category": { "type": "string" },
+        "source": { "type": "string" },
+        "target": { "type": "string" },
+        "status": { "type": "string" },
+        "ruleId": { "type": "string" },
+        "mitreMapping": { "type": "string" }
+      },
+      "required": ["id", "timestamp", "severity", "title", "description", "category", "source", "target", "status"]
+    },
+    "threat": {
+      "title": "Threat",
+      "description": "A security threat campaign or actor under investigation",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "timestamp": { "type": "string" },
+        "score": { "type": "number" },
+        "actor": { "type": "string" },
+        "vector": { "type": "string" },
+        "status": { "type": "string" },
+        "associatedAlerts": { "type": "array" },
+        "mitreMapping": { "type": "string" }
+      },
+      "required": ["id", "timestamp", "score", "actor", "vector", "status"]
+    },
+    "apiKey": {
+      "title": "APIKey",
+      "description": "An API key for external agents to submit data",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "keyPrefix": { "type": "string" },
+        "role": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "expiresAt": { "type": "string" }
+      },
+      "required": ["id", "name", "keyPrefix", "role", "createdAt", "expiresAt"]
+    },
+    "auditLog": {
+      "title": "AuditLog",
+      "description": "A compliance or operational log of user actions",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "timestamp": { "type": "string" },
+        "userId": { "type": "string" },
+        "userEmail": { "type": "string" },
+        "action": { "type": "string" },
+        "resource": { "type": "string" },
+        "ipAddress": { "type": "string" },
+        "status": { "type": "string" }
+      },
+      "required": ["id", "timestamp", "userId", "userEmail", "action", "resource", "ipAddress", "status"]
+    },
+    "liveActivity": {
+      "title": "LiveActivity",
+      "description": "A live stream of security console events",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "timestamp": { "type": "string" },
+        "userId": { "type": "string" },
+        "userEmail": { "type": "string" },
+        "action": { "type": "string" },
+        "details": { "type": "string" }
+      },
+      "required": ["id", "timestamp", "userId", "userEmail", "action", "details"]
+    },
+    "threatIntelFeed": {
+      "title": "ThreatIntelFeed",
+      "description": "Indicators of compromise (IOCs) feed data",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "type": { "type": "string" },
+        "value": { "type": "string" },
+        "threatType": { "type": "string" },
+        "source": { "type": "string" },
+        "confidence": { "type": "number" },
+        "addedAt": { "type": "string" }
+      },
+      "required": ["id", "type", "value", "threatType", "source", "confidence", "addedAt"]
+    },
+    "mlModel": {
+      "title": "MLModel",
+      "description": "Machine learning threat detection models",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "type": { "type": "string" },
+        "accuracy": { "type": "number" },
+        "status": { "type": "string" },
+        "lastTrained": { "type": "string" }
+      },
+      "required": ["id", "name", "type", "accuracy", "status", "lastTrained"]
+    },
+    "quarantineItem": {
+      "title": "QuarantineItem",
+      "description": "Files or host paths quarantined",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "hostId": { "type": "string" },
+        "hostName": { "type": "string" },
+        "filePath": { "type": "string" },
+        "fileSize": { "type": "number" },
+        "hash": { "type": "string" },
+        "detectedBy": { "type": "string" },
+        "severity": { "type": "string" },
+        "status": { "type": "string" },
+        "quarantinedAt": { "type": "string" }
+      },
+      "required": ["id", "hostId", "hostName", "filePath", "fileSize", "hash", "detectedBy", "severity", "status", "quarantinedAt"]
+    },
+    "emailLog": {
+      "title": "EmailLog",
+      "description": "Email dispatch notifications and audit records",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "timestamp": { "type": "string" },
+        "recipient": { "type": "string" },
+        "subject": { "type": "string" },
+        "bodyText": { "type": "string" },
+        "type": { "type": "string" },
+        "role": { "type": "string" },
+        "status": { "type": "string" }
+      },
+      "required": ["id", "timestamp", "recipient", "subject", "status"]
+    }
+  },
+  "firestore": {
+    "users": {
+      "schema": "user",
+      "description": "User accounts"
+    },
+    "hosts": {
+      "schema": "host",
+      "description": "Monitored hosts"
+    },
+    "rules": {
+      "schema": "rule",
+      "description": "IDS detection signatures"
+    },
+    "alerts": {
+      "schema": "alert",
+      "description": "Detection alerts"
+    },
+    "threats": {
+      "schema": "threat",
+      "description": "Active campaign threats"
+    },
+    "apiKeys": {
+      "schema": "apiKey",
+      "description": "API keys"
+    },
+    "auditLogs": {
+      "schema": "auditLog",
+      "description": "Audit trail logs"
+    },
+    "liveActivities": {
+      "schema": "liveActivity",
+      "description": "Live operations feed"
+    },
+    "threatIntel": {
+      "schema": "threatIntelFeed",
+      "description": "Threat intelligence IOCs"
+    },
+    "mlModels": {
+      "schema": "mlModel",
+      "description": "Machine learning model records"
+    },
+    "quarantine": {
+      "schema": "quarantineItem",
+      "description": "Quarantine records"
+    },
+    "emailLogs": {
+      "schema": "emailLog",
+      "description": "Dispatched security email notifications and audit records"
+    }
+  }
+}

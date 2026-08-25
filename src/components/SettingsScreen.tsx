@@ -6,17 +6,18 @@
 import React, { useState, useEffect } from 'react';
 import { 
   Settings, Key, ShieldCheck, KeyRound, Eye, EyeOff, 
-  Trash2, Plus, RefreshCw, Clipboard, Check 
+  Trash2, Plus, RefreshCw, Clipboard, Check, UserPen 
 } from 'lucide-react';
 import { apiRequest } from '../api.js';
 import { APIKey } from '../types.js';
 
 interface SettingsScreenProps {
-  currentUser: { id: string; email: string; name: string; mfaEnabled: boolean } | null;
+  currentUser: { id: string; email: string; name: string; mfaEnabled: boolean; avatarUrl?: string; lastNameChangeDate?: string } | null;
   onProfileUpdate: () => void;
+  onOpenProfileModal?: () => void;
 }
 
-export default function SettingsScreen({ currentUser, onProfileUpdate }: SettingsScreenProps) {
+export default function SettingsScreen({ currentUser, onProfileUpdate, onOpenProfileModal }: SettingsScreenProps) {
   const [mfaEnabled, setMfaEnabled] = useState(currentUser?.mfaEnabled || false);
   const [loadingMfa, setLoadingMfa] = useState(false);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
@@ -133,19 +134,42 @@ export default function SettingsScreen({ currentUser, onProfileUpdate }: Setting
         
         {/* Profile Card */}
         <div className="bg-slate-900 border border-white/5 rounded-lg p-6 space-y-4">
-          <div className="flex items-center gap-2 border-b border-white/5 pb-3">
-            <ShieldCheck className="w-4 h-4 text-cyan-400" />
-            <h3 className="text-sm font-bold text-white uppercase tracking-wide">Operator Profile</h3>
+          <div className="flex items-center justify-between border-b border-white/5 pb-3">
+            <div className="flex items-center gap-2">
+              <ShieldCheck className="w-4 h-4 text-cyan-400" />
+              <h3 className="text-sm font-bold text-white uppercase tracking-wide">Operator Profile</h3>
+            </div>
+            {onOpenProfileModal && (
+              <button
+                type="button"
+                onClick={onOpenProfileModal}
+                className="px-2.5 py-1 bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-400 border border-cyan-500/30 rounded text-[10px] font-bold uppercase flex items-center gap-1 transition-all cursor-pointer"
+                id="settings-edit-profile-btn"
+              >
+                <UserPen className="w-3 h-3" />
+                <span>Edit Profile</span>
+              </button>
+            )}
           </div>
 
-          <div className="space-y-2">
-            <div>
-              <p className="text-[10px] text-slate-500 uppercase">Profile node</p>
-              <p className="text-sm font-bold text-white">{currentUser?.name || 'Vigil Operator'}</p>
+          <div className="flex items-center gap-4">
+            <div className="w-12 h-12 rounded-full bg-cyan-950 border border-cyan-500/30 overflow-hidden flex items-center justify-center text-sm font-bold text-cyan-400 shrink-0">
+              {currentUser?.avatarUrl ? (
+                <img src={currentUser.avatarUrl} alt="Avatar" className="w-full h-full object-cover" />
+              ) : (
+                currentUser?.name ? currentUser.name.split(' ').map(n => n[0]).join('') : 'OP'
+              )}
             </div>
-            <div>
-              <p className="text-[10px] text-slate-500 uppercase">Operator ID</p>
-              <p className="text-slate-300">{currentUser?.email}</p>
+
+            <div className="space-y-1 min-w-0 flex-1">
+              <div>
+                <p className="text-[10px] text-slate-500 uppercase">Profile node</p>
+                <p className="text-sm font-bold text-white truncate">{currentUser?.name || 'Vigil Operator'}</p>
+              </div>
+              <div>
+                <p className="text-[10px] text-slate-500 uppercase">Operator ID</p>
+                <p className="text-slate-300 truncate">{currentUser?.email}</p>
+              </div>
             </div>
           </div>
 

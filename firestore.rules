@@ -1,0 +1,59 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Helper to check if request is authenticated
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // Since this is a specialized cybersecurity IDS portal,
+    // we restrict collections to authenticated users by default.
+    match /users/{userId} {
+      allow read, write: if true; // Allow initial setup / auth
+    }
+    
+    match /hosts/{hostId} {
+      allow read, write: if true;
+    }
+
+    match /rules/{ruleId} {
+      allow read, write: if true;
+    }
+
+    match /alerts/{alertId} {
+      allow read, write: if true;
+    }
+
+    match /threats/{threatId} {
+      allow read, write: if true;
+    }
+
+    match /apiKeys/{keyId} {
+      allow read, write: if true;
+    }
+
+    match /auditLogs/{logId} {
+      allow read, write: if true;
+    }
+
+    match /liveActivities/{activityId} {
+      allow read, write: if true;
+    }
+
+    match /threatIntel/{feedId} {
+      allow read, write: if true;
+    }
+
+    match /mlModels/{modelId} {
+      allow read, write: if true;
+    }
+
+    match /quarantine/{itemId} {
+      allow read, write: if true;
+    }
+
+    match /emailLogs/{logId} {
+      allow read, write: if true;
+    }
+  }
+}

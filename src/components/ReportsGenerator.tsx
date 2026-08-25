@@ -74,8 +74,8 @@ export default function ReportsGenerator() {
       mimeType = 'application/json';
     } else if (report.type === 'CSV') {
       content = `ID,Timestamp,Host,Metric,Alert_Count,Severity\r\n` +
-                `1,${new Date().toISOString()},core-gateway-linux,CPU,2,HIGH\r\n` +
-                `2,${new Date().toISOString()},finance-db-win,SSH_ATTEMPTS,14,CRITICAL`;
+                `1,${new Date().toISOString()},portal.coou.edu.ng,HTTP_FLOOD,2,HIGH\r\n` +
+                `2,${new Date().toISOString()},portal.coou.edu.ng,FAILED_PORTAL_LOGINS,14,CRITICAL`;
       filename += '.csv';
       mimeType = 'text/csv';
     } else {

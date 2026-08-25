@@ -15,10 +15,11 @@ import { apiRequest, WS_BASE, getAuthToken, setAuthToken } from './api.js';
 // Types
 import { 
   User, Host, Packet, Rule, Alert, Threat, APIKey, 
-  AuditLog, LiveActivity, ThreatIntelFeed, MLModel, QuarantineItem 
+  AuditLog, LiveActivity, ThreatIntelFeed, MLModel, QuarantineItem, EmailLog 
 } from './types.js';
 
 // Components
+import LandingPage from './components/LandingPage.jsx';
 import LoginScreen from './components/LoginScreen.jsx';
 import Sidebar from './components/Sidebar.jsx';
 import Overview from './components/Overview.jsx';
@@ -29,13 +30,18 @@ import ReportsGenerator from './components/ReportsGenerator.jsx';
 import AuditConsole from './components/AuditConsole.jsx';
 import SettingsScreen from './components/SettingsScreen.jsx';
 import AdminPortal from './components/AdminPortal.jsx';
+import ProfileModal from './components/ProfileModal.jsx';
+import DualDatabaseConsole from './components/DualDatabaseConsole.jsx';
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState<any>(null);
+  const [savedProfile, setSavedProfile] = useState<any>(null);
   const [authChecked, setAuthChecked] = useState(false);
   const [activeView, setActiveView] = useState('dashboard');
   const [wsConnected, setWsConnected] = useState(false);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const [showLogin, setShowLogin] = useState(false);
+  const [showProfileModal, setShowProfileModal] = useState(false);
 
   // Core Data States
   const [metrics, setMetrics] = useState({
@@ -55,6 +61,7 @@ export default function App() {
   const [mlModels, setMlModels] = useState<MLModel[]>([]);
   const [quarantine, setQuarantine] = useState<QuarantineItem[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
+  const [emailLogs, setEmailLogs] = useState<EmailLog[]>([]);
   
   // Realtime Live Stream Paclets
   const [livePackets, setLivePackets] = useState<Packet[]>([]);
@@ -76,7 +83,7 @@ export default function App() {
       if (token) {
         try {
           const profile = await apiRequest('/api/profile');
-          setCurrentUser(profile);
+          setSavedProfile(profile);
         } catch (err) {
           console.warn('Session expired, clearing credentials.');
           setAuthToken(null);
@@ -141,6 +148,9 @@ export default function App() {
             setMlModels(dedup(msg.payload.mlModels));
             setQuarantine(dedup(msg.payload.quarantine));
             setAuditLogs(dedup(msg.payload.auditLogs));
+            if (msg.payload.emailLogs) {
+              setEmailLogs(dedup(msg.payload.emailLogs));
+            }
             break;
 
           case 'LIVE_PACKET':
@@ -170,6 +180,17 @@ export default function App() {
 
           case 'AUDIT_LOG':
             setAuditLogs(prev => dedup([msg.payload, ...prev.slice(0, 99)]));
+            break;
+
+          case 'EMAIL_DISPATCHED':
+            setEmailLogs(prev => dedup([msg.payload, ...prev.slice(0, 99)]));
+            if (
+              currentUser?.role === 'admin' || 
+              (msg.payload.recipient && msg.payload.recipient.toLowerCase() === currentUser?.email?.toLowerCase()) ||
+              (msg.payload.senderEmail && msg.payload.senderEmail.toLowerCase() === currentUser?.email?.toLowerCase())
+            ) {
+              triggerUIWarning(`Automated Email Dispatched to ${msg.payload.recipient} (${msg.payload.role.toUpperCase()})`);
+            }
             break;
 
           case 'ALERT_TRIGGERED':
@@ -212,6 +233,7 @@ export default function App() {
 
   const handleLogout = () => {
     setAuthToken(null);
+    setSavedProfile(null);
     setCurrentUser(null);
     setAdminPasskeyPassed(false);
     setActiveView('dashboard');
@@ -320,11 +342,42 @@ export default function App() {
   }
 
   if (!currentUser) {
-    return <LoginScreen onLoginSuccess={(usr) => setCurrentUser(usr)} />;
+    if (showLogin) {
+      return (
+        <div className="relative">
+          {/* Back to Home Button on top of the Login Screen */}
+          <div className="absolute top-6 left-6 z-50">
+            <button
+              onClick={() => setShowLogin(false)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-slate-900/80 backdrop-blur-md border border-white/10 text-slate-400 hover:text-white font-mono text-xs cursor-pointer transition-all hover:bg-slate-800"
+              id="back-to-home-btn"
+            >
+              ← Back to Homepage
+            </button>
+          </div>
+          <LoginScreen onLoginSuccess={(usr) => {
+            setSavedProfile(usr);
+            setCurrentUser(usr);
+            setShowLogin(false);
+          }} />
+        </div>
+      );
+    }
+    return (
+      <LandingPage 
+        onEnterConsole={() => {
+          if (savedProfile) {
+            setCurrentUser(savedProfile);
+          } else {
+            setShowLogin(true);
+          }
+        }} 
+      />
+    );
   }
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-300 flex" id="main-scaffold">
+    <div className="min-h-screen w-full max-w-full bg-slate-950 text-slate-300 flex overflow-x-hidden" id="main-scaffold">
       
       {/* Sidebar navigation */}
       <Sidebar 
@@ -338,10 +391,11 @@ export default function App() {
         adminPasskeyPassed={adminPasskeyPassed}
         isOpen={mobileSidebarOpen}
         onClose={() => setMobileSidebarOpen(false)}
+        onOpenProfile={() => setShowProfileModal(true)}
       />
 
       {/* Primary content hub */}
-      <main className="flex-1 min-h-screen lg:pl-64 pl-0 flex flex-col relative">
+      <main className="flex-1 min-h-screen w-full max-w-full lg:pl-64 pl-0 flex flex-col relative overflow-x-hidden">
         
         {/* Real-time Toast warnings floating banner */}
         {liveNotification && (
@@ -387,12 +441,30 @@ export default function App() {
                 Active alerts: <strong className="text-red-400">{alerts.filter(a => a.status === 'unhandled').length}</strong>
               </span>
             </div>
+
+            {/* Clickable Header Profile Button */}
+            <button
+              onClick={() => setShowProfileModal(true)}
+              className="flex items-center gap-2 pl-2 pr-3 py-1.5 min-h-[40px] rounded-full bg-slate-950 border border-white/10 hover:border-cyan-500/40 hover:bg-slate-900 text-xs font-mono transition-all cursor-pointer group focus-visible:ring-2 focus-visible:ring-cyan-400 focus-visible:outline-none"
+              title="Click to view and edit profile"
+              aria-label="Edit operator profile"
+              id="header-profile-btn"
+            >
+              <div className="w-6 h-6 rounded-full bg-cyan-950 border border-cyan-500/30 overflow-hidden flex items-center justify-center text-[10px] font-bold text-cyan-400">
+                {currentUser?.avatarUrl ? (
+                  <img src={currentUser.avatarUrl} alt="Avatar" className="w-full h-full object-cover" />
+                ) : (
+                  currentUser?.name ? currentUser.name.split(' ').map((n: string) => n[0]).join('') : 'OP'
+                )}
+              </div>
+              <span className="text-slate-300 font-semibold group-hover:text-cyan-300 transition-colors hidden sm:inline">{currentUser?.name}</span>
+            </button>
           </div>
 
         </header>
 
         {/* Dynamic Inner body renders */}
-        <div className="p-4 sm:p-6 lg:p-8 flex-1 max-w-7xl w-full mx-auto">
+        <div className="p-4 sm:p-6 lg:p-8 flex-1 max-w-7xl w-full max-w-full mx-auto overflow-x-hidden">
           {activeView === 'dashboard' && (
             <Overview 
               metrics={metrics}
@@ -438,7 +510,32 @@ export default function App() {
           )}
 
           {activeView === 'logs' && (
-            <AuditConsole auditLogs={auditLogs} />
+            <AuditConsole auditLogs={auditLogs} emailLogs={emailLogs} currentUser={currentUser} />
+          )}
+
+          {activeView === 'dualDatabase' && (
+            currentUser?.role === 'admin' ? (
+              <DualDatabaseConsole 
+                currentUserRole={currentUser?.role} 
+                onShowAlert={(msg) => triggerUIWarning(msg)} 
+              />
+            ) : (
+              <div className="p-8 text-center bg-slate-900 border border-red-500/20 rounded-xl max-w-lg mx-auto my-12 font-mono">
+                <div className="w-12 h-12 rounded-full bg-red-500/10 border border-red-500/30 text-red-400 flex items-center justify-center mx-auto mb-4">
+                  <ShieldAlert className="w-6 h-6" />
+                </div>
+                <h3 className="text-lg font-bold text-white mb-2">Restricted Administrator Area</h3>
+                <p className="text-xs text-slate-400 mb-6 leading-relaxed">
+                  Dual Database Architecture configuration and SQL Server telemetry are restricted to Administrator accounts.
+                </p>
+                <button
+                  onClick={() => setActiveView('dashboard')}
+                  className="px-4 py-2 bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold rounded-lg text-xs transition-colors cursor-pointer"
+                >
+                  Return to SOC Dashboard
+                </button>
+              </div>
+            )
           )}
 
           {activeView === 'settings' && (
@@ -448,6 +545,7 @@ export default function App() {
                 const profile = await apiRequest('/api/profile');
                 setCurrentUser(profile);
               }}
+              onOpenProfileModal={() => setShowProfileModal(true)}
             />
           )}
 
@@ -458,6 +556,17 @@ export default function App() {
             />
           )}
         </div>
+
+        {/* Interactive Profile Editor Modal */}
+        <ProfileModal 
+          isOpen={showProfileModal}
+          onClose={() => setShowProfileModal(false)}
+          currentUser={currentUser}
+          onProfileUpdated={(updatedUser) => {
+            setCurrentUser(updatedUser);
+            setSavedProfile(updatedUser);
+          }}
+        />
 
       </main>
 
