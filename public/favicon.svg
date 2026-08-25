@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="100%" height="100%">
+  <defs>
+    <linearGradient id="favShield" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#06b6d4"/>
+      <stop offset="50%" stop-color="#0284c7"/>
+      <stop offset="100%" stop-color="#10b981"/>
+    </linearGradient>
+    <linearGradient id="favCore" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#22d3ee"/>
+      <stop offset="100%" stop-color="#34d399"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background base for browser tab readability -->
+  <rect width="128" height="128" rx="28" fill="#030814"/>
+  <rect x="4" y="4" width="120" height="120" rx="24" fill="none" stroke="#0ea5e9" stroke-width="2" stroke-opacity="0.3"/>
+
+  <!-- Shield Shape -->
+  <path d="M 64 16 
+           C 86 16 104 24 104 42 
+           C 104 76 80 100 64 112 
+           C 48 100 24 76 24 42 
+           C 24 24 42 16 64 16 Z" 
+        fill="#07172e" 
+        stroke="url(#favShield)" 
+        stroke-width="5" 
+        stroke-linejoin="round"/>
+
+  <!-- Encryption node (Left) -->
+  <circle cx="48" cy="54" r="8" fill="#032b44" stroke="#22d3ee" stroke-width="2.5"/>
+  <path d="M 44 54 L 44 48 C 44 45 52 45 52 48 L 52 54" fill="none" stroke="#22d3ee" stroke-width="2" stroke-linecap="round"/>
+
+  <!-- Decryption node (Right) -->
+  <circle cx="80" cy="54" r="8" fill="#043224" stroke="#34d399" stroke-width="2.5"/>
+  <path d="M 76 54 L 76 48 C 76 45 84 45 84 48" fill="none" stroke="#34d399" stroke-width="2" stroke-linecap="round"/>
+
+  <!-- Center Diamond Core -->
+  <polygon points="64,40 76,54 64,68 52,54" fill="url(#favCore)"/>
+  <circle cx="64" cy="54" r="3" fill="#ffffff"/>
+
+  <!-- Lower IDS Arc -->
+  <path d="M 48 80 Q 64 90 80 80" fill="none" stroke="url(#favCore)" stroke-width="3" stroke-linecap="round"/>
+</svg>

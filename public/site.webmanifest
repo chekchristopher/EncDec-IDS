@@ -1,0 +1,22 @@
+{
+  "name": "EncDec IDS Security Console",
+  "short_name": "EncDec IDS",
+  "description": "Enterprise-ready Hybrid Intrusion Detection System with Real-Time Cryptographic Shielding",
+  "icons": [
+    {
+      "src": "/encdec-icon.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/favicon.svg",
+      "sizes": "128x128",
+      "type": "image/svg+xml"
+    }
+  ],
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#030814",
+  "theme_color": "#06b6d4"
+}

@@ -12,6 +12,7 @@ import {
   Network, Eye as ViewIcon, ShieldAlert, AlertOctagon, Terminal
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import EncDecLogo from './EncDecLogo.js';
 
 interface LandingPageProps {
   onEnterConsole: () => void;
@@ -258,10 +259,10 @@ export default function LandingPage({ onEnterConsole }: LandingPageProps) {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-18 flex items-center justify-between">
           <div className="flex items-center gap-2.5">
             <motion.div 
-              whileHover={{ rotate: 15, scale: 1.05 }}
-              className="w-9 h-9 rounded-lg bg-cyan-500/10 flex items-center justify-center border border-cyan-500/30"
+              whileHover={{ rotate: 10, scale: 1.08 }}
+              className="flex items-center justify-center cursor-pointer"
             >
-              <Shield className="w-5 h-5 text-cyan-400" />
+              <EncDecLogo size="sm" showGlow={true} />
             </motion.div>
             <div>
               <span className="font-sans font-bold text-lg text-white tracking-tight">EncDec IDS</span>

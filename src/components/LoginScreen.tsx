@@ -6,6 +6,7 @@
 import React, { useState } from 'react';
 import { Shield, Key, Mail, User, Eye, EyeOff, Radio, Lock, Unlock, HelpCircle, ShieldCheck, Sparkles, Check, ArrowRight } from 'lucide-react';
 import { apiRequest, setAuthToken } from '../api.js';
+import EncDecLogo from './EncDecLogo.js';
 
 interface LoginScreenProps {
   onLoginSuccess: (user: any) => void;
@@ -137,13 +138,13 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
         
         {/* Brand identity */}
         <div className="flex flex-col items-center mb-8 gap-3 text-center">
-          <div className="relative w-16 h-16 rounded-full bg-cyan-500/10 flex items-center justify-center border border-cyan-500/30 animate-pulse">
-            <Shield className="w-8 h-8 text-cyan-400" />
-            <span className="absolute bottom-0 right-0 w-3 h-3 rounded-full bg-cyan-400 border-2 border-slate-900 shadow-[0_0_8px_#22d3ee]" />
+          <div className="relative">
+            <EncDecLogo size="xl" showGlow={true} />
+            <span className="absolute bottom-0 right-0 w-3.5 h-3.5 rounded-full bg-emerald-400 border-2 border-slate-900 shadow-[0_0_8px_#34d399]" />
           </div>
           <div>
             <h1 className="font-sans text-2xl font-bold text-white tracking-tight">EncDec IDS</h1>
-            <p className="font-mono text-xs text-slate-400 uppercase tracking-widest mt-1">Vigilant Command Access</p>
+            <p className="font-mono text-xs text-cyan-400 uppercase tracking-widest mt-1">Vigilant Command Access</p>
           </div>
         </div>
 

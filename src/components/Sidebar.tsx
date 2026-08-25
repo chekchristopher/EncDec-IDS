@@ -8,6 +8,7 @@ import {
   LayoutDashboard, Activity, Terminal, ShieldAlert, FileText, 
   Settings, LogOut, Lock, Database, X, UserPen, ArrowRightLeft 
 } from 'lucide-react';
+import EncDecLogo from './EncDecLogo.js';
 
 interface SidebarProps {
   activeView: string;
@@ -70,9 +71,7 @@ export default function Sidebar({
         {/* Brand Header */}
         <div className="px-6 mb-6 flex justify-between items-center shrink-0">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded bg-cyan-500/10 flex items-center justify-center border border-cyan-500/30">
-              <ShieldAlert className="w-5 h-5 text-cyan-400" />
-            </div>
+            <EncDecLogo size="md" />
             <div>
               <h1 className="text-md font-bold text-cyan-400 leading-tight tracking-wide">EncDec IDS</h1>
               <p className="font-mono text-[9px] text-slate-400 uppercase tracking-widest">Vigilant Command</p>
