@@ -33,6 +33,7 @@ import AdminPortal from './components/AdminPortal.jsx';
 import ProfileModal from './components/ProfileModal.jsx';
 import DualDatabaseConsole from './components/DualDatabaseConsole.jsx';
 import GmailConsole from './components/GmailConsole.jsx';
+import EncDecWorkbook from './components/EncDecWorkbook.jsx';
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState<any>(null);
@@ -520,7 +521,11 @@ export default function App() {
           )}
 
           {activeView === 'reports' && (
-            <ReportsGenerator />
+            <ReportsGenerator onOpenWorkbook={() => setActiveView('workbook')} />
+          )}
+
+          {activeView === 'workbook' && (
+            <EncDecWorkbook />
           )}
 
           {activeView === 'logs' && (

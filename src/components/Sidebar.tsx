@@ -6,7 +6,7 @@
 import React from 'react';
 import { 
   LayoutDashboard, Activity, Terminal, ShieldAlert, FileText, 
-  Settings, LogOut, Lock, Database, X, UserPen, ArrowRightLeft, Mail 
+  Settings, LogOut, Lock, Database, X, UserPen, ArrowRightLeft, Mail, BookOpen 
 } from 'lucide-react';
 import EncDecLogo from './EncDecLogo.js';
 
@@ -41,6 +41,7 @@ export default function Sidebar({
     { id: 'threatIntel', label: 'Threat Intel', icon: ShieldAlert },
     { id: 'gmail', label: 'Gmail Dispatch', icon: Mail },
     { id: 'reports', label: 'Reports', icon: FileText },
+    { id: 'workbook', label: 'EncDec Workbook', icon: BookOpen },
     { id: 'logs', label: 'Audit Trail', icon: Database },
     ...(isAdmin ? [{ id: 'dualDatabase', label: 'Dual DB (SQL + Firebase)', icon: ArrowRightLeft }] : []),
     { id: 'settings', label: 'Security Settings', icon: Settings },
