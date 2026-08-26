@@ -6,7 +6,7 @@
 import React from 'react';
 import { 
   ShieldCheck, AlertTriangle, Cpu, HardDrive, Cpu as MemoryIcon,
-  Bell, ChevronRight, Activity, ShieldAlert, ArrowUpRight 
+  Bell, ChevronRight, Activity, ShieldAlert, ArrowUpRight, Mail 
 } from 'lucide-react';
 import { Alert, Host, Threat } from '../types.js';
 
@@ -25,6 +25,7 @@ interface OverviewProps {
   onEscalate: (id: string) => void;
   onIgnore: (id: string) => void;
   onResolve: (id: string) => void;
+  onEmailAlert?: (alert: Alert) => void;
   packetCount: number;
 }
 
@@ -36,6 +37,7 @@ export default function Overview({
   onEscalate,
   onIgnore,
   onResolve,
+  onEmailAlert,
   packetCount
 }: OverviewProps) {
   
@@ -347,6 +349,17 @@ export default function Overview({
                             <span>Escalate</span>
                             <ArrowUpRight className="w-3 h-3" />
                           </button>
+                          {onEmailAlert && (
+                            <button
+                              onClick={() => onEmailAlert(alert)}
+                              className="bg-cyan-500/10 border border-cyan-500/30 hover:bg-cyan-500/20 text-cyan-400 px-2 py-1 rounded text-[10px] uppercase font-bold flex items-center gap-1 cursor-pointer"
+                              title="Dispatch Alert via Gmail"
+                              id={`email-alert-btn-${alert.id}`}
+                            >
+                              <Mail className="w-3 h-3" />
+                              <span>Gmail</span>
+                            </button>
+                          )}
                         </div>
                       ) : (
                         <span className={`text-[10px] uppercase font-bold px-2 py-0.5 rounded font-mono ${
@@ -399,7 +412,7 @@ export default function Overview({
 
                 <div className="border-t border-white/5 pt-2 flex justify-end">
                   {alert.status === 'unhandled' ? (
-                    <div className="flex gap-2 w-full justify-end">
+                    <div className="flex flex-wrap gap-2 w-full justify-end">
                       <button 
                         onClick={() => onIgnore(alert.id)}
                         className="flex-1 xs:flex-none text-center bg-slate-900 border border-white/10 hover:border-slate-600 text-slate-300 px-2.5 py-1.5 rounded text-[10px] uppercase font-bold cursor-pointer"
@@ -419,6 +432,15 @@ export default function Overview({
                         <span>Escalate</span>
                         <ArrowUpRight className="w-3 h-3" />
                       </button>
+                      {onEmailAlert && (
+                        <button
+                          onClick={() => onEmailAlert(alert)}
+                          className="flex-1 xs:flex-none text-center bg-cyan-500/10 border border-cyan-500/30 hover:bg-cyan-500/20 text-cyan-400 px-2.5 py-1.5 rounded text-[10px] uppercase font-bold flex items-center justify-center gap-1 cursor-pointer"
+                        >
+                          <Mail className="w-3 h-3" />
+                          <span>Gmail</span>
+                        </button>
+                      )}
                     </div>
                   ) : (
                     <span className={`text-[10px] uppercase font-bold px-2 py-1 rounded font-mono ${

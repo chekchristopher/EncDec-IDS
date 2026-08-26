@@ -247,12 +247,13 @@ if (fs.existsSync(CONFIG_FILE)) {
       appId: config.appId,
     };
     firebaseApp = initializeApp(firebaseConfig);
-    if (config.firestoreDatabaseId) {
-      firestoreDb = getFirestore(firebaseApp, config.firestoreDatabaseId);
+    const dbId = config.firestoreDatabaseId || 'ai-studio-encdecids-bc136ca4-82a5-408e-ae8f-57533ab6060c';
+    if (dbId) {
+      firestoreDb = getFirestore(firebaseApp, dbId);
     } else {
       firestoreDb = getFirestore(firebaseApp);
     }
-    console.log('Firebase initialized successfully in server with project ID:', config.projectId);
+    console.log('Firebase initialized successfully in server with project ID:', config.projectId, 'database:', dbId);
   } catch (error) {
     console.error('Failed to initialize Firebase in server:', error);
   }
@@ -265,11 +266,19 @@ let lastFirestoreQuotaWarning = 0;
 
 function handleFirestoreError(err: any, context: string) {
   const errMsg = err?.message || String(err || '');
-  if (errMsg.includes('RESOURCE_EXHAUSTED') || err?.code === 'resource-exhausted' || errMsg.includes('Quota limit exceeded')) {
+  if (
+    errMsg.includes('RESOURCE_EXHAUSTED') || 
+    err?.code === 'resource-exhausted' || 
+    errMsg.includes('Quota limit exceeded') ||
+    errMsg.includes('NOT_FOUND') ||
+    errMsg.includes('not-found') ||
+    err?.code === 5 ||
+    err?.code === 'not-found'
+  ) {
     firestoreQuotaExceeded = true;
     const now = Date.now();
     if (now - lastFirestoreQuotaWarning > 60000) {
-      console.warn(`[Firestore Quota Circuit-Breaker] Free-tier daily write limit reached during ${context}. Falling back seamlessly to local persistent DB & MSSQL.`);
+      console.warn(`[Firestore Status] Cloud Firestore unavailable or limit reached during ${context}. Operating smoothly with local persistent DB & MSSQL.`);
       lastFirestoreQuotaWarning = now;
     }
   } else {

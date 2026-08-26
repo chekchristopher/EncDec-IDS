@@ -32,6 +32,7 @@ import SettingsScreen from './components/SettingsScreen.jsx';
 import AdminPortal from './components/AdminPortal.jsx';
 import ProfileModal from './components/ProfileModal.jsx';
 import DualDatabaseConsole from './components/DualDatabaseConsole.jsx';
+import GmailConsole from './components/GmailConsole.jsx';
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState<any>(null);
@@ -42,6 +43,7 @@ export default function App() {
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [showLogin, setShowLogin] = useState(false);
   const [showProfileModal, setShowProfileModal] = useState(false);
+  const [selectedIncidentForEmail, setSelectedIncidentForEmail] = useState<Alert | null>(null);
 
   // Core Data States
   const [metrics, setMetrics] = useState({
@@ -474,6 +476,10 @@ export default function App() {
               onEscalate={handleEscalateAlert}
               onIgnore={handleIgnoreAlert}
               onResolve={handleResolveAlert}
+              onEmailAlert={(alert) => {
+                setSelectedIncidentForEmail(alert);
+                setActiveView('gmail');
+              }}
               packetCount={totalPacketsCount}
             />
           )}
@@ -502,6 +508,14 @@ export default function App() {
               threatIntel={threatIntel}
               mlModels={mlModels}
               onTrainModel={handleTrainModel}
+            />
+          )}
+
+          {activeView === 'gmail' && (
+            <GmailConsole 
+              currentUser={currentUser} 
+              initialIncidentAlert={selectedIncidentForEmail}
+              onDispatchAlertToSoc={(msg) => triggerUIWarning(msg)}
             />
           )}
 
