@@ -32,7 +32,7 @@ export interface Session {
 export interface Host {
   id: string;
   name: string;
-  os: 'windows' | 'linux' | 'macos';
+  os: 'windows' | 'linux' | 'macos' | 'darwin' | 'other';
   ipAddress: string;
   status: 'online' | 'offline';
   lastSeen: string;
@@ -95,10 +95,15 @@ export interface Packet {
   protocol: 'TCP' | 'UDP' | 'ICMP' | 'DNS' | 'HTTP' | 'HTTPS' | 'ARP' | 'DHCP' | 'SMTP' | 'FTP' | 'SSH' | 'SMB';
   sourceIp: string;
   sourcePort?: number;
-  destIp: string;
+  destIp?: string;
+  destinationIp?: string;
   destPort?: number;
   length: number;
-  payloadInfo: string;
+  payloadInfo?: string;
+  payloadSample?: string;
+  flags?: string;
+  suspicious?: boolean;
+  ruleId?: string;
   metadata?: Record<string, any>;
 }
 
@@ -107,7 +112,7 @@ export interface Rule {
   id: string;
   name: string;
   type: 'signature' | 'behavior' | 'anomaly';
-  target: 'host' | 'network';
+  target: 'host' | 'network' | 'application';
   severity: 'critical' | 'high' | 'medium' | 'low' | 'info';
   enabled: boolean;
   definition: string; // JSON pattern or rule code
@@ -219,12 +224,16 @@ export interface EmailLog {
   id: string;
   timestamp: string;
   recipient: string;
+  recipientName?: string;
   senderEmail?: string;
   senderUserId?: string;
   subject: string;
-  bodyText: string;
-  type: 'registration' | 'login' | string;
-  role: string;
+  bodyText?: string;
+  htmlBody?: string;
+  previewSnippet?: string;
+  eventType?: 'registration' | 'login' | string;
+  type?: 'registration' | 'login' | string;
+  role?: string;
   status: 'sent' | 'queued' | 'simulated';
 }
 

@@ -1,0 +1,26 @@
+version: '3.8'
+
+services:
+  encdec-ids:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: encdec-ids-soc
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - JWT_SECRET=encdec_ids_production_jwt_signing_secret_key
+      - ADMIN_PASSWORD=Admin#2026!SecOps
+      - ANALYST_PASSWORD=Analyst#2026!Tier1
+      - MSSQL_ENABLED=false
+    volumes:
+      - ./data:/app/data
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/health/live"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
