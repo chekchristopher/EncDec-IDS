@@ -5,8 +5,9 @@
 
 import { Router, Request, Response, NextFunction } from 'express';
 import fs from 'fs';
+import { GoogleGenAI, Type } from '@google/genai';
 import { 
-  Host, Rule, Alert, Threat, APIKey, QuarantineItem, SecurityReport, DualDatabaseStatus, MssqlConfig 
+  Host, Rule, Alert, Threat, APIKey, QuarantineItem, SecurityReport, DualDatabaseStatus, MssqlConfig, EmailLog 
 } from '../../src/types.js';
 import { DbSchema } from '../db/schema.js';
 import { firestoreSyncService } from '../db/firestore.js';
@@ -14,7 +15,7 @@ import { mssqlSyncService } from '../db/mssql.js';
 import { 
   hostRegisterSchema, ruleCreateSchema, reportGenerateSchema, 
   apiKeyCreateSchema, quarantineSchema, emailTestSchema,
-  mssqlConfigureSchema, mssqlQuerySchema
+  aiEmailGenerateSchema, mssqlConfigureSchema, mssqlQuerySchema
 } from '../schemas/validation.js';
 
 export function createApiRouter(
@@ -502,6 +503,262 @@ export function createApiRouter(
     });
 
     res.json(scopedEmails);
+  });
+
+  // System Email Dispatch Handler
+  const handleEmailDispatch = async (req: any, res: Response) => {
+    const parsed = emailTestSchema.safeParse(req.body);
+    if (!parsed.success) {
+      const err = parsed.error.issues?.[0]?.message || 'Invalid email dispatch payload';
+      return res.status(400).json({ error: err });
+    }
+
+    const { recipient, to, role, type, subject: customSubject, body: customBody, bodyText: customBodyText, bodyHtml: customBodyHtml } = parsed.data;
+    const targetRecipient = (recipient || to || req.user.email || '').trim();
+    if (!targetRecipient) {
+      return res.status(400).json({ error: 'Valid recipient email required' });
+    }
+
+    const targetRole = role || 'analyst';
+    const eventType = type || 'login';
+    const timestamp = new Date().toLocaleString();
+    const isoTimestamp = new Date().toISOString();
+
+    let salutation = 'Dear Operator,';
+    if (targetRole === 'admin') salutation = 'Dear Admin,';
+    else if (targetRole === 'analyst') salutation = 'Dear Analyst,';
+    else if (targetRole === 'auditor') salutation = 'Dear Auditor,';
+
+    let finalSubject = customSubject || '';
+    let finalText = customBodyText || customBody || '';
+    let finalHtml = customBodyHtml || '';
+
+    if (!finalSubject) {
+      if (eventType === 'registration') {
+        finalSubject = '[EncDec IDS Security] New Operator Account Confirmation';
+      } else if (eventType === 'incident') {
+        finalSubject = '[EncDec IDS Alert] High Severity Incident Triage Notification';
+      } else if (eventType === 'create') {
+        finalSubject = '[EncDec IDS Operations] Security Intelligence Bulletin';
+      } else {
+        finalSubject = '[EncDec IDS Alert] Security Gateway Dispatch Notification';
+      }
+    }
+
+    if (!finalText) {
+      if (eventType === 'registration') {
+        finalText = `Welcome to EncDec Intrusion Detection & Threat Intelligence Platform.\n\nYour account has been enrolled under role clearance: ${targetRole.toUpperCase()}.\nRegistration Timestamp: ${timestamp}\nIP Address: ${req.ip || '127.0.0.1'}\n\nPlease enforce Multi-Factor Authentication (MFA) upon initial gateway login.\n\nRegards,\nEncDec Security Operations Team`;
+      } else if (eventType === 'incident') {
+        finalText = `ATTENTION: A high-priority intrusion or anomaly was detected in the SOC monitor stream.\n\nTarget Recipient: ${targetRecipient}\nEvent Timestamp: ${timestamp}\nNode Origin: ${req.ip || '127.0.0.1'}\n\nPlease log into the EncDec SOC console immediately to inspect network telemetry.\n\nRegards,\nEncDec Security Operations Team`;
+      } else if (eventType === 'create') {
+        finalText = `This is a custom operational dispatch from the EncDec SOC Console.\n\nPlease review system activity and maintain operational vigilance.`;
+      } else {
+        finalText = `A security gateway notification has been dispatched for your operator identity (${targetRecipient}).\n\nNotification Timestamp: ${timestamp}\nNode Origin: ${req.ip || '127.0.0.1'}\nRole Clearance: ${targetRole.toUpperCase()}\n\nRegards,\nEncDec Security Operations Team`;
+      }
+    }
+
+    if (!finalHtml) {
+      finalHtml = `
+        <div style="font-family: Arial, sans-serif; background-color: #0f172a; color: #e2e8f0; padding: 24px; border-radius: 8px; border: 1px solid #1e293b; max-width: 600px;">
+          <div style="display: flex; align-items: center; border-bottom: 1px solid #1e293b; padding-bottom: 12px; margin-bottom: 16px;">
+            <h2 style="color: #06b6d4; margin: 0; font-size: 20px;">EncDec IDS Security Operations</h2>
+          </div>
+          <p style="font-size: 15px; font-weight: bold; color: #38bdf8; margin-top: 0;">${salutation}</p>
+          <div style="font-size: 14px; line-height: 1.6; color: #e2e8f0; margin-bottom: 20px; white-space: pre-wrap;">${finalText.replace(/\n/g, '<br/>')}</div>
+          <div style="background: #1e293b; padding: 14px; border-radius: 6px; border-left: 4px solid #06b6d4; margin: 16px 0; font-size: 13px;">
+            <p style="margin: 4px 0;"><strong>Recipient:</strong> ${targetRecipient}</p>
+            <p style="margin: 4px 0;"><strong>Assigned Role:</strong> <span style="color: #38bdf8;">${targetRole.toUpperCase()}</span></p>
+            <p style="margin: 4px 0;"><strong>Timestamp:</strong> ${timestamp}</p>
+            <p style="margin: 4px 0;"><strong>Origin Node:</strong> ${req.ip || '127.0.0.1'}</p>
+            <p style="margin: 4px 0;"><strong>Sender Clearance:</strong> <span style="color: #34d399;">${(req.user.role || 'OPERATOR').toUpperCase()}</span></p>
+          </div>
+          <hr style="border: none; border-top: 1px solid #334155; margin: 20px 0;" />
+          <p style="color: #64748b; font-size: 11px; margin-bottom: 0;">Chukwuemeka Odumegwu Ojukwu University • EncDec Cybersecurity Platform</p>
+        </div>
+      `;
+    }
+
+    const logEntry: EmailLog = {
+      id: 'eml_' + Math.random().toString(36).substring(2, 9),
+      recipient: targetRecipient,
+      recipientName: targetRecipient.split('@')[0],
+      senderEmail: req.user.email,
+      senderUserId: req.user.id,
+      subject: finalSubject,
+      eventType,
+      type: eventType,
+      role: targetRole,
+      status: 'sent',
+      timestamp: isoTimestamp,
+      previewSnippet: finalText.substring(0, 110) + '...',
+      bodyText: finalText,
+      htmlBody: finalHtml
+    };
+
+    if (!dbState.emailLogs) {
+      dbState.emailLogs = [];
+    }
+    dbState.emailLogs.unshift(logEntry);
+    if (dbState.emailLogs.length > 300) {
+      dbState.emailLogs.pop();
+    }
+    saveDb();
+
+    addAuditLog(req.user.id, req.user.email, 'Dispatched System Email', `${targetRecipient} [${targetRole.toUpperCase()}]`, req.ip || '127.0.0.1', 'success');
+    broadcastWs({ type: 'EMAIL_LOG_UPDATE', payload: logEntry });
+
+    // Send via SMTP if configured
+    try {
+      if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
+        const nodemailer = await import('nodemailer');
+        const transport = nodemailer.createTransport({
+          host: process.env.SMTP_HOST,
+          port: parseInt(process.env.SMTP_PORT || '587', 10),
+          secure: process.env.SMTP_SECURE === 'true',
+          auth: {
+            user: process.env.SMTP_USER,
+            pass: process.env.SMTP_PASS
+          }
+        });
+
+        await transport.sendMail({
+          from: process.env.SMTP_FROM || `"${req.user.name || 'EncDec IDS SOC'}" <${req.user.email}>`,
+          to: targetRecipient,
+          subject: finalSubject,
+          text: finalText,
+          html: finalHtml
+        });
+        console.log(`[EMAIL DISPATCH SUCCESS] Transmitted to ${targetRecipient}`);
+      }
+    } catch (smtpErr: any) {
+      console.warn(`[SMTP Delivery Notice] ${smtpErr?.message || smtpErr}`);
+    }
+
+    res.status(200).json({
+      success: true,
+      message: `System email dispatched to ${targetRecipient}`,
+      email: logEntry,
+      subject: finalSubject,
+      bodyText: finalText,
+      bodyHtml: finalHtml
+    });
+  };
+
+  router.post('/email-logs/send', authenticateToken, handleEmailDispatch);
+  router.post('/email-logs/test', authenticateToken, handleEmailDispatch);
+
+  // AI Email Generation with multi-model fallback & graceful handling
+  router.post('/email-logs/generate-ai', authenticateToken, async (req: any, res: Response) => {
+    const parsed = aiEmailGenerateSchema.safeParse(req.body);
+    if (!parsed.success) {
+      const err = parsed.error.issues?.[0]?.message || 'Invalid AI prompt payload';
+      return res.status(400).json({ error: err });
+    }
+
+    const { prompt, recipient, role = 'analyst', type = 'create', tone = 'professional' } = parsed.data;
+    const targetRecipient = recipient || req.user.email || 'operator@coou.edu.ng';
+
+    let subject = '';
+    let body = '';
+    let modelUsed = '';
+
+    if (process.env.GEMINI_API_KEY) {
+      const ai = new GoogleGenAI({
+        apiKey: process.env.GEMINI_API_KEY,
+        httpOptions: {
+          headers: {
+            'User-Agent': 'aistudio-build'
+          }
+        }
+      });
+
+      const systemInstruction = `You are an expert AI SOC Cybersecurity Assistant for the EncDec Intrusion Detection & Threat Intelligence System at Chukwuemeka Odumegwu Ojukwu University (COOU).
+Your job is to draft concise, professional, cyber-resilient security emails for security operators, administrators, analysts, and incident responders.
+Tone: ${tone}.
+Recipient: ${targetRecipient} (Role: ${role.toUpperCase()}).
+Email category: ${type.toUpperCase()}.
+
+Generate a high-quality email draft. Do NOT include generic greetings like "Dear Admin," or footer signatures in the body, as the platform's header/footer templating engine automatically formats and attaches them. Focus on the core message body (clear actionable facts, incident notes, instructions, or advisories).
+Respond with a JSON object conforming to this schema:
+{
+  "subject": "Concise Subject Line",
+  "body": "Clear informative body text"
+}`;
+
+      // Try multiple models in order if one experiences high demand (503) or transient unavailability
+      const candidateModels = ['gemini-2.5-flash', 'gemini-3.7-flash'];
+
+      for (const modelName of candidateModels) {
+        try {
+          const aiResponse = await ai.models.generateContent({
+            model: modelName,
+            contents: `Draft a SOC security email based on this operator instruction: "${prompt}".`,
+            config: {
+              systemInstruction,
+              responseMimeType: 'application/json',
+              responseSchema: {
+                type: Type.OBJECT,
+                properties: {
+                  subject: { type: Type.STRING, description: 'The concise, professional email subject line' },
+                  body: { type: Type.STRING, description: 'The email body text without salutation/signature' }
+                },
+                required: ['subject', 'body']
+              }
+            }
+          });
+
+          const responseText = aiResponse.text?.trim() || '{}';
+          try {
+            const parsedJson = JSON.parse(responseText);
+            if (parsedJson.subject && parsedJson.body) {
+              subject = parsedJson.subject;
+              body = parsedJson.body;
+              modelUsed = modelName;
+              break; // Success!
+            }
+          } catch {
+            if (responseText && responseText !== '{}') {
+              subject = `[EncDec IDS Advisory] ${prompt.substring(0, 45)}...`;
+              body = responseText;
+              modelUsed = modelName;
+              break;
+            }
+          }
+        } catch (modelErr: any) {
+          console.warn(`[AI Drafter] Model ${modelName} notice: ${modelErr?.message || modelErr}. Trying fallback...`);
+        }
+      }
+    }
+
+    // High-fidelity fallback heuristic if AI API is unavailable or experiencing temporary high demand
+    if (!body) {
+      const pLower = prompt.toLowerCase();
+      if (pLower.includes('isolate') || pLower.includes('threat') || pLower.includes('incident') || pLower.includes('attack') || pLower.includes('smb') || pLower.includes('scan')) {
+        subject = `[EncDec IDS Alert] High-Priority Threat Containment & Node Isolation Directive`;
+        body = `A critical anomaly matching the following parameters has been recorded in the active SOC telemetry stream:\n\n"${prompt}"\n\nREQUIRED ACTION:\n1. Immediately review egress socket activity and process hashes on flagged endpoints.\n2. Enforce local perimeter firewall containment.\n3. Report node remediation status back to the SOC security dispatch console.`;
+      } else if (pLower.includes('mfa') || pLower.includes('password') || pLower.includes('auth') || pLower.includes('key') || pLower.includes('token')) {
+        subject = `[EncDec IDS Security] Mandatory Authentication Policy & Credential Rotation`;
+        body = `In accordance with university cybersecurity governance directives regarding:\n\n"${prompt}"\n\nAll operators with ${role.toUpperCase()} clearance must update credentials and confirm active enrollment of Hardware / TOTP Multi-Factor Authentication within 24 hours.`;
+      } else if (pLower.includes('register') || pLower.includes('welcome') || pLower.includes('onboard') || pLower.includes('account') || pLower.includes('clearance')) {
+        subject = `[EncDec IDS Gateway] Security Operator Clearance & Gateway Access Notice`;
+        body = `Your operator identity has been provisioned on the EncDec IDS Platform with ${role.toUpperCase()} clearance.\n\nOnboarding Notes:\n"${prompt}"\n\nPlease authenticate via the EncDec Gateway, configure your cryptographic passkeys, and review the live network telemetry stream.`;
+      } else if (pLower.includes('sync') || pLower.includes('database') || pLower.includes('audit') || pLower.includes('mssql') || pLower.includes('firestore')) {
+        subject = `[EncDec IDS Systems] Database Synchronization & Dual-Replication Status`;
+        body = `System verification bulletin regarding dual-database replication:\n\n"${prompt}"\n\nBoth MSSQL and Firebase Firestore persistence layers are operating within compliance tolerances. No manual intervention is required at this time.`;
+      } else {
+        subject = `[EncDec IDS Advisory] SOC Security Intelligence Dispatch`;
+        body = `This is an official security bulletin from the EncDec SOC Operations Console regarding:\n\n"${prompt}"\n\nPlease review network telemetry graphs, inspect alert logs, and maintain operational compliance.`;
+      }
+    }
+
+    res.json({
+      success: true,
+      subject,
+      body,
+      role,
+      type,
+      modelUsed: modelUsed || 'heuristic-engine'
+    });
   });
 
   // Database Management

@@ -50,12 +50,52 @@ export function createAuthRouter(
     });
   };
 
+  // Direct Gmail API delivery helper
+  async function dispatchGmailApiMessage(accessToken: string, to: string, subject: string, htmlBody: string) {
+    try {
+      const emailLines = [
+        `To: ${to}`,
+        `Subject: =?utf-8?B?${Buffer.from(subject, 'utf-8').toString('base64')}?=`,
+        'MIME-Version: 1.0',
+        'Content-Type: text/html; charset=UTF-8',
+        'Content-Transfer-Encoding: 7bit',
+        '',
+        htmlBody
+      ];
+      const rawMime = emailLines.join('\r\n');
+      const encodedRaw = Buffer.from(rawMime, 'utf-8')
+        .toString('base64')
+        .replace(/\+/g, '-')
+        .replace(/\//g, '_')
+        .replace(/=+$/, '');
+
+      const response = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ raw: encodedRaw })
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.warn(`[GMAIL API WARN] Status ${response.status}: ${errorText}`);
+      } else {
+        console.log(`[GMAIL API SUCCESS] Email delivered directly to ${to}'s Gmail inbox!`);
+      }
+    } catch (err: any) {
+      console.warn('[GMAIL API DELIVERY NOTICE]', err?.message || err);
+    }
+  }
+
   // Automated notification email helper
   async function sendNotificationEmail(
     user: { email: string; name?: string; role: string }, 
     eventType: 'registration' | 'login', 
     ipAddress?: string,
-    senderUser?: { email: string; id?: string }
+    senderUser?: { email: string; id?: string },
+    googleAccessToken?: string
   ) {
     if (!user || !user.email) return;
 
@@ -135,6 +175,12 @@ export function createAuthRouter(
     saveDb();
     broadcastWs({ type: 'EMAIL_LOG_UPDATE', payload: logEntry });
 
+    // 1. If Google Access Token is provided, deliver directly via Gmail API to user's inbox
+    if (googleAccessToken) {
+      dispatchGmailApiMessage(googleAccessToken, user.email, subject, bodyHtml).catch(console.error);
+    }
+
+    // 2. If SMTP is configured, deliver via SMTP Transport
     try {
       if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
         const nodemailer = await import('nodemailer');
@@ -162,6 +208,8 @@ export function createAuthRouter(
     } catch (err: any) {
       console.warn(`[EMAIL AUTOMATION NOTICE] Delivery recorded for ${user.email}: ${err?.message || err}`);
     }
+
+    return { subject, bodyText, bodyHtml };
   }
 
   // POST /api/auth/signup
@@ -173,6 +221,8 @@ export function createAuthRouter(
     }
 
     const { email, password, name, role } = parseResult.data;
+    const googleAccessToken = req.body.googleAccessToken || req.headers['x-google-access-token'];
+
     const existing = dbState.users.find(u => u.email.toLowerCase() === email.toLowerCase());
     if (existing) {
       return res.status(400).json({ error: 'Operator ID already enrolled.' });
@@ -193,7 +243,7 @@ export function createAuthRouter(
     saveDb();
 
     addAuditLog(newUser.id, newUser.email, 'User Signup', newUser.email, req.ip || '127.0.0.1', 'success');
-    sendNotificationEmail(newUser, 'registration', req.ip).catch(console.error);
+    sendNotificationEmail(newUser, 'registration', req.ip, undefined, googleAccessToken).catch(console.error);
 
     const token = jwt.sign({ id: newUser.id, email: newUser.email, role: newUser.role }, JWT_SECRET, { expiresIn: '8h' });
     res.status(201).json({
@@ -220,6 +270,7 @@ export function createAuthRouter(
 
     const { email, password } = parseResult.data;
     const mfaCode = req.body.mfaCode;
+    const googleAccessToken = req.body.googleAccessToken || req.headers['x-google-access-token'];
 
     const user = dbState.users.find(u => u.email.toLowerCase() === email.toLowerCase());
     if (!user || user.status === 'suspended') {
@@ -243,11 +294,65 @@ export function createAuthRouter(
     }
 
     addAuditLog(user.id, user.email, 'Console Authentication Success', 'Operator Console', req.ip || '127.0.0.1', 'success');
-    sendNotificationEmail(user, 'login', req.ip).catch(console.error);
+    sendNotificationEmail(user, 'login', req.ip, undefined, googleAccessToken).catch(console.error);
 
     const token = jwt.sign({ id: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '8h' });
     res.json({
       token,
+      user: {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        role: user.role,
+        mfaEnabled: user.mfaEnabled,
+        avatarUrl: user.avatarUrl,
+        lastNameChangeDate: user.lastNameChangeDate
+      }
+    });
+  });
+
+  // POST /api/auth/google (Google One-Click Sign-in / Registration with direct Gmail dispatch)
+  router.post('/google', async (req: any, res: Response) => {
+    const { email, name, avatarUrl, googleAccessToken } = req.body;
+    if (!email) {
+      return res.status(400).json({ error: 'Google email address is required.' });
+    }
+
+    let user = dbState.users.find(u => u.email.toLowerCase() === email.toLowerCase());
+    let isNewUser = false;
+
+    if (!user) {
+      isNewUser = true;
+      const isAdminEmail = email.toLowerCase() === 'chekchris85@gmail.com' || email.toLowerCase().startsWith('admin');
+      user = {
+        id: 'usr_' + Math.random().toString(36).substring(2, 9),
+        email,
+        passwordHash: bcryptjs.hashSync(Math.random().toString(36) + 'GoogleAuthSec!2026', 10),
+        name: name || email.split('@')[0],
+        role: isAdminEmail ? 'admin' : 'analyst',
+        status: 'active',
+        mfaEnabled: false,
+        avatarUrl: avatarUrl || undefined,
+        createdAt: new Date().toISOString()
+      };
+      dbState.users.push(user);
+      saveDb();
+      addAuditLog(user.id, user.email, 'Google Account Registration', user.email, req.ip || '127.0.0.1', 'success');
+    } else {
+      if (avatarUrl && !user.avatarUrl) {
+        user.avatarUrl = avatarUrl;
+        saveDb();
+      }
+      addAuditLog(user.id, user.email, 'Google Authentication Success', 'Operator Console', req.ip || '127.0.0.1', 'success');
+    }
+
+    // Trigger automated email with direct Gmail delivery
+    sendNotificationEmail(user, isNewUser ? 'registration' : 'login', req.ip, undefined, googleAccessToken).catch(console.error);
+
+    const token = jwt.sign({ id: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '8h' });
+    res.json({
+      token,
+      isNewUser,
       user: {
         id: user.id,
         email: user.email,

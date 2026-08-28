@@ -4,10 +4,22 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { Database, Search, ShieldCheck, Filter, FileText, Mail, Send, CheckCircle, ChevronDown, ChevronUp, UserCheck, ShieldAlert, Lock, ArrowUpRight, Inbox, RefreshCw } from 'lucide-react';
+import { 
+  Database, Search, ShieldCheck, Filter, FileText, Mail, Send, CheckCircle, 
+  ChevronDown, ChevronUp, UserCheck, ShieldAlert, Lock, ArrowUpRight, Inbox, 
+  RefreshCw, Check, Globe, Sparkles, PenTool, Eye, Cpu, Wand2, AlertTriangle, 
+  Layers, Bot, Shield, UserPlus, KeyRound, Radio, Edit3
+} from 'lucide-react';
 import { AuditLog, EmailLog, User } from '../types.js';
 import { jsPDF } from 'jspdf';
 import { apiRequest } from '../api.js';
+import { 
+  getGoogleAccessToken, 
+  getCachedGoogleUser, 
+  signInWithGoogle, 
+  subscribeToGoogleAuth 
+} from '../services/googleAuth.js';
+import { sendGmailMessage } from '../services/gmailApi.js';
 
 interface AuditConsoleProps {
   auditLogs: AuditLog[];
@@ -26,13 +38,30 @@ export default function AuditConsole({ auditLogs: propAuditLogs, emailLogs: prop
   const [expandedEmailId, setExpandedEmailId] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   
-  // Test Email Modal State
-  const [showTestModal, setShowTestModal] = useState(false);
-  const [testRecipient, setTestRecipient] = useState('');
-  const [testRole, setTestRole] = useState<'admin' | 'analyst'>('analyst');
-  const [testType, setTestType] = useState<'registration' | 'login'>('login');
-  const [sendingTest, setSendingTest] = useState(false);
-  const [testSuccessMsg, setTestSuccessMsg] = useState('');
+  // Email Dispatch Modal State
+  const [showEmailModal, setShowEmailModal] = useState(false);
+  const [modalTab, setModalTab] = useState<'compose' | 'ai' | 'preview'>('compose');
+  const [emailRecipient, setEmailRecipient] = useState('');
+  const [emailRole, setEmailRole] = useState<'admin' | 'analyst'>('analyst');
+  const [emailType, setEmailType] = useState<'registration' | 'login' | 'create' | 'incident'>('create');
+  const [emailSubject, setEmailSubject] = useState('[EncDec IDS Operations] Security Intelligence Bulletin');
+  const [emailBody, setEmailBody] = useState('This is a custom operational dispatch from the EncDec SOC Console.\n\nPlease review system activity and maintain operational vigilance.');
+  const [sendingEmail, setSendingEmail] = useState(false);
+  const [emailSuccessMsg, setEmailSuccessMsg] = useState('');
+  const [emailSendError, setEmailSendError] = useState('');
+
+  // AI Email Generator State
+  const [aiPrompt, setAiPrompt] = useState('');
+  const [aiTone, setAiTone] = useState<'professional' | 'urgent' | 'technical'>('professional');
+  const [isGeneratingAi, setIsGeneratingAi] = useState(false);
+  const [aiErrorMsg, setAiErrorMsg] = useState('');
+
+  // Google Auth / Gmail Integration State
+  const [googleUser, setGoogleUser] = useState<any>(getCachedGoogleUser());
+  const [googleToken, setGoogleToken] = useState<string | null>(null);
+  const [isSigningInGoogle, setIsSigningInGoogle] = useState(false);
+  const [googleAuthError, setGoogleAuthError] = useState('');
+  const [deliverViaGmail, setDeliverViaGmail] = useState(true);
 
   const isAdmin = currentUser?.role === 'admin';
   const currentEmail = (currentUser?.email || '').toLowerCase();
@@ -51,10 +80,50 @@ export default function AuditConsole({ auditLogs: propAuditLogs, emailLogs: prop
     }
   }, [propEmailLogs]);
 
+  // Subscribe to Google Auth for direct Gmail delivery
+  useEffect(() => {
+    const unsub = subscribeToGoogleAuth((user, token) => {
+      setGoogleUser(user);
+      setGoogleToken(token);
+    });
+    return () => unsub();
+  }, []);
+
   // Initial fetch on mount & tab switch
   useEffect(() => {
     fetchLogs();
   }, [activeTab, currentUser]);
+
+  // Update default subject and body template when switching email types
+  const handleSelectEmailType = (type: 'registration' | 'login' | 'create' | 'incident') => {
+    setEmailType(type);
+    const targetRole = emailRole.toUpperCase();
+    if (type === 'registration') {
+      setEmailSubject('[EncDec IDS Security] New Operator Account Confirmation');
+      setEmailBody(
+        `Welcome to EncDec Intrusion Detection & Threat Intelligence Platform.\n\nYour account has been enrolled under clearance role: ${targetRole}.\nRegistration Timestamp: ${new Date().toLocaleString()}\n\nPlease enforce Multi-Factor Authentication (MFA) upon initial gateway login.\n\nRegards,\nEncDec Security Operations Team`
+      );
+    } else if (type === 'login') {
+      setEmailSubject('[EncDec IDS Alert] Security Gateway Dispatch Notification');
+      setEmailBody(
+        `A security gateway notification has been dispatched for your operator identity.\n\nNotification Timestamp: ${new Date().toLocaleString()}\nAssigned Clearance: ${targetRole}\nStatus: ACTIVE\n\nRegards,\nEncDec Security Operations Team`
+      );
+    } else if (type === 'incident') {
+      setEmailSubject('[EncDec IDS Alert] High Severity Incident Triage Notification');
+      setEmailBody(
+        `ATTENTION: A high-priority intrusion or anomaly was detected in the SOC monitor stream.\n\nEvent Timestamp: ${new Date().toLocaleString()}\nTarget Node: Cluster Alpha Gateway\n\nPlease log into the EncDec SOC console immediately to inspect network telemetry.\n\nRegards,\nEncDec Security Operations Team`
+      );
+    } else if (type === 'create') {
+      if (!emailSubject || emailSubject.startsWith('[EncDec IDS')) {
+        setEmailSubject('[EncDec IDS Operations] Security Intelligence Bulletin');
+      }
+      if (!emailBody) {
+        setEmailBody(
+          `This is a custom operational dispatch from the EncDec SOC Console.\n\nPlease review system activity and maintain operational vigilance.`
+        );
+      }
+    }
+  };
 
   const fetchLogs = async () => {
     setRefreshing(true);
@@ -77,26 +146,103 @@ export default function AuditConsole({ auditLogs: propAuditLogs, emailLogs: prop
     }
   };
 
-  const handleSendTestEmail = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setSendingTest(true);
-    setTestSuccessMsg('');
+  const handleConnectGoogle = async () => {
+    setIsSigningInGoogle(true);
+    setGoogleAuthError('');
     try {
-      const res = await apiRequest('/api/email-logs/test', 'POST', {
-        recipient: testRecipient,
-        role: testRole,
-        type: testType
+      const res = await signInWithGoogle();
+      setGoogleUser(res.user);
+      setGoogleToken(res.accessToken);
+    } catch (err: any) {
+      if (err?.code === 'auth/popup-blocked' || err?.message?.includes('popup-blocked')) {
+        setGoogleAuthError('Popup blocked by browser/iframe. Please allow popups for this site, or open this app in a new tab.');
+      } else {
+        setGoogleAuthError(err?.message || 'Google authentication was cancelled.');
+      }
+    } finally {
+      setIsSigningInGoogle(false);
+    }
+  };
+
+  // AI Email Generator Handler
+  const handleGenerateAiEmail = async (promptOverride?: string) => {
+    const promptToUse = promptOverride || aiPrompt;
+    if (!promptToUse.trim()) {
+      setAiErrorMsg('Please describe what you want to email in the prompt box.');
+      return;
+    }
+
+    setIsGeneratingAi(true);
+    setAiErrorMsg('');
+    try {
+      const res = await apiRequest('/api/email-logs/generate-ai', 'POST', {
+        prompt: promptToUse.trim(),
+        recipient: emailRecipient.trim() || currentUser?.email || 'operator@coou.edu.ng',
+        role: emailRole,
+        type: emailType,
+        tone: aiTone
       });
-      setTestSuccessMsg(`✅ ${res.message}`);
+
+      if (res.subject) setEmailSubject(res.subject);
+      if (res.body) setEmailBody(res.body);
+      setEmailType('create'); // Switch to custom create draft so user can edit freely
+      setModalTab('compose'); // Switch back to editor to review and customize
+    } catch (err: any) {
+      setAiErrorMsg(err?.message || 'Failed to generate AI email draft.');
+    } finally {
+      setIsGeneratingAi(false);
+    }
+  };
+
+  const handleSendEmail = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!emailRecipient.trim()) return;
+
+    setSendingEmail(true);
+    setEmailSuccessMsg('');
+    setEmailSendError('');
+    try {
+      const res = await apiRequest('/api/email-logs/send', 'POST', {
+        recipient: emailRecipient.trim(),
+        role: emailRole,
+        type: emailType,
+        subject: emailSubject.trim() || undefined,
+        bodyText: emailBody.trim() || undefined,
+        body: emailBody.trim() || undefined
+      });
+
+      let deliveredToGmail = false;
+      // Direct Gmail API delivery to recipient's Gmail inbox
+      if (googleToken && deliverViaGmail) {
+        try {
+          await sendGmailMessage({
+            to: emailRecipient.trim(),
+            subject: res.subject || emailSubject || '[EncDec IDS Security Alert] System Dispatch Notification',
+            body: res.bodyHtml || res.bodyText || emailBody || 'EncDec IDS Security Notification',
+            isHtml: true
+          });
+          deliveredToGmail = true;
+        } catch (gmailErr: any) {
+          console.warn('Gmail direct transmission note:', gmailErr);
+        }
+      }
+
+      if (deliveredToGmail) {
+        setEmailSuccessMsg(`✅ Dispatched & delivered directly to ${emailRecipient.trim()}'s Gmail inbox!`);
+      } else {
+        setEmailSuccessMsg(`✅ ${res.message || 'System email dispatched successfully!'}`);
+      }
+
       fetchLogs();
       setTimeout(() => {
-        setShowTestModal(false);
-        setTestSuccessMsg('');
-      }, 2000);
+        setShowEmailModal(false);
+        setEmailSuccessMsg('');
+        setEmailSendError('');
+      }, 2500);
     } catch (err: any) {
-      alert(err.message || 'Failed to dispatch test email.');
+      setEmailSendError(err?.message || 'Failed to dispatch email.');
     } finally {
-      setSendingTest(false);
+      setSendingEmail(false);
     }
   };
 
@@ -373,15 +519,15 @@ export default function AuditConsole({ auditLogs: propAuditLogs, emailLogs: prop
           {activeTab === 'emails' && (
             <button
               onClick={() => {
-                setTestRecipient(currentUser?.email || '');
-                setTestRole(isAdmin ? 'admin' : 'analyst');
-                setShowTestModal(true);
+                setEmailRecipient(currentUser?.email || '');
+                setEmailRole(isAdmin ? 'admin' : 'analyst');
+                setShowEmailModal(true);
               }}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold font-mono text-[11px] cursor-pointer active:scale-95 transition-all shadow-[0_0_12px_rgba(16,185,129,0.25)]"
-              id="btn-test-email-dispatch"
+              id="btn-email-dispatch"
             >
               <Send className="w-3.5 h-3.5" />
-              <span>Send Test Email</span>
+              <span>Send Email</span>
             </button>
           )}
         </div>
@@ -567,7 +713,7 @@ export default function AuditConsole({ auditLogs: propAuditLogs, emailLogs: prop
                 <p className="text-[10px] text-slate-600">
                   {isAdmin 
                     ? 'No automated email records logged in system yet.' 
-                    : 'Analysts only see emails they have sent out or received. Send a test email to verify!'}
+                    : 'Analysts only see emails they have sent out or received. Send an email to verify!'}
                 </p>
               </div>
             ) : (
@@ -671,118 +817,592 @@ export default function AuditConsole({ auditLogs: propAuditLogs, emailLogs: prop
         </div>
       )}
 
-      {/* TEST EMAIL DISPATCH MODAL */}
-      {showTestModal && (
-        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-white/10 rounded-lg p-6 max-w-md w-full space-y-4 font-mono shadow-2xl relative">
-            <h3 className="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2">
-              <Send className="w-4 h-4 text-emerald-400" />
-              <span>Send Test Notification Email</span>
-            </h3>
+      {/* SYSTEM EMAIL DISPATCH MODAL */}
+      {showEmailModal && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+          <div className="bg-slate-900 border border-white/10 rounded-xl p-5 sm:p-6 max-w-2xl w-full space-y-4 font-mono shadow-2xl relative my-auto max-h-[92vh] flex flex-col">
             
-            <p className="text-[11px] text-slate-400">
-              Trigger a live automated email dispatch with role-specific salutations (<strong>Dear Admin</strong> vs <strong>Dear Analyst</strong>).
-            </p>
-
-            <form onSubmit={handleSendTestEmail} className="space-y-3 text-xs">
-              <div>
-                <label className="block text-[10px] text-slate-400 uppercase font-bold mb-1">Recipient Email:</label>
-                <input
-                  type="email"
-                  required
-                  placeholder="e.g. operator@coou.edu.ng"
-                  value={testRecipient}
-                  onChange={(e) => setTestRecipient(e.target.value)}
-                  className="w-full bg-slate-950 border border-white/10 rounded p-2 text-white placeholder-slate-600 focus:outline-none focus:border-cyan-500"
-                />
-              </div>
-
-              <div>
-                <label className="block text-[10px] text-slate-400 uppercase font-bold mb-1">Target Salutation Role:</label>
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setTestRole('admin')}
-                    className={`py-2 px-3 rounded font-bold uppercase transition-all border cursor-pointer ${
-                      testRole === 'admin'
-                        ? 'bg-amber-500/20 border-amber-500 text-amber-300'
-                        : 'bg-slate-950 border-white/10 text-slate-400'
-                    }`}
-                  >
-                    Admin ("Dear Admin,")
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setTestRole('analyst')}
-                    className={`py-2 px-3 rounded font-bold uppercase transition-all border cursor-pointer ${
-                      testRole === 'analyst'
-                        ? 'bg-sky-500/20 border-sky-500 text-sky-300'
-                        : 'bg-slate-950 border-white/10 text-slate-400'
-                    }`}
-                  >
-                    Analyst ("Dear Analyst,")
-                  </button>
+            {/* Modal Header */}
+            <div className="flex items-center justify-between border-b border-white/10 pb-3 flex-shrink-0">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-lg bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
+                  <Send className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-white uppercase tracking-wider">
+                    System Email Dispatcher
+                  </h3>
+                  <p className="text-[11px] text-slate-400">
+                    Dispatch security notifications with role salutations & Gmail inbox delivery
+                  </p>
                 </div>
               </div>
 
-              <div>
-                <label className="block text-[10px] text-slate-400 uppercase font-bold mb-1">Event Type:</label>
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setTestType('registration')}
-                    className={`py-2 px-3 rounded font-bold uppercase transition-all border cursor-pointer ${
-                      testType === 'registration'
-                        ? 'bg-cyan-500/20 border-cyan-500 text-cyan-300'
-                        : 'bg-slate-950 border-white/10 text-slate-400'
-                    }`}
-                  >
-                    Registration
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setTestType('login')}
-                    className={`py-2 px-3 rounded font-bold uppercase transition-all border cursor-pointer ${
-                      testType === 'login'
-                        ? 'bg-emerald-500/20 border-emerald-500 text-emerald-300'
-                        : 'bg-slate-950 border-white/10 text-slate-400'
-                    }`}
-                  >
-                    Login Alert
-                  </button>
+              <button
+                type="button"
+                onClick={() => setShowEmailModal(false)}
+                className="text-slate-400 hover:text-white p-1 rounded-md hover:bg-white/5 cursor-pointer text-sm"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Direct Gmail Delivery Status Banner */}
+            <div className="flex-shrink-0 space-y-2">
+              {googleToken ? (
+                <div className="p-2.5 bg-emerald-950/40 border border-emerald-500/30 rounded-lg flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 text-[11px] text-emerald-300">
+                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                    <span>Direct Gmail Inbox Delivery: <strong className="text-emerald-200">Connected ({googleUser?.email})</strong></span>
+                  </div>
+                  <span className="text-[9px] text-emerald-300 bg-emerald-500/20 px-2 py-0.5 rounded border border-emerald-500/40 font-bold tracking-wider">
+                    GMAIL API ACTIVE
+                  </span>
                 </div>
-              </div>
-
-              <div className="p-2 bg-slate-950 rounded border border-white/5 text-[10px] text-slate-400 space-y-1">
-                <p><span className="text-slate-500">Dispatch Sender:</span> <strong className="text-white">{currentUser?.email || 'Your account'}</strong></p>
-                {!isAdmin && (
-                  <p className="text-cyan-400">ℹ️ As an Analyst, this dispatch will be automatically logged to your authorized email outbox.</p>
-                )}
-              </div>
-
-              {testSuccessMsg && (
-                <div className="p-2.5 bg-emerald-950/50 border border-emerald-500/30 rounded text-emerald-400 text-[11px] font-mono">
-                  {testSuccessMsg}
+              ) : (
+                <div className="p-2.5 bg-slate-950 border border-white/10 rounded-lg flex items-center justify-between gap-2">
+                  <div className="text-[11px] text-slate-400">
+                    <span>Connect your Google account to deliver directly to the recipient's Gmail inbox.</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleConnectGoogle}
+                    disabled={isSigningInGoogle}
+                    className="px-2.5 py-1 rounded bg-red-500/20 hover:bg-red-500/30 border border-red-500/40 text-red-300 text-[10px] font-bold cursor-pointer whitespace-nowrap transition-all flex items-center gap-1.5"
+                  >
+                    <Mail className="w-3 h-3" />
+                    <span>{isSigningInGoogle ? 'Connecting...' : 'Connect Gmail'}</span>
+                  </button>
                 </div>
               )}
 
-              <div className="flex gap-2 justify-end pt-2">
+              {googleAuthError && (
+                <div className="p-2.5 bg-amber-950/50 border border-amber-500/30 rounded-lg text-amber-200 text-xs flex items-start justify-between gap-2 animate-fade-in">
+                  <div className="space-y-1">
+                    <p className="font-semibold text-amber-300 flex items-center gap-1.5">
+                      <span>⚠️ Google Sign-In Notice:</span>
+                    </p>
+                    <p className="text-[11px] text-amber-200/90 leading-relaxed">
+                      {googleAuthError}
+                    </p>
+                    <div className="pt-1 flex items-center gap-2">
+                      <a
+                        href={window.location.href}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 text-[11px] text-cyan-300 hover:text-cyan-200 underline font-bold"
+                      >
+                        <span>Open app in new tab</span> ↗
+                      </a>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setGoogleAuthError('')}
+                    className="text-amber-400 hover:text-white text-xs cursor-pointer p-0.5"
+                  >
+                    ✕
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Modal Navigation Tabs */}
+            <div className="grid grid-cols-3 gap-1 bg-slate-950 p-1 rounded-lg border border-white/5 flex-shrink-0 text-xs">
+              <button
+                type="button"
+                onClick={() => setModalTab('compose')}
+                className={`py-1.5 px-2 rounded-md font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                  modalTab === 'compose'
+                    ? 'bg-slate-800 text-white shadow-sm border border-white/10'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <Edit3 className="w-3.5 h-3.5 text-cyan-400" />
+                <span>1. Compose & Edit</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setModalTab('ai')}
+                className={`py-1.5 px-2 rounded-md font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer relative ${
+                  modalTab === 'ai'
+                    ? 'bg-purple-900/50 text-purple-200 shadow-sm border border-purple-500/40'
+                    : 'text-purple-300/80 hover:text-purple-200'
+                }`}
+              >
+                <Sparkles className="w-3.5 h-3.5 text-purple-400 animate-pulse" />
+                <span>2. AI Generator</span>
+                <span className="text-[9px] px-1 py-0.2 bg-purple-500/30 text-purple-300 rounded border border-purple-500/40">AI</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setModalTab('preview')}
+                className={`py-1.5 px-2 rounded-md font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                  modalTab === 'preview'
+                    ? 'bg-slate-800 text-white shadow-sm border border-white/10'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <Eye className="w-3.5 h-3.5 text-emerald-400" />
+                <span>3. Live Preview</span>
+              </button>
+            </div>
+
+            {/* Modal Body / Tab Content */}
+            <div className="overflow-y-auto flex-1 pr-1 space-y-4 text-xs">
+              
+              {/* TAB 1: COMPOSE & MANUAL EDIT */}
+              {modalTab === 'compose' && (
+                <form id="email-dispatch-form" onSubmit={handleSendEmail} className="space-y-3.5">
+                  {/* Recipient & Salutation Role */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-[10px] text-slate-400 uppercase font-bold mb-1">
+                        Recipient Email Address: <span className="text-rose-400">*</span>
+                      </label>
+                      <input
+                        type="email"
+                        required
+                        placeholder="e.g. user@gmail.com, chekchris85@gmail.com"
+                        value={emailRecipient}
+                        onChange={(e) => setEmailRecipient(e.target.value)}
+                        className="w-full bg-slate-950 border border-white/10 rounded-lg p-2.5 text-white placeholder-slate-600 focus:outline-none focus:border-cyan-500 font-mono text-xs"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] text-slate-400 uppercase font-bold mb-1">
+                        Target Salutation Header:
+                      </label>
+                      <div className="grid grid-cols-2 gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => setEmailRole('admin')}
+                          className={`py-2 px-2.5 rounded-lg font-bold text-center transition-all border cursor-pointer ${
+                            emailRole === 'admin'
+                              ? 'bg-amber-500/20 border-amber-500 text-amber-300'
+                              : 'bg-slate-950 border-white/10 text-slate-400 hover:border-white/20'
+                          }`}
+                        >
+                          "Dear Admin,"
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setEmailRole('analyst')}
+                          className={`py-2 px-2.5 rounded-lg font-bold text-center transition-all border cursor-pointer ${
+                            emailRole === 'analyst'
+                              ? 'bg-sky-500/20 border-sky-500 text-sky-300'
+                              : 'bg-slate-950 border-white/10 text-slate-400 hover:border-white/20'
+                          }`}
+                        >
+                          "Dear Analyst,"
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Email Kinds / Types: Registration, Login, Create, Incident */}
+                  <div>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <label className="text-[10px] text-slate-400 uppercase font-bold">
+                        Email Type / Template Category:
+                      </label>
+                      <span className="text-[10px] text-slate-500">
+                        {emailType === 'create' ? '✨ Custom Body with standard EncDec header' : 'Pre-built template'}
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => handleSelectEmailType('registration')}
+                        className={`p-2 rounded-lg font-bold text-[11px] uppercase transition-all border cursor-pointer flex flex-col items-center justify-center gap-1 ${
+                          emailType === 'registration'
+                            ? 'bg-cyan-500/20 border-cyan-500 text-cyan-300 shadow-sm'
+                            : 'bg-slate-950 border-white/10 text-slate-400 hover:border-white/20'
+                        }`}
+                      >
+                        <UserPlus className="w-3.5 h-3.5 text-cyan-400" />
+                        <span>Registration</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => handleSelectEmailType('login')}
+                        className={`p-2 rounded-lg font-bold text-[11px] uppercase transition-all border cursor-pointer flex flex-col items-center justify-center gap-1 ${
+                          emailType === 'login'
+                            ? 'bg-emerald-500/20 border-emerald-500 text-emerald-300 shadow-sm'
+                            : 'bg-slate-950 border-white/10 text-slate-400 hover:border-white/20'
+                        }`}
+                      >
+                        <KeyRound className="w-3.5 h-3.5 text-emerald-400" />
+                        <span>Login</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => handleSelectEmailType('create')}
+                        className={`p-2 rounded-lg font-bold text-[11px] uppercase transition-all border cursor-pointer flex flex-col items-center justify-center gap-1 relative ${
+                          emailType === 'create'
+                            ? 'bg-indigo-500/25 border-indigo-400 text-indigo-200 shadow-sm ring-1 ring-indigo-400/50'
+                            : 'bg-slate-950 border-white/10 text-slate-400 hover:border-white/20'
+                        }`}
+                      >
+                        <PenTool className="w-3.5 h-3.5 text-indigo-400" />
+                        <span>Create</span>
+                        <span className="text-[8px] tracking-tight text-indigo-300/80 font-normal">Custom Body</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => handleSelectEmailType('incident')}
+                        className={`p-2 rounded-lg font-bold text-[11px] uppercase transition-all border cursor-pointer flex flex-col items-center justify-center gap-1 ${
+                          emailType === 'incident'
+                            ? 'bg-rose-500/20 border-rose-500 text-rose-300 shadow-sm'
+                            : 'bg-slate-950 border-white/10 text-slate-400 hover:border-white/20'
+                        }`}
+                      >
+                        <ShieldAlert className="w-3.5 h-3.5 text-rose-400" />
+                        <span>Incident</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Subject Line */}
+                  <div>
+                    <label className="block text-[10px] text-slate-400 uppercase font-bold mb-1">
+                      Email Subject Line:
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="e.g. [EncDec IDS Operations] Security Intelligence Bulletin"
+                      value={emailSubject}
+                      onChange={(e) => setEmailSubject(e.target.value)}
+                      className="w-full bg-slate-950 border border-white/10 rounded-lg p-2.5 text-white placeholder-slate-600 focus:outline-none focus:border-cyan-500 font-mono text-xs"
+                    />
+                  </div>
+
+                  {/* Body Text Area */}
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-[10px] text-slate-400 uppercase font-bold flex items-center gap-1.5">
+                        <span>Email Message Body:</span>
+                        {emailType === 'create' && (
+                          <span className="text-[9px] px-1.5 py-0.5 bg-indigo-500/20 text-indigo-300 rounded border border-indigo-500/30">
+                            MANUAL DRAFT
+                          </span>
+                        )}
+                      </label>
+
+                      <button
+                        type="button"
+                        onClick={() => setModalTab('ai')}
+                        className="text-[10px] text-purple-400 hover:text-purple-300 font-bold flex items-center gap-1 cursor-pointer"
+                      >
+                        <Sparkles className="w-3 h-3" />
+                        <span>Draft with AI</span>
+                      </button>
+                    </div>
+
+                    <textarea
+                      rows={5}
+                      required
+                      placeholder="Write your email body here... The official EncDec header, Dear Admin/Analyst salutation, and university security footer will be automatically attached."
+                      value={emailBody}
+                      onChange={(e) => setEmailBody(e.target.value)}
+                      className="w-full bg-slate-950 border border-white/10 rounded-lg p-2.5 text-white placeholder-slate-600 focus:outline-none focus:border-cyan-500 font-mono text-xs leading-relaxed"
+                    />
+                    <div className="flex items-center justify-between text-[10px] text-slate-500 mt-1">
+                      <span>Standard EncDec header & footer are automatically attached around your body.</span>
+                      <span>{emailBody.length} characters</span>
+                    </div>
+                  </div>
+
+                  {/* Sender Context Banner */}
+                  <div className="p-2.5 bg-slate-950 rounded-lg border border-white/5 text-[11px] text-slate-400 flex items-center justify-between">
+                    <div>
+                      <span className="text-slate-500">Sender Identity:</span>{' '}
+                      <strong className="text-white">{currentUser?.email || 'operator@coou.edu.ng'}</strong>{' '}
+                      <span className="text-[10px] text-emerald-400">({(currentUser?.role || 'operator').toUpperCase()})</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setModalTab('preview')}
+                      className="text-cyan-400 hover:text-cyan-300 font-bold flex items-center gap-1 cursor-pointer"
+                    >
+                      <Eye className="w-3 h-3" />
+                      <span>Preview Email</span>
+                    </button>
+                  </div>
+                </form>
+              )}
+
+              {/* TAB 2: AI EMAIL GENERATOR */}
+              {modalTab === 'ai' && (
+                <div className="space-y-4">
+                  <div className="p-3 bg-purple-950/30 border border-purple-500/30 rounded-lg space-y-2">
+                    <div className="flex items-center gap-2 text-purple-300 font-bold">
+                      <Sparkles className="w-4 h-4 text-purple-400" />
+                      <span>Gemini AI SOC Email Drafter</span>
+                    </div>
+                    <p className="text-[11px] text-purple-300/80 leading-relaxed">
+                      Describe what you want to communicate to the recipient (e.g. incident alerts, password resets, containment instructions). Gemini will craft a structured SOC email subject and body for you.
+                    </p>
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] text-slate-400 uppercase font-bold mb-1.5">
+                      Tell AI what to email the person:
+                    </label>
+                    <textarea
+                      rows={3}
+                      placeholder="e.g. Tell the analyst that host Node-B generated suspicious SMB outbound traffic on port 445 and instruct them to isolate the host and rotate administrator keys."
+                      value={aiPrompt}
+                      onChange={(e) => setAiPrompt(e.target.value)}
+                      className="w-full bg-slate-950 border border-purple-500/30 rounded-lg p-2.5 text-white placeholder-slate-600 focus:outline-none focus:border-purple-500 font-mono text-xs leading-relaxed"
+                    />
+                  </div>
+
+                  {/* AI Tone selector */}
+                  <div>
+                    <label className="block text-[10px] text-slate-400 uppercase font-bold mb-1.5">
+                      Tone & Urgency:
+                    </label>
+                    <div className="grid grid-cols-3 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setAiTone('professional')}
+                        className={`py-1.5 px-2 rounded-lg font-bold text-[10px] uppercase transition-all border cursor-pointer ${
+                          aiTone === 'professional'
+                            ? 'bg-purple-500/30 border-purple-500 text-purple-200'
+                            : 'bg-slate-950 border-white/10 text-slate-400'
+                        }`}
+                      >
+                        Professional
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setAiTone('urgent')}
+                        className={`py-1.5 px-2 rounded-lg font-bold text-[10px] uppercase transition-all border cursor-pointer ${
+                          aiTone === 'urgent'
+                            ? 'bg-rose-500/30 border-rose-500 text-rose-200'
+                            : 'bg-slate-950 border-white/10 text-slate-400'
+                        }`}
+                      >
+                        Urgent SOC
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setAiTone('technical')}
+                        className={`py-1.5 px-2 rounded-lg font-bold text-[10px] uppercase transition-all border cursor-pointer ${
+                          aiTone === 'technical'
+                            ? 'bg-cyan-500/30 border-cyan-500 text-cyan-200'
+                            : 'bg-slate-950 border-white/10 text-slate-400'
+                        }`}
+                      >
+                        Technical
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Quick Preset Prompts */}
+                  <div>
+                    <label className="block text-[10px] text-slate-400 uppercase font-bold mb-1.5">
+                      Or Choose a Quick Template Prompt:
+                    </label>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setAiPrompt('Alert operator of suspicious port 445 SMB scan and instruct host perimeter isolation');
+                          handleGenerateAiEmail('Alert operator of suspicious port 445 SMB scan and instruct host perimeter isolation');
+                        }}
+                        className="text-left p-2 bg-slate-950 hover:bg-purple-950/30 border border-white/10 hover:border-purple-500/40 rounded-lg text-[10px] text-slate-300 transition-all cursor-pointer"
+                      >
+                        🚨 <strong>Threat Containment:</strong> Isolate node with SMB scan
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setAiPrompt('Send directive for mandatory TOTP/Hardware MFA token rotation within 24 hours');
+                          handleGenerateAiEmail('Send directive for mandatory TOTP/Hardware MFA token rotation within 24 hours');
+                        }}
+                        className="text-left p-2 bg-slate-950 hover:bg-purple-950/30 border border-white/10 hover:border-purple-500/40 rounded-lg text-[10px] text-slate-300 transition-all cursor-pointer"
+                      >
+                        🔐 <strong>Security Policy:</strong> Enforce MFA token rotation
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setAiPrompt('Welcome new SOC operator with analyst clearance, providing orientation instructions and login requirements');
+                          handleGenerateAiEmail('Welcome new SOC operator with analyst clearance, providing orientation instructions and login requirements');
+                        }}
+                        className="text-left p-2 bg-slate-950 hover:bg-purple-950/30 border border-white/10 hover:border-purple-500/40 rounded-lg text-[10px] text-slate-300 transition-all cursor-pointer"
+                      >
+                        👋 <strong>Onboarding:</strong> New Analyst Clearance Welcome
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setAiPrompt('Notify SOC team that dual-database MSSQL and Firestore replication synchronization has passed audit check');
+                          handleGenerateAiEmail('Notify SOC team that dual-database MSSQL and Firestore replication synchronization has passed audit check');
+                        }}
+                        className="text-left p-2 bg-slate-950 hover:bg-purple-950/30 border border-white/10 hover:border-purple-500/40 rounded-lg text-[10px] text-slate-300 transition-all cursor-pointer"
+                      >
+                        📊 <strong>Audit Notice:</strong> Dual-DB Synchronization Passed
+                      </button>
+                    </div>
+                  </div>
+
+                  {aiErrorMsg && (
+                    <div className="p-2.5 bg-rose-950/50 border border-rose-500/30 rounded-lg text-rose-300 text-[11px]">
+                      {aiErrorMsg}
+                    </div>
+                  )}
+
+                  <div className="pt-2 flex justify-end">
+                    <button
+                      type="button"
+                      disabled={isGeneratingAi || !aiPrompt.trim()}
+                      onClick={() => handleGenerateAiEmail()}
+                      className="px-4 py-2 rounded-lg bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-bold cursor-pointer disabled:opacity-50 flex items-center gap-2 shadow-lg shadow-purple-900/30"
+                    >
+                      <Sparkles className={`w-4 h-4 ${isGeneratingAi ? 'animate-spin' : ''}`} />
+                      <span>{isGeneratingAi ? 'Generating Draft with AI...' : 'Generate Email Body with AI'}</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* TAB 3: LIVE FORMATTED PREVIEW */}
+              {modalTab === 'preview' && (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between text-[11px] text-slate-400">
+                    <span>This is the exact email rendering the recipient will receive:</span>
+                    <button
+                      type="button"
+                      onClick={() => setModalTab('compose')}
+                      className="text-cyan-400 hover:text-cyan-300 font-bold flex items-center gap-1 cursor-pointer"
+                    >
+                      <Edit3 className="w-3 h-3" />
+                      <span>Edit Content</span>
+                    </button>
+                  </div>
+
+                  {/* Rendered Email Card (Exact HTML match) */}
+                  <div className="bg-[#0f172a] text-[#e2e8f0] p-5 rounded-lg border border-[#1e293b] font-sans space-y-4 shadow-inner">
+                    {/* Header */}
+                    <div className="flex items-center justify-between border-b border-[#1e293b] pb-3">
+                      <div>
+                        <h4 className="text-cyan-400 font-bold text-base m-0">EncDec IDS Security Operations</h4>
+                        <p className="text-[11px] text-slate-400 m-0">Automated Cyber Threat & Intelligence Gateway</p>
+                      </div>
+                      <span className="text-[10px] bg-cyan-950/80 text-cyan-300 border border-cyan-500/30 px-2 py-0.5 rounded font-mono uppercase font-bold">
+                        {emailType.toUpperCase()}
+                      </span>
+                    </div>
+
+                    {/* Salutation */}
+                    <p className="text-sm font-bold text-sky-400 m-0">
+                      {emailRole === 'admin' ? 'Dear Admin,' : 'Dear Analyst,'}
+                    </p>
+
+                    {/* Subject in preview */}
+                    <div className="bg-slate-900/70 p-2 rounded border border-white/5 text-xs text-white font-semibold">
+                      <span className="text-slate-400 font-normal">Subject:</span> {emailSubject || '[EncDec IDS Security] Operational Dispatch'}
+                    </div>
+
+                    {/* Body */}
+                    <div className="text-xs leading-relaxed text-slate-200 whitespace-pre-wrap py-1">
+                      {emailBody || 'No custom body entered yet.'}
+                    </div>
+
+                    {/* Metadata Box */}
+                    <div className="bg-[#1e293b] p-3 rounded border-l-4 border-cyan-500 space-y-1 text-xs font-mono">
+                      <p className="m-0 text-slate-300"><strong>Recipient:</strong> {emailRecipient || 'recipient@example.com'}</p>
+                      <p className="m-0 text-slate-300"><strong>Assigned Role:</strong> <span className="text-sky-400">{emailRole.toUpperCase()}</span></p>
+                      <p className="m-0 text-slate-300"><strong>Timestamp:</strong> {new Date().toLocaleString()}</p>
+                      <p className="m-0 text-slate-300"><strong>Origin Node:</strong> 127.0.0.1</p>
+                      <p className="m-0 text-slate-300"><strong>Sender Clearance:</strong> <span className="text-emerald-400">{(currentUser?.role || 'OPERATOR').toUpperCase()}</span></p>
+                    </div>
+
+                    {/* Footer */}
+                    <hr className="border-t border-slate-700 m-0" />
+                    <p className="text-[10px] text-slate-500 m-0 text-center">
+                      Chukwuemeka Odumegwu Ojukwu University • EncDec Cybersecurity Platform
+                    </p>
+                  </div>
+                </div>
+              )}
+
+            </div>
+
+            {/* Success Message Banner */}
+            {emailSuccessMsg && (
+              <div className="p-2.5 bg-emerald-950/60 border border-emerald-500/40 rounded-lg text-emerald-300 text-xs font-mono flex items-center gap-2 flex-shrink-0 animate-fade-in">
+                <CheckCircle className="w-4 h-4 text-emerald-400 flex-shrink-0" />
+                <span>{emailSuccessMsg}</span>
+              </div>
+            )}
+
+            {/* Error Message Banner */}
+            {emailSendError && (
+              <div className="p-2.5 bg-rose-950/60 border border-rose-500/40 rounded-lg text-rose-300 text-xs font-mono flex items-center justify-between gap-2 flex-shrink-0 animate-fade-in">
+                <div className="flex items-center gap-2">
+                  <ShieldAlert className="w-4 h-4 text-rose-400 flex-shrink-0" />
+                  <span>{emailSendError}</span>
+                </div>
                 <button
                   type="button"
-                  onClick={() => setShowTestModal(false)}
-                  className="px-3 py-1.5 rounded bg-slate-800 text-slate-300 hover:text-white cursor-pointer"
+                  onClick={() => setEmailSendError('')}
+                  className="text-rose-400 hover:text-white text-xs cursor-pointer p-0.5"
+                >
+                  ✕
+                </button>
+              </div>
+            )}
+
+            {/* Modal Actions Footer */}
+            <div className="flex items-center justify-between border-t border-white/10 pt-3 flex-shrink-0">
+              <div className="text-[11px] text-slate-400">
+                {modalTab !== 'compose' && (
+                  <button
+                    type="button"
+                    onClick={() => setModalTab('compose')}
+                    className="text-slate-300 hover:text-white underline cursor-pointer"
+                  >
+                    ← Back to Editor
+                  </button>
+                )}
+              </div>
+
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowEmailModal(false)}
+                  className="px-3.5 py-1.5 rounded-lg bg-slate-800 text-slate-300 hover:text-white cursor-pointer font-bold"
                 >
                   Cancel
                 </button>
+                
                 <button
-                  type="submit"
-                  disabled={sendingTest || !testRecipient}
-                  className="px-4 py-1.5 rounded bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold cursor-pointer disabled:opacity-50"
+                  type="button"
+                  disabled={sendingEmail || !emailRecipient.trim()}
+                  onClick={(e) => handleSendEmail(e)}
+                  className="px-4 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold cursor-pointer disabled:opacity-50 flex items-center gap-2 shadow-md shadow-emerald-900/30"
                 >
-                  {sendingTest ? 'Dispatching...' : 'Dispatch Email'}
+                  <Send className="w-3.5 h-3.5" />
+                  <span>{sendingEmail ? 'Dispatching...' : 'Send Email'}</span>
                 </button>
               </div>
-            </form>
+            </div>
+
           </div>
         </div>
       )}

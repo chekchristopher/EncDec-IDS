@@ -105,6 +105,12 @@ export const signInWithGoogle = async (): Promise<{ user: User; accessToken: str
 
     return { user: result.user, accessToken: cachedAccessToken };
   } catch (error: any) {
+    if (error?.code === 'auth/popup-blocked' || error?.message?.includes('popup-blocked')) {
+      const friendlyErr = new Error('Popup blocked by browser or iframe sandbox. Please allow popups for this site, or open the app in a new window to authorize Gmail access.');
+      (friendlyErr as any).code = 'auth/popup-blocked';
+      console.warn('Google Sign-In popup was blocked:', error);
+      throw friendlyErr;
+    }
     console.error('Google Sign-In failed:', error);
     throw error;
   } finally {

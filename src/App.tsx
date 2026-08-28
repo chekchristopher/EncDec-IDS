@@ -186,13 +186,14 @@ export default function App() {
             break;
 
           case 'EMAIL_DISPATCHED':
+          case 'EMAIL_LOG_UPDATE':
             setEmailLogs(prev => dedup([msg.payload, ...prev.slice(0, 99)]));
             if (
               currentUser?.role === 'admin' || 
               (msg.payload.recipient && msg.payload.recipient.toLowerCase() === currentUser?.email?.toLowerCase()) ||
               (msg.payload.senderEmail && msg.payload.senderEmail.toLowerCase() === currentUser?.email?.toLowerCase())
             ) {
-              triggerUIWarning(`Automated Email Dispatched to ${msg.payload.recipient} (${msg.payload.role.toUpperCase()})`);
+              triggerUIWarning(`📧 Email Dispatched to ${msg.payload.recipient} [${(msg.payload.role || 'operator').toUpperCase()}]`);
             }
             break;
 

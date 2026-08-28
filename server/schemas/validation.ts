@@ -73,10 +73,25 @@ export const quarantineSchema = z.object({
 
 export const emailTestSchema = z.object({
   to: z.string().email('Valid recipient email required').optional(),
+  recipient: z.string().email('Valid recipient email required').optional(),
   subject: z.string().min(1, 'Subject is required').optional(),
   body: z.string().min(1, 'Body is required').optional(),
+  bodyText: z.string().optional(),
+  bodyHtml: z.string().optional(),
+  role: z.enum(['admin', 'analyst', 'operator', 'auditor']).default('analyst'),
+  type: z.enum(['registration', 'login', 'create', 'incident', 'custom']).default('login'),
   threatLevel: z.string().optional(),
   incidentId: z.string().optional(),
+});
+
+export const emailDispatchSchema = emailTestSchema;
+
+export const aiEmailGenerateSchema = z.object({
+  prompt: z.string().min(2, 'Prompt is required to generate email'),
+  recipient: z.string().optional(),
+  role: z.enum(['admin', 'analyst', 'operator', 'auditor']).optional(),
+  type: z.enum(['registration', 'login', 'create', 'incident', 'custom']).optional(),
+  tone: z.enum(['urgent', 'professional', 'technical', 'informative']).optional().default('professional'),
 });
 
 export const mssqlConfigureSchema = z.object({
