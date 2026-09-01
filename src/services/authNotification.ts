@@ -5,6 +5,7 @@
 
 import { getGoogleAccessToken, getCachedGoogleUser } from './googleAuth.js';
 import { sendGmailMessage } from './gmailApi.js';
+import { apiRequest } from '../api.js';
 
 export interface AuthNotificationOptions {
   email: string;
@@ -22,11 +23,6 @@ export async function sendDirectAuthEmailToGmail(options: AuthNotificationOption
   if (!email) return { delivered: false, error: 'No recipient email provided.' };
 
   const token = await getGoogleAccessToken();
-  if (!token) {
-    // No active Google OAuth token in client session; server will handle SMTP/logging
-    return { delivered: false, error: 'No Google OAuth token in client session.' };
-  }
-
   const userRole = role.toLowerCase();
   let salutation = 'Dear Operator,';
   if (userRole === 'admin') salutation = 'Dear Admin,';
@@ -93,17 +89,35 @@ export async function sendDirectAuthEmailToGmail(options: AuthNotificationOption
     `;
   }
 
+  // 1. If Google OAuth token is in client memory, send via direct Gmail REST API
+  if (token) {
+    try {
+      await sendGmailMessage({
+        to: email,
+        subject,
+        body: bodyHtml,
+        isHtml: true
+      });
+      console.log(`[CLIENT GMAIL DIRECT SUCCESS] Dispatched ${eventType} notification to ${email}`);
+      return { delivered: true };
+    } catch (err: any) {
+      console.warn(`[CLIENT GMAIL DIRECT NOTICE] ${err?.message || err}`);
+    }
+  }
+
+  // 2. Dispatch via backend pipeline (Gmail App Password or SMTP)
   try {
-    await sendGmailMessage({
-      to: email,
+    const res = await apiRequest('/api/email-logs/send', 'POST', {
+      recipient: email,
+      role,
+      type: eventType,
       subject,
-      body: bodyHtml,
-      isHtml: true
+      bodyHtml,
+      bodyText: `EncDec IDS ${eventType} notification for ${email}`,
+      googleAccessToken: token || undefined
     });
-    console.log(`[CLIENT GMAIL DIRECT SUCCESS] Dispatched ${eventType} notification to ${email}`);
-    return { delivered: true };
+    return { delivered: res?.success ?? true };
   } catch (err: any) {
-    console.warn(`[CLIENT GMAIL DIRECT NOTICE] Could not send via client Gmail: ${err?.message || err}`);
-    return { delivered: false, error: err?.message || 'Failed to dispatch via Gmail API.' };
+    return { delivered: false, error: err?.message };
   }
 }

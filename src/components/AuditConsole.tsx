@@ -62,6 +62,9 @@ export default function AuditConsole({ auditLogs: propAuditLogs, emailLogs: prop
   const [isSigningInGoogle, setIsSigningInGoogle] = useState(false);
   const [googleAuthError, setGoogleAuthError] = useState('');
   const [deliverViaGmail, setDeliverViaGmail] = useState(true);
+  const [configStatus, setConfigStatus] = useState<{ gmailAppConfigured: boolean; gmailAppUser: string | null; smtpConfigured: boolean } | null>(null);
+  const [verifyingGmail, setVerifyingGmail] = useState(false);
+  const [verifyResult, setVerifyResult] = useState<string | null>(null);
 
   const isAdmin = currentUser?.role === 'admin';
   const currentEmail = (currentUser?.email || '').toLowerCase();
@@ -92,7 +95,27 @@ export default function AuditConsole({ auditLogs: propAuditLogs, emailLogs: prop
   // Initial fetch on mount & tab switch
   useEffect(() => {
     fetchLogs();
+    apiRequest('/api/email-logs/config-status', 'GET')
+      .then((data) => setConfigStatus(data))
+      .catch(() => {});
   }, [activeTab, currentUser]);
+
+  const handleTestGmailConnection = async () => {
+    setVerifyingGmail(true);
+    setVerifyResult(null);
+    try {
+      const res = await apiRequest('/api/email-logs/verify-gmail', 'POST');
+      if (res.ok) {
+        setVerifyResult(`✅ ${res.message}`);
+      } else {
+        setVerifyResult(`⚠️ ${res.message}`);
+      }
+    } catch (err: any) {
+      setVerifyResult(`❌ Connection test failed: ${err?.message || err}`);
+    } finally {
+      setVerifyingGmail(false);
+    }
+  };
 
   // Update default subject and body template when switching email types
   const handleSelectEmailType = (type: 'registration' | 'login' | 'create' | 'incident') => {
@@ -208,12 +231,13 @@ export default function AuditConsole({ auditLogs: propAuditLogs, emailLogs: prop
         type: emailType,
         subject: emailSubject.trim() || undefined,
         bodyText: emailBody.trim() || undefined,
-        body: emailBody.trim() || undefined
+        body: emailBody.trim() || undefined,
+        googleAccessToken: googleToken || undefined
       });
 
       let deliveredToGmail = false;
-      // Direct Gmail API delivery to recipient's Gmail inbox
-      if (googleToken && deliverViaGmail) {
+      // Direct Gmail API client-side fallback if server didn't already send via App Password/OAuth
+      if (googleToken && deliverViaGmail && res.channel !== 'gmail_app_password' && res.channel !== 'gmail_oauth_api') {
         try {
           await sendGmailMessage({
             to: emailRecipient.trim(),
@@ -227,8 +251,8 @@ export default function AuditConsole({ auditLogs: propAuditLogs, emailLogs: prop
         }
       }
 
-      if (deliveredToGmail) {
-        setEmailSuccessMsg(`✅ Dispatched & delivered directly to ${emailRecipient.trim()}'s Gmail inbox!`);
+      if (deliveredToGmail || res.channel === 'gmail_app_password' || res.channel === 'gmail_oauth_api') {
+        setEmailSuccessMsg(res.deliveryDetails || `✅ Dispatched & delivered directly to ${emailRecipient.trim()}'s Gmail inbox!`);
       } else {
         setEmailSuccessMsg(`✅ ${res.message || 'System email dispatched successfully!'}`);
       }
@@ -849,7 +873,23 @@ export default function AuditConsole({ auditLogs: propAuditLogs, emailLogs: prop
 
             {/* Direct Gmail Delivery Status Banner */}
             <div className="flex-shrink-0 space-y-2">
-              {googleToken ? (
+              {configStatus?.gmailAppConfigured ? (
+                <div className="p-2.5 bg-emerald-950/40 border border-emerald-500/30 rounded-lg flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 text-[11px] text-emerald-300">
+                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                    <span>Direct Gmail Dispatch: <strong className="text-emerald-200">Active ({configStatus.gmailAppUser})</strong></span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleTestGmailConnection}
+                    disabled={verifyingGmail}
+                    className="px-2.5 py-1 rounded bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 text-emerald-300 text-[10px] font-bold cursor-pointer transition-all flex items-center gap-1"
+                  >
+                    <RefreshCw className={`w-3 h-3 ${verifyingGmail ? 'animate-spin' : ''}`} />
+                    <span>{verifyingGmail ? 'Testing...' : 'Test Gmail Connection'}</span>
+                  </button>
+                </div>
+              ) : googleToken ? (
                 <div className="p-2.5 bg-emerald-950/40 border border-emerald-500/30 rounded-lg flex items-center justify-between gap-2">
                   <div className="flex items-center gap-2 text-[11px] text-emerald-300">
                     <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
@@ -862,7 +902,7 @@ export default function AuditConsole({ auditLogs: propAuditLogs, emailLogs: prop
               ) : (
                 <div className="p-2.5 bg-slate-950 border border-white/10 rounded-lg flex items-center justify-between gap-2">
                   <div className="text-[11px] text-slate-400">
-                    <span>Connect your Google account to deliver directly to the recipient's Gmail inbox.</span>
+                    <span>Direct Gmail dispatch active (via Gmail App Password or OAuth). Connect Google account for direct client session:</span>
                   </div>
                   <button
                     type="button"
@@ -872,6 +912,19 @@ export default function AuditConsole({ auditLogs: propAuditLogs, emailLogs: prop
                   >
                     <Mail className="w-3 h-3" />
                     <span>{isSigningInGoogle ? 'Connecting...' : 'Connect Gmail'}</span>
+                  </button>
+                </div>
+              )}
+
+              {verifyResult && (
+                <div className="p-2 bg-slate-950 border border-cyan-500/30 rounded text-[11px] text-cyan-300 flex items-center justify-between">
+                  <span>{verifyResult}</span>
+                  <button
+                    type="button"
+                    onClick={() => setVerifyResult(null)}
+                    className="text-slate-400 hover:text-white text-xs px-1 cursor-pointer"
+                  >
+                    ✕
                   </button>
                 </div>
               )}

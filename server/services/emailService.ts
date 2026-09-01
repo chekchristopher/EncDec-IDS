@@ -20,22 +20,107 @@ export interface EmailDispatchResult {
   channel: 'gmail_app_password' | 'gmail_oauth_api' | 'smtp' | 'audit_log_only';
   messageId?: string;
   error?: string;
+  details?: string;
 }
 
 /**
- * Checks if Gmail App credentials are configured in environment
+ * Checks if Gmail App credentials are configured in environment (supporting all common case variations and spacing)
  */
 export function getGmailAppConfig(): { email: string; pass: string } | null {
-  const email = process.env.GMAIL_APP || process.env.GMAIL_APP_USER || process.env.GMAIL_APP_EMAIL || process.env.GMAIL_USER;
-  const pass = process.env.GMAIL_APP_PASSWORD || process.env.GMAIL_PASSWORD;
+  const email = (
+    process.env.GMAIL_APP ||
+    process.env.gmail_App ||
+    process.env.GMAIL_APP_USER ||
+    process.env.GMAIL_APP_EMAIL ||
+    process.env.GMAIL_USER ||
+    process.env.gmail_user ||
+    ''
+  ).trim();
+
+  const rawPass = (
+    process.env.GMAIL_APP_PASSWORD ||
+    process.env.gmail_app_password ||
+    process.env.GMAIL_PASSWORD ||
+    process.env.gmail_password ||
+    process.env.GMAIL_APP_PASS ||
+    process.env.gmail_app_pass ||
+    ''
+  ).trim();
+
+  // Google App Passwords are 16 characters (often copied with spaces like "abcd efgh ijkl mnop")
+  const pass = rawPass.replace(/\s+/g, '');
 
   if (email && pass) {
-    return {
-      email: email.trim(),
-      pass: pass.trim().replace(/\s+/g, '') // Google App Passwords may be entered with spaces
-    };
+    return { email, pass };
   }
   return null;
+}
+
+/**
+ * Creates a Nodemailer transporter configured for Gmail
+ */
+function createGmailTransporter(user: string, pass: string, port: 465 | 587 = 465) {
+  if (port === 465) {
+    return nodemailer.createTransport({
+      host: 'smtp.gmail.com',
+      port: 465,
+      secure: true,
+      auth: { user, pass },
+      tls: {
+        rejectUnauthorized: false
+      },
+      connectionTimeout: 10000,
+      greetingTimeout: 10000
+    });
+  }
+
+  return nodemailer.createTransport({
+    host: 'smtp.gmail.com',
+    port: 587,
+    secure: false,
+    auth: { user, pass },
+    tls: {
+      rejectUnauthorized: false
+    },
+    connectionTimeout: 10000,
+    greetingTimeout: 10000
+  });
+}
+
+/**
+ * Verifies Gmail App connection
+ */
+export async function verifyGmailAppConnection(): Promise<{ ok: boolean; message: string }> {
+  const config = getGmailAppConfig();
+  if (!config) {
+    return {
+      ok: false,
+      message: 'GMAIL_APP and GMAIL_APP_PASSWORD environment variables are not set.'
+    };
+  }
+
+  try {
+    const transporter465 = createGmailTransporter(config.email, config.pass, 465);
+    await transporter465.verify();
+    return {
+      ok: true,
+      message: `Successfully authenticated with Gmail SMTP servers as ${config.email}`
+    };
+  } catch (err465: any) {
+    try {
+      const transporter587 = createGmailTransporter(config.email, config.pass, 587);
+      await transporter587.verify();
+      return {
+        ok: true,
+        message: `Successfully authenticated with Gmail SMTP servers (port 587) as ${config.email}`
+      };
+    } catch (err587: any) {
+      return {
+        ok: false,
+        message: `Gmail SMTP Authentication Failed: ${err587?.message || err465?.message || 'Check App Password'}`
+      };
+    }
+  }
 }
 
 /**
@@ -76,7 +161,7 @@ async function sendViaGmailApi(accessToken: string, to: string, subject: string,
 
 /**
  * Sends an email using the prioritized direct dispatch pipeline:
- * 1. Direct Gmail using GMAIL_APP and GMAIL_APP_PASSWORD (Nodemailer Gmail Transport)
+ * 1. Direct Gmail using GMAIL_APP and GMAIL_APP_PASSWORD (Nodemailer Gmail Transport with multi-port fallback)
  * 2. Direct Gmail using OAuth Access Token (Gmail REST API)
  * 3. Generic SMTP Transport (SMTP_HOST, SMTP_USER, SMTP_PASS)
  * 4. Audit Log recording fallback
@@ -87,17 +172,13 @@ export async function sendEmail(options: SendEmailOptions): Promise<EmailDispatc
 
   // 1. Direct Gmail App Password Delivery (Highest priority for server-driven automation)
   if (gmailApp) {
-    try {
-      const transporter = nodemailer.createTransport({
-        service: 'gmail',
-        auth: {
-          user: gmailApp.email,
-          pass: gmailApp.pass
-        }
-      });
+    let lastError: any = null;
+    const senderFrom = `"${fromName}" <${gmailApp.email}>`;
 
-      const senderFrom = `"${fromName}" <${gmailApp.email}>`;
-      const info = await transporter.sendMail({
+    // Try Port 465 first
+    try {
+      const transporter465 = createGmailTransporter(gmailApp.email, gmailApp.pass, 465);
+      const info = await transporter465.sendMail({
         from: senderFrom,
         to,
         subject,
@@ -105,14 +186,39 @@ export async function sendEmail(options: SendEmailOptions): Promise<EmailDispatc
         html
       });
 
-      console.log(`[GMAIL APP PASSWORD SUCCESS] Transmitted to ${to} (MessageId: ${info.messageId})`);
+      console.log(`[GMAIL APP PASSWORD SUCCESS (Port 465)] Transmitted to ${to} (MessageId: ${info.messageId})`);
       return {
         success: true,
         channel: 'gmail_app_password',
-        messageId: info.messageId
+        messageId: info.messageId,
+        details: `Delivered directly via Gmail App Password to ${to}`
       };
-    } catch (gmailErr: any) {
-      console.warn(`[GMAIL APP PASSWORD ERROR] Failed to send via Gmail App: ${gmailErr?.message || gmailErr}`);
+    } catch (err465: any) {
+      lastError = err465;
+      console.warn(`[GMAIL APP (Port 465) Notice] Trying fallback port 587: ${err465?.message || err465}`);
+    }
+
+    // Try Port 587 fallback
+    try {
+      const transporter587 = createGmailTransporter(gmailApp.email, gmailApp.pass, 587);
+      const info = await transporter587.sendMail({
+        from: senderFrom,
+        to,
+        subject,
+        text,
+        html
+      });
+
+      console.log(`[GMAIL APP PASSWORD SUCCESS (Port 587)] Transmitted to ${to} (MessageId: ${info.messageId})`);
+      return {
+        success: true,
+        channel: 'gmail_app_password',
+        messageId: info.messageId,
+        details: `Delivered directly via Gmail App Password (Port 587) to ${to}`
+      };
+    } catch (err587: any) {
+      lastError = err587;
+      console.warn(`[GMAIL APP PASSWORD ERROR] Failed to send via Gmail App: ${err587?.message || err587}`);
     }
   }
 
@@ -123,7 +229,8 @@ export async function sendEmail(options: SendEmailOptions): Promise<EmailDispatc
       console.log(`[GMAIL OAUTH SUCCESS] Transmitted to ${to}`);
       return {
         success: true,
-        channel: 'gmail_oauth_api'
+        channel: 'gmail_oauth_api',
+        details: `Delivered directly via Google Workspace Gmail API to ${to}`
       };
     } catch (oauthErr: any) {
       console.warn(`[GMAIL OAUTH ERROR] Failed to send via OAuth API: ${oauthErr?.message || oauthErr}`);
@@ -140,6 +247,9 @@ export async function sendEmail(options: SendEmailOptions): Promise<EmailDispatc
         auth: {
           user: process.env.SMTP_USER,
           pass: process.env.SMTP_PASS
+        },
+        tls: {
+          rejectUnauthorized: false
         }
       });
 
@@ -156,7 +266,8 @@ export async function sendEmail(options: SendEmailOptions): Promise<EmailDispatc
       return {
         success: true,
         channel: 'smtp',
-        messageId: info.messageId
+        messageId: info.messageId,
+        details: `Delivered via SMTP (${process.env.SMTP_HOST})`
       };
     } catch (smtpErr: any) {
       console.warn(`[SMTP ERROR] Failed to send via SMTP: ${smtpErr?.message || smtpErr}`);
@@ -166,6 +277,8 @@ export async function sendEmail(options: SendEmailOptions): Promise<EmailDispatc
   // 4. Default: Stored in Audit Log
   return {
     success: true,
-    channel: 'audit_log_only'
+    channel: 'audit_log_only',
+    details: 'Notification logged to SOC audit trail.'
   };
 }
+

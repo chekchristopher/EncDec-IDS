@@ -12,7 +12,7 @@ import {
 import { DbSchema } from '../db/schema.js';
 import { firestoreSyncService } from '../db/firestore.js';
 import { mssqlSyncService } from '../db/mssql.js';
-import { sendEmail, getGmailAppConfig } from '../services/emailService.js';
+import { sendEmail, getGmailAppConfig, verifyGmailAppConnection } from '../services/emailService.js';
 import { 
   hostRegisterSchema, ruleCreateSchema, reportGenerateSchema, 
   apiKeyCreateSchema, quarantineSchema, emailTestSchema,
@@ -610,21 +610,35 @@ export function createApiRouter(
 
     // Send via prioritized email pipeline (Gmail App Password, OAuth, SMTP)
     const googleAccessToken = req.body.googleAccessToken || req.headers['x-google-access-token'];
-    sendEmail({
-      to: targetRecipient,
-      subject: finalSubject,
-      text: finalText,
-      html: finalHtml,
-      fromName: req.user.name || 'EncDec IDS SOC Security',
-      fromEmail: req.user.email,
-      googleAccessToken
-    }).catch(err => {
+    let dispatchResult: any = { success: true, channel: 'audit_log_only' };
+    
+    try {
+      dispatchResult = await sendEmail({
+        to: targetRecipient,
+        subject: finalSubject,
+        text: finalText,
+        html: finalHtml,
+        fromName: req.user.name || 'EncDec IDS SOC Security',
+        fromEmail: req.user.email,
+        googleAccessToken
+      });
+    } catch (err: any) {
       console.warn(`[EMAIL DISPATCH NOTICE] ${err?.message || err}`);
-    });
+      dispatchResult = { success: false, channel: 'audit_log_only', error: err?.message };
+    }
+
+    const channelDescriptions: Record<string, string> = {
+      gmail_app_password: '✅ Delivered directly to Gmail inbox via Gmail App Password.',
+      gmail_oauth_api: '✅ Delivered directly to Gmail inbox via Google Workspace OAuth.',
+      smtp: '✅ Delivered via SMTP Relay Server.',
+      audit_log_only: 'ℹ️ Dispatched and recorded to SOC Audit Trail.'
+    };
 
     res.status(200).json({
       success: true,
-      message: `System email dispatched to ${targetRecipient}`,
+      message: channelDescriptions[dispatchResult.channel] || `System email dispatched to ${targetRecipient}`,
+      channel: dispatchResult.channel,
+      deliveryDetails: dispatchResult.details,
       email: logEntry,
       subject: finalSubject,
       bodyText: finalText,
@@ -642,6 +656,11 @@ export function createApiRouter(
       smtpConfigured: hasSmtp,
       smtpHost: process.env.SMTP_HOST || null
     });
+  });
+
+  router.post('/email-logs/verify-gmail', authenticateToken, async (_req: any, res: Response) => {
+    const verification = await verifyGmailAppConnection();
+    res.json(verification);
   });
 
   router.post('/email-logs/send', authenticateToken, handleEmailDispatch);
