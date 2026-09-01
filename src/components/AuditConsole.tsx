@@ -108,7 +108,7 @@ export default function AuditConsole({ auditLogs: propAuditLogs, emailLogs: prop
       if (res.ok) {
         setVerifyResult(`✅ ${res.message}`);
       } else {
-        setVerifyResult(`⚠️ ${res.message}`);
+        setVerifyResult(`⚠️ ${res.message}${res.hint ? ` (${res.hint})` : ''}`);
       }
     } catch (err: any) {
       setVerifyResult(`❌ Connection test failed: ${err?.message || err}`);

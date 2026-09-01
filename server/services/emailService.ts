@@ -90,12 +90,13 @@ function createGmailTransporter(user: string, pass: string, port: 465 | 587 = 46
 /**
  * Verifies Gmail App connection
  */
-export async function verifyGmailAppConnection(): Promise<{ ok: boolean; message: string }> {
+export async function verifyGmailAppConnection(): Promise<{ ok: boolean; message: string; hint?: string }> {
   const config = getGmailAppConfig();
   if (!config) {
     return {
       ok: false,
-      message: 'GMAIL_APP and GMAIL_APP_PASSWORD environment variables are not set.'
+      message: 'GMAIL_APP and GMAIL_APP_PASSWORD are not configured.',
+      hint: 'Configure GMAIL_APP with your full Gmail address and GMAIL_APP_PASSWORD with a 16-character Google App Password.'
     };
   }
 
@@ -115,9 +116,15 @@ export async function verifyGmailAppConnection(): Promise<{ ok: boolean; message
         message: `Successfully authenticated with Gmail SMTP servers (port 587) as ${config.email}`
       };
     } catch (err587: any) {
+      const is535 = err587?.message?.includes('535') || err465?.message?.includes('535') || err587?.code === 'EAUTH';
       return {
         ok: false,
-        message: `Gmail SMTP Authentication Failed: ${err587?.message || err465?.message || 'Check App Password'}`
+        message: is535 
+          ? 'Gmail Authentication Error (535-5.7.8): Google requires a 16-character "App Password" generated in your Google Account security settings, NOT your regular Gmail account login password.' 
+          : `Gmail SMTP Authentication Failed: ${err587?.message || err465?.message || 'Check credentials'}`,
+        hint: is535 
+          ? 'To fix: 1. Go to myaccount.google.com/apppasswords. 2. Create an App Password for "EncDec IDS". 3. Set the 16-character code as GMAIL_APP_PASSWORD.'
+          : undefined
       };
     }
   }
