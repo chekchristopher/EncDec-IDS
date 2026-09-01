@@ -179,6 +179,8 @@ export default function AuditConsole({ auditLogs: propAuditLogs, emailLogs: prop
     } catch (err: any) {
       if (err?.code === 'auth/popup-blocked' || err?.message?.includes('popup-blocked')) {
         setGoogleAuthError('Popup blocked by browser/iframe. Please allow popups for this site, or open this app in a new tab.');
+      } else if (err?.code === 'auth/unauthorized-domain' || err?.message?.includes('auth/unauthorized-domain')) {
+        setGoogleAuthError(`Domain Notice: "${window.location.hostname}" is not yet whitelisted in Firebase Auth Authorized Domains. Direct server dispatch (Gmail App Password / SMTP) is currently active.`);
       } else {
         setGoogleAuthError(err?.message || 'Google authentication was cancelled.');
       }

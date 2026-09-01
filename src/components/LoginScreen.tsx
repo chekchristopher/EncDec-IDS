@@ -117,6 +117,11 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
     } catch (err: any) {
       if (err?.code === 'auth/popup-blocked' || err?.message?.includes('popup-blocked')) {
         setGoogleAuthNotice('Popup blocked by browser or iframe sandbox. Please allow popups or open the app in a new browser tab.');
+      } else if (err?.code === 'auth/unauthorized-domain' || err?.message?.includes('auth/unauthorized-domain')) {
+        const currentDomain = window.location.hostname;
+        setGoogleAuthNotice(
+          `Domain Authorization Notice: "${currentDomain}" needs to be whitelisted in Firebase Console -> Authentication -> Settings -> Authorized Domains. In the meantime, you can log in instantly with standard operator credentials below or unlock the Admin Safe Box.`
+        );
       } else {
         setError(err?.message || 'Google Authentication sequence was aborted.');
       }
