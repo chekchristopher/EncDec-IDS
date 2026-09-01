@@ -12,6 +12,7 @@ import {
 import { DbSchema } from '../db/schema.js';
 import { firestoreSyncService } from '../db/firestore.js';
 import { mssqlSyncService } from '../db/mssql.js';
+import { sendEmail, getGmailAppConfig } from '../services/emailService.js';
 import { 
   hostRegisterSchema, ruleCreateSchema, reportGenerateSchema, 
   apiKeyCreateSchema, quarantineSchema, emailTestSchema,
@@ -607,32 +608,19 @@ export function createApiRouter(
     addAuditLog(req.user.id, req.user.email, 'Dispatched System Email', `${targetRecipient} [${targetRole.toUpperCase()}]`, req.ip || '127.0.0.1', 'success');
     broadcastWs({ type: 'EMAIL_LOG_UPDATE', payload: logEntry });
 
-    // Send via SMTP if configured
-    try {
-      if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
-        const nodemailer = await import('nodemailer');
-        const transport = nodemailer.createTransport({
-          host: process.env.SMTP_HOST,
-          port: parseInt(process.env.SMTP_PORT || '587', 10),
-          secure: process.env.SMTP_SECURE === 'true',
-          auth: {
-            user: process.env.SMTP_USER,
-            pass: process.env.SMTP_PASS
-          }
-        });
-
-        await transport.sendMail({
-          from: process.env.SMTP_FROM || `"${req.user.name || 'EncDec IDS SOC'}" <${req.user.email}>`,
-          to: targetRecipient,
-          subject: finalSubject,
-          text: finalText,
-          html: finalHtml
-        });
-        console.log(`[EMAIL DISPATCH SUCCESS] Transmitted to ${targetRecipient}`);
-      }
-    } catch (smtpErr: any) {
-      console.warn(`[SMTP Delivery Notice] ${smtpErr?.message || smtpErr}`);
-    }
+    // Send via prioritized email pipeline (Gmail App Password, OAuth, SMTP)
+    const googleAccessToken = req.body.googleAccessToken || req.headers['x-google-access-token'];
+    sendEmail({
+      to: targetRecipient,
+      subject: finalSubject,
+      text: finalText,
+      html: finalHtml,
+      fromName: req.user.name || 'EncDec IDS SOC Security',
+      fromEmail: req.user.email,
+      googleAccessToken
+    }).catch(err => {
+      console.warn(`[EMAIL DISPATCH NOTICE] ${err?.message || err}`);
+    });
 
     res.status(200).json({
       success: true,
@@ -643,6 +631,18 @@ export function createApiRouter(
       bodyHtml: finalHtml
     });
   };
+
+  router.get('/email-logs/config-status', authenticateToken, (_req: any, res: Response) => {
+    const gmailApp = getGmailAppConfig();
+    const hasSmtp = Boolean(process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS);
+    
+    res.json({
+      gmailAppConfigured: Boolean(gmailApp),
+      gmailAppUser: gmailApp ? gmailApp.email.replace(/(?<=.{3}).(?=.*@)/g, '*') : null,
+      smtpConfigured: hasSmtp,
+      smtpHost: process.env.SMTP_HOST || null
+    });
+  });
 
   router.post('/email-logs/send', authenticateToken, handleEmailDispatch);
   router.post('/email-logs/test', authenticateToken, handleEmailDispatch);

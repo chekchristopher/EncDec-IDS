@@ -8,6 +8,7 @@ import bcryptjs from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { User, EmailLog } from '../../src/types.js';
 import { DbSchema } from '../db/schema.js';
+import { sendEmail } from '../services/emailService.js';
 import { 
   loginSchema, 
   signupSchema, 
@@ -49,45 +50,6 @@ export function createAuthRouter(
       next();
     });
   };
-
-  // Direct Gmail API delivery helper
-  async function dispatchGmailApiMessage(accessToken: string, to: string, subject: string, htmlBody: string) {
-    try {
-      const emailLines = [
-        `To: ${to}`,
-        `Subject: =?utf-8?B?${Buffer.from(subject, 'utf-8').toString('base64')}?=`,
-        'MIME-Version: 1.0',
-        'Content-Type: text/html; charset=UTF-8',
-        'Content-Transfer-Encoding: 7bit',
-        '',
-        htmlBody
-      ];
-      const rawMime = emailLines.join('\r\n');
-      const encodedRaw = Buffer.from(rawMime, 'utf-8')
-        .toString('base64')
-        .replace(/\+/g, '-')
-        .replace(/\//g, '_')
-        .replace(/=+$/, '');
-
-      const response = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${accessToken}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ raw: encodedRaw })
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.warn(`[GMAIL API WARN] Status ${response.status}: ${errorText}`);
-      } else {
-        console.log(`[GMAIL API SUCCESS] Email delivered directly to ${to}'s Gmail inbox!`);
-      }
-    } catch (err: any) {
-      console.warn('[GMAIL API DELIVERY NOTICE]', err?.message || err);
-    }
-  }
 
   // Automated notification email helper
   async function sendNotificationEmail(
@@ -175,39 +137,18 @@ export function createAuthRouter(
     saveDb();
     broadcastWs({ type: 'EMAIL_LOG_UPDATE', payload: logEntry });
 
-    // 1. If Google Access Token is provided, deliver directly via Gmail API to user's inbox
-    if (googleAccessToken) {
-      dispatchGmailApiMessage(googleAccessToken, user.email, subject, bodyHtml).catch(console.error);
-    }
-
-    // 2. If SMTP is configured, deliver via SMTP Transport
-    try {
-      if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
-        const nodemailer = await import('nodemailer');
-        const transport = nodemailer.createTransport({
-          host: process.env.SMTP_HOST,
-          port: parseInt(process.env.SMTP_PORT || '587', 10),
-          secure: process.env.SMTP_SECURE === 'true',
-          auth: {
-            user: process.env.SMTP_USER,
-            pass: process.env.SMTP_PASS
-          }
-        });
-
-        await transport.sendMail({
-          from: process.env.SMTP_FROM || '"EncDec IDS SOC Security" <security@encdec-ids.sec>',
-          to: user.email,
-          subject,
-          text: bodyText,
-          html: bodyHtml
-        });
-        console.log(`[EMAIL AUTOMATION SUCCESS] ${eventType.toUpperCase()} email sent to ${user.email}`);
-      } else {
-        console.log(`[EMAIL AUTOMATION NOTICE] Notification logged for ${user.email} (${eventType})`);
-      }
-    } catch (err: any) {
+    // Dispatches via Gmail App Password, Gmail OAuth API, or SMTP
+    sendEmail({
+      to: user.email,
+      subject,
+      text: bodyText,
+      html: bodyHtml,
+      fromName: 'EncDec IDS SOC Security',
+      fromEmail: senderUser?.email,
+      googleAccessToken
+    }).catch(err => {
       console.warn(`[EMAIL AUTOMATION NOTICE] Delivery recorded for ${user.email}: ${err?.message || err}`);
-    }
+    });
 
     return { subject, bodyText, bodyHtml };
   }
