@@ -37,6 +37,7 @@ import ProfileModal from './components/ProfileModal.jsx';
 import DualDatabaseConsole from './components/DualDatabaseConsole.jsx';
 import GmailConsole from './components/GmailConsole.jsx';
 import EncDecWorkbook from './components/EncDecWorkbook.jsx';
+import ThemeToggle from './components/ThemeToggle.jsx';
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState<any>(null);
@@ -493,6 +494,9 @@ export default function App() {
               </span>
             </div>
 
+            {/* Light / Dark Mode Toggle */}
+            <ThemeToggle variant="icon" />
+
             {/* Clickable Header Profile Button */}
             <button
               onClick={() => setShowProfileModal(true)}
@@ -593,7 +597,7 @@ export default function App() {
           )}
 
           {activeView === 'workbook' && (
-            <EncDecWorkbook />
+            <EncDecWorkbook currentUser={currentUser} />
           )}
 
           {activeView === 'logs' && (

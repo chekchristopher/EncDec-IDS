@@ -1119,5 +1119,91 @@ Respond with a JSON object conforming to this schema:
     });
   });
 
+  // --- WORKBOOK READING & CERTIFICATION PROGRESS PERSISTENCE ---
+  router.get('/workbook/progress', authenticateToken, (req: any, res: Response) => {
+    if (!dbState.workbookProgress) {
+      dbState.workbookProgress = [];
+    }
+
+    const userId = req.user.id;
+    const userEmail = (req.user.email || '').toLowerCase();
+
+    const progress = dbState.workbookProgress.find(
+      p => p.userId === userId || (p.email && p.email.toLowerCase() === userEmail)
+    );
+
+    res.json({
+      progress: progress || null
+    });
+  });
+
+  router.post('/workbook/progress', authenticateToken, (req: any, res: Response) => {
+    if (!dbState.workbookProgress) {
+      dbState.workbookProgress = [];
+    }
+
+    const userId = req.user.id;
+    const userEmail = (req.user.email || '').toLowerCase();
+    const { 
+      chapterIndex, 
+      paragraphIndex, 
+      chapterTitle, 
+      readChapters, 
+      completed,
+      quizScore,
+      quizPassed
+    } = req.body;
+
+    const existingIdx = dbState.workbookProgress.findIndex(
+      p => p.userId === userId || (p.email && p.email.toLowerCase() === userEmail)
+    );
+
+    const safeChapterIndex = typeof chapterIndex === 'number' ? Math.max(0, chapterIndex) : 0;
+    const safeParagraphIndex = typeof paragraphIndex === 'number' ? Math.max(0, paragraphIndex) : 0;
+    const safeReadChapters = Array.isArray(readChapters) ? readChapters : [0];
+    const isCompleted = !!completed && (quizPassed !== undefined ? quizPassed : true);
+
+    const prevRecord = existingIdx >= 0 ? dbState.workbookProgress[existingIdx] : null;
+
+    const record = {
+      id: existingIdx >= 0 ? dbState.workbookProgress[existingIdx].id : `wp_${userId}`,
+      userId,
+      email: req.user.email,
+      chapterIndex: safeChapterIndex,
+      paragraphIndex: safeParagraphIndex,
+      chapterTitle: chapterTitle || `Chapter ${safeChapterIndex + 1}`,
+      readChapters: safeReadChapters,
+      completed: isCompleted || (prevRecord?.completed ?? false),
+      quizScore: typeof quizScore === 'number' ? quizScore : (prevRecord?.quizScore ?? 0),
+      quizPassed: typeof quizPassed === 'boolean' ? quizPassed : (prevRecord?.quizPassed ?? false),
+      lastReadAt: new Date().toISOString()
+    };
+
+    if (existingIdx >= 0) {
+      dbState.workbookProgress[existingIdx] = record;
+    } else {
+      dbState.workbookProgress.push(record);
+    }
+
+    saveDb();
+
+    if (isCompleted) {
+      addAuditLog(
+        userId,
+        req.user.email,
+        'Workbook Certification Completed',
+        'Certified EncDec IDS SOC Specialist (CE-SOC)',
+        req.ip || '127.0.0.1',
+        'success',
+        req.user.role
+      );
+    }
+
+    res.json({
+      success: true,
+      progress: record
+    });
+  });
+
   return router;
 }

@@ -202,7 +202,10 @@ export async function sendEmail(options: SendEmailOptions): Promise<EmailDispatc
       };
     } catch (err465: any) {
       lastError = err465;
-      console.warn(`[GMAIL APP (Port 465) Notice] Trying fallback port 587: ${err465?.message || err465}`);
+      const isAuth535 = String(err465?.message || '').includes('535') || err465?.code === 'EAUTH';
+      if (!isAuth535) {
+        console.log(`[GMAIL APP (Port 465) Notice] Trying fallback port 587: ${err465?.message || err465}`);
+      }
     }
 
     // Try Port 587 fallback
@@ -225,7 +228,14 @@ export async function sendEmail(options: SendEmailOptions): Promise<EmailDispatc
       };
     } catch (err587: any) {
       lastError = err587;
-      console.warn(`[GMAIL APP PASSWORD ERROR] Failed to send via Gmail App: ${err587?.message || err587}`);
+      const isAuth535 = String(err587?.message || '').includes('535') || 
+                        err587?.code === 'EAUTH' || 
+                        String(lastError?.message || '').includes('535');
+      if (isAuth535) {
+        console.log(`[GMAIL DISPATCH INFO] Gmail App Password credentials not accepted by Google (535-5.7.8). Smoothly falling back to OAuth/Audit Log delivery.`);
+      } else {
+        console.log(`[GMAIL DISPATCH INFO] Gmail SMTP transport failed (${err587?.message || 'offline'}). Smoothly falling back to OAuth/Audit Log delivery.`);
+      }
     }
   }
 

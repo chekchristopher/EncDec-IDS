@@ -10,6 +10,7 @@ import {
   Flame, Radio
 } from 'lucide-react';
 import EncDecLogo from './EncDecLogo.js';
+import ThemeToggle from './ThemeToggle.jsx';
 
 interface SidebarProps {
   activeView: string;
@@ -177,6 +178,11 @@ export default function Sidebar({
             <span>→</span>
           </div>
         </button>
+
+        {/* Theme Mode Toggle */}
+        <div className="px-1 py-1">
+          <ThemeToggle variant="button" />
+        </div>
 
         {/* Sign Out Action */}
         <button

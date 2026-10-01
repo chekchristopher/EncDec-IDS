@@ -55,5 +55,9 @@ service cloud.firestore {
     match /emailLogs/{logId} {
       allow read, write: if true;
     }
+
+    match /workbookProgress/{progressId} {
+      allow read, write: if true;
+    }
   }
 }

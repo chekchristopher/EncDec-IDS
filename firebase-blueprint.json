@@ -194,6 +194,25 @@
         "status": { "type": "string" }
       },
       "required": ["id", "timestamp", "recipient", "subject", "status"]
+    },
+    "workbookProgress": {
+      "title": "WorkbookProgress",
+      "description": "User reading progress in the EncDec IDS workbook",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "email": { "type": "string" },
+        "chapterIndex": { "type": "number" },
+        "paragraphIndex": { "type": "number" },
+        "chapterTitle": { "type": "string" },
+        "readChapters": { "type": "array", "items": { "type": "number" } },
+        "completed": { "type": "boolean" },
+        "quizScore": { "type": "number" },
+        "quizPassed": { "type": "boolean" },
+        "lastReadAt": { "type": "string" }
+      },
+      "required": ["id", "userId", "chapterIndex", "paragraphIndex", "lastReadAt"]
     }
   },
   "firestore": {
@@ -244,6 +263,10 @@
     "emailLogs": {
       "schema": "emailLog",
       "description": "Dispatched security email notifications and audit records"
+    },
+    "workbookProgress": {
+      "schema": "workbookProgress",
+      "description": "User reading progress state and bookmarks"
     }
   }
 }

@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import EncDecLogo from './EncDecLogo.js';
+import ThemeToggle from './ThemeToggle.jsx';
 
 interface LandingPageProps {
   onEnterConsole: () => void;
@@ -279,7 +280,9 @@ export default function LandingPage({ onEnterConsole }: LandingPageProps) {
             <a href="#faq" className="hover:text-white transition-colors">Compliance FAQ</a>
           </nav>
 
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-3">
+            <ThemeToggle variant="icon" />
+
             <motion.button
               whileHover={{ scale: 1.03, boxShadow: "0 0 15px rgba(34,211,238,0.4)" }}
               whileTap={{ scale: 0.97 }}

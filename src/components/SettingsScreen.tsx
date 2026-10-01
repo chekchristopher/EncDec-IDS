@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import { apiRequest } from '../api.js';
 import { APIKey } from '../types.js';
+import ThemeToggle from './ThemeToggle.jsx';
 
 interface SettingsScreenProps {
   currentUser: { id: string; email: string; name: string; mfaEnabled: boolean; avatarUrl?: string; lastNameChangeDate?: string } | null;
@@ -199,6 +200,22 @@ export default function SettingsScreen({ currentUser, onProfileUpdate, onOpenPro
             >
               {loadingMfa ? 'Configuring Node...' : mfaEnabled ? 'Disable MFA Key' : 'Enforce MFA Key'}
             </button>
+          </div>
+        </div>
+
+        {/* Theme & Visual Display Card */}
+        <div className="bg-slate-900 border border-white/5 rounded-lg p-6 space-y-4">
+          <div className="flex items-center gap-2 border-b border-white/5 pb-3">
+            <Settings className="w-4 h-4 text-cyan-400" />
+            <h3 className="text-sm font-bold text-white uppercase tracking-wide">Interface Appearance</h3>
+          </div>
+
+          <p className="text-[11px] text-slate-400">
+            Customize the security console display theme. Choose Dark Mode for high-contrast SOC monitoring or Light Mode for bright environments.
+          </p>
+
+          <div className="pt-2">
+            <ThemeToggle variant="button" />
           </div>
         </div>
 

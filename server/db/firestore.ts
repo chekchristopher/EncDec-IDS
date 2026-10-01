@@ -10,6 +10,30 @@ import { getFirestore, doc, setDoc, deleteDoc, collection, getDocs, Firestore } 
 import { DbSchema } from './schema.js';
 import { DEFAULT_DB } from './seed.js';
 
+/**
+ * Recursively removes undefined fields so that Firestore setDoc does not throw
+ * "Unsupported field value: undefined".
+ */
+export function sanitizeForFirestore(obj: any): any {
+  if (obj === undefined) return null;
+  if (obj === null) return null;
+  if (Array.isArray(obj)) {
+    return obj
+      .filter(item => item !== undefined)
+      .map(item => sanitizeForFirestore(item));
+  }
+  if (typeof obj === 'object') {
+    const clean: Record<string, any> = {};
+    for (const [key, val] of Object.entries(obj)) {
+      if (val !== undefined) {
+        clean[key] = sanitizeForFirestore(val);
+      }
+    }
+    return clean;
+  }
+  return obj;
+}
+
 export class FirestoreSyncService {
   private app: FirebaseApp | null = null;
   private db: Firestore | null = null;
@@ -81,7 +105,7 @@ export class FirestoreSyncService {
   public async syncFromFirestore(dbState: DbSchema, onSynced?: () => void): Promise<boolean> {
     if (!this.db || this.quotaExceeded) return false;
     const collectionsList = [
-      'users', 'hosts', 'rules', 'alerts', 'threats', 'apiKeys', 'auditLogs', 'liveActivities', 'threatIntel', 'mlModels', 'quarantine', 'emailLogs'
+      'users', 'hosts', 'rules', 'alerts', 'threats', 'apiKeys', 'auditLogs', 'liveActivities', 'threatIntel', 'mlModels', 'quarantine', 'emailLogs', 'workbookProgress'
     ];
     let updatedAny = false;
 
@@ -103,7 +127,7 @@ export class FirestoreSyncService {
           for (const item of defaultItems) {
             if (this.quotaExceeded) break;
             const docId = item.id || 'id_' + Math.random().toString(36).substring(2, 9);
-            await setDoc(doc(this.db, colName, docId), item);
+            await setDoc(doc(this.db, colName, docId), sanitizeForFirestore(item));
           }
           (dbState as any)[colName] = [...defaultItems];
           updatedAny = true;
@@ -136,7 +160,7 @@ export class FirestoreSyncService {
     this.isSyncing = true;
     try {
       const collectionsList = [
-        'users', 'hosts', 'rules', 'alerts', 'threats', 'apiKeys', 'auditLogs', 'liveActivities', 'threatIntel', 'mlModels', 'quarantine', 'emailLogs'
+        'users', 'hosts', 'rules', 'alerts', 'threats', 'apiKeys', 'auditLogs', 'liveActivities', 'threatIntel', 'mlModels', 'quarantine', 'emailLogs', 'workbookProgress'
       ];
       for (const colName of collectionsList) {
         if (this.quotaExceeded) break;
@@ -145,7 +169,8 @@ export class FirestoreSyncService {
         for (const item of itemsToSync) {
           if (this.quotaExceeded) break;
           if (item && item.id) {
-            await setDoc(doc(this.db!, colName, item.id), item);
+            const cleanDoc = sanitizeForFirestore(item);
+            await setDoc(doc(this.db!, colName, item.id), cleanDoc);
           }
         }
       }

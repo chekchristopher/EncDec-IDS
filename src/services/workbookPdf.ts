@@ -26,7 +26,8 @@ export const WORKBOOK_DATA: WorkbookSection[] = [
       "The EncDec Hybrid Intrusion Detection System (IDS) is an enterprise-grade defense platform unifying Deep Packet Inspection (DPI) at the network perimeter with Kernel-level File Integrity Monitoring (FIM) and Process Auditing at the host level.",
       "1. Hybrid Protection Model: Traditional standalone NIDS lacks context regarding endpoint process lineage, while standalone HIDS cannot inspect high-throughput ingress gateway packets. EncDec bridges this gap by cross-correlating network flow anomalies with endpoint process state changes in real time.",
       "2. Cryptographic State Isolation: Core telemetry channels utilize end-to-end symmetric encryption (AES-256-GCM) with ephemeral session keys for cross-node communication. Raw payload inspection operates in isolated cryptographic sandboxes to prevent memory inspection attacks.",
-      "3. Dual Database Redundancy: EncDec maintains synchronization across Google Cloud Firestore (for instant sub-millisecond cloud streaming and WebSocket distribution) and Microsoft SQL Server (for immutable ACID-compliant relational enterprise auditing)."
+      "3. Dual Database Redundancy: EncDec maintains continuous synchronization across Google Cloud Firestore (for instant sub-millisecond cloud streaming and WebSocket distribution) and Microsoft SQL Server (for immutable ACID-compliant relational enterprise auditing).",
+      "4. Distributed Sensor Fabric Integration: Ingests normalized telemetry from Suricata NIDS, Zeek NSM, Endpoint eBPF Host Agents, and central Syslog parsers to form an impervious detection fabric."
     ],
     keyTakeaways: [
       "Perimeter Network IDS and Endpoint Host IDS run synchronously under a unified threat engine.",
@@ -38,7 +39,8 @@ export const WORKBOOK_DATA: WorkbookSection[] = [
       rows: [
         ["Network Layer (NIDS)", "Packet Sniffer & DPI", "TCP, UDP, ICMP, DNS, HTTP", "Signature & Heuristic Rate Limits"],
         ["Host Layer (HIDS)", "FIM & Process Monitor", "Syslogs, Hashes, Syscalls", "SHA-256 Diffing & Rogue Daemon Scans"],
-        ["Threat Intel Layer", "MITRE & CVE Radar", "Global IOCs & Attack Vectors", "Automated TTP Cross-Mapping"],
+        ["Incursion Geo-Radar", "TopoJSON & D3 Engine", "Bézier Trajectories & Arcs", "Real-Time Geodesic Attack Tracing"],
+        ["Sensor Fabric", "Suricata + Zeek + eBPF", "Packet Flows & System Calls", "Multi-Stage Correlated Triaging"],
         ["Persistence Layer", "Dual Firestore + MSSQL", "Audit Logs, Alerts, Rules", "Real-Time Sync + Relational Integrity"]
       ]
     }
@@ -48,7 +50,7 @@ export const WORKBOOK_DATA: WorkbookSection[] = [
     title: "SOC Overview Dashboard & Executive Telemetry",
     summary: "Step-by-step operational guide for the primary Security Operations Center (SOC) command screen.",
     content: [
-      "The SOC Overview serves as the tactical command hub for security analysts. It consolidates real-time metrics, live threat level indicators, and incoming alert streams.",
+      "The SOC Overview serves as the tactical command hub for security analysts. It consolidates real-time metrics, live threat level indicators, dynamic TopoJSON maps, and incoming alert streams.",
       "1. Threat Level Index: Dynamically calculated score (0 to 100) based on weighted active alerts, anomalous packet volume, and unhandled critical intrusions. Colors shift from Nominal Cyan (0-25) to Guarded Amber (26-60), High Orange (61-80), and Critical Crimson (81-100).",
       "2. Live Network & Host Telemetry Gauges: Real-time visualizers display Total Ingress Packets, Active Monitored Hosts, Detected Anomalies, and Rule Engine Compliance.",
       "3. Active Incidents Management: Each alert row provides rich metadata (Timestamp, Source IP/Host, Threat Category, Severity).",
@@ -132,7 +134,62 @@ export const WORKBOOK_DATA: WorkbookSection[] = [
   },
   {
     chapter: "Chapter 6",
-    title: "Google Workspace & Gmail Security Dispatch",
+    title: "Real-Time TopoJSON Geodesic Incursion Telemetry",
+    summary: "NEW UPGRADE: In-depth guide to D3.js and TopoJSON geographic attack projection engine, Bézier trajectory curves, and real-time incursion telemetry.",
+    content: [
+      "The newly upgraded software introduces a dedicated TopoJSON and D3.js Geographic Projection Engine (`RealTimeMap.tsx`) providing interactive worldwide visibility into active incursion vectors targeting the protected infrastructure.",
+      "1. Geographic Projection & Topology Rendering: Utilizes `topojson-client` to decode world continents and country boundaries into mathematical geometries rendered through `d3.geoNaturalEarth1()` and `d3.geoPath()`. Includes bundled offline topologies for zero-dependency rendering in isolated SOC environments.",
+      "2. Dynamic Incursion Projectiles: Attack trajectories are calculated using Quadratic Bézier curves (`M sx sy Q mx my tx ty`). Smooth D3 transition loops animate glowing projectile particles along the geodesic path from source IPs directly to the destination portal (`portal.coou.edu.ng`).",
+      "3. Origin Concentric Radar Rings: Pulsing SVG markers signal origin threat hotspots across the globe (e.g., Frankfurt, Ashburn, Moscow, Beijing, London, São Paulo). Rings expand and fade rhythmically based on attack severity.",
+      "4. Target Node Shielding & Radar Sweep: The defended infrastructure node is anchored with an animated rotating radar sweep ring, cyber glow filter, and destination ripple shockwave triggered whenever an incursion projectile arrives.",
+      "5. Dynamic Alerts Prop Synchronization: The map component accepts the live `alerts` array. Whenever new Suricata, Zeek, or Host anomalies are ingested, origin coordinates are resolved immediately and animated onto the map."
+    ],
+    keyTakeaways: [
+      "D3.js and TopoJSON provide GPU-accelerated, zero-dependency global attack vector visualization.",
+      "Geodesic arcs and particle transitions offer immediate spatial awareness during distributed brute-force or DDoS surges.",
+      "Synchronized directly with the incoming alerts telemetry stream for zero-latency operator awareness."
+    ]
+  },
+  {
+    chapter: "Chapter 7",
+    title: "Distributed Sensor Fabric & Autonomous Containment",
+    summary: "NEW UPGRADE: Deploying the distributed sensor mesh, correlating multi-stage incidents, and executing automated active responses.",
+    content: [
+      "Modern cyber attacks span multiple stages and infrastructure components. The upgraded EncDec IDS features an integrated Sensor Fabric and Incident Correlation Engine.",
+      "1. Multi-Sensor Architecture: Unifies four discrete telemetry collection agents: Suricata NIDS (perimeter packet inspection), Zeek NSM (network protocol behavioral analysis), Endpoint eBPF Host Agents (kernel process lifecycle tracking), and Central Syslog (authentication and daemon events).",
+      "2. Correlated Incidents Workspace: Rather than isolating individual alerts, the engine groups related events into parent Incidents (e.g., `INC-1042: Multi-Stage Incursion & Lateral Traversal`). Tracks the entire kill-chain progression from initial access to privilege escalation and data exfiltration attempts.",
+      "3. Automated Active Response Engine: When threat confidence thresholds are satisfied, the system can autonomously execute defense countermeasures without operator delay:",
+      "   - IP Null-Routing: Dynamically updates gateway border tables to drop hostile subnet traffic.",
+      "   - Process Termination: Dispatches instant `SIGKILL` orders to rogue daemons spawned by web services.",
+      "   - Endpoint Isolation: Revokes network interface routing for compromised hosts while preserving an encrypted forensics channel.",
+      "4. Operator Override & Containment Safety: All autonomous containment actions can be inspected, approved, or rolled back with one click by authorized administrators."
+    ],
+    keyTakeaways: [
+      "Cross-sensor telemetry eliminates blind spots across network perimeter and endpoint kernels.",
+      "Correlated multi-stage incidents reduce alert fatigue by up to 85% compared to raw alert logs.",
+      "Automated containment triggers defend critical infrastructure in sub-second execution windows."
+    ]
+  },
+  {
+    chapter: "Chapter 8",
+    title: "Dual Database Architecture (Firestore + MSSQL)",
+    summary: "Understanding the hybrid NoSQL + Relational persistence tier, circuit breakers, and automatic cloud failover.",
+    content: [
+      "EncDec IDS implements a resilient Dual-Database Architecture engineered for zero data loss and uninterrupted high-availability.",
+      "1. Google Cloud Firestore: Serves as the primary real-time stream layer (`ai-studio-encdecids-bc136ca4-82a5-408e-ae8f-57533ab6060c`). Alerts, metrics, and rule updates are broadcast instantaneously to all connected analyst dashboards via Firestore WebSocket listeners.",
+      "2. Microsoft SQL Server (MSSQL): Serves as the enterprise relational data store. Schema tables (`EncDec_SecurityAlerts`, `EncDec_AuditLogs`, `EncDec_EmailLogs`, `EncDec_Users`, `EncDec_Rules`, `EncDec_Hosts`) ensure strict relational integrity, indexed queries, and compliance archiving.",
+      "3. Circuit Breaker & Automatic Fallback: In the event of cloud quota limits or network partitions, the backend server seamlessly transitions writes to local persistent storage and MSSQL without dropping incoming alerts.",
+      "4. Dual Database Console: Administrators can inspect live connection statuses, view record counts across all tables, execute manual syncs, and test database health with one click."
+    ],
+    keyTakeaways: [
+      "Real-time UI responsiveness powered by Cloud Firestore.",
+      "Enterprise audit compliance and structured reporting powered by Microsoft SQL Server.",
+      "Intelligent circuit breakers prevent service interruption during cloud quota events."
+    ]
+  },
+  {
+    chapter: "Chapter 9",
+    title: "Google Workspace & RFC 2822 Gmail Security Dispatch",
     summary: "Configuring and executing authorized incident dispatch workflows via connected Google Workspace.",
     content: [
       "EncDec IDS features native integration with Google Workspace, allowing SOC operators to communicate directly with internal teams, node administrators, and executive leadership via verified Gmail OAuth 2.0 channels.",
@@ -148,40 +205,21 @@ export const WORKBOOK_DATA: WorkbookSection[] = [
     ]
   },
   {
-    chapter: "Chapter 7",
-    title: "Dual Database Architecture (Firestore + MSSQL)",
-    summary: "Understanding the hybrid NoSQL + Relational persistence tier and failover mechanisms.",
+    chapter: "Chapter 10",
+    title: "Console Usability, Dual-Theme Engine & Certification",
+    summary: "NEW UPGRADE: Operating the light/dark theme engine, WCAG AA compliance features, and earning the Certified EncDec IDS SOC Specialist (CE-SOC) credential.",
     content: [
-      "EncDec IDS implements a resilient Dual-Database Architecture designed for high-availability enterprise environments.",
-      "1. Google Cloud Firestore: Serves as the primary real-time stream layer. Alerts, metrics, and rule updates are broadcast instantaneously to all connected analyst dashboards via Firestore WebSocket listeners.",
-      "2. Microsoft SQL Server (MSSQL): Serves as the enterprise relational data store. Schema tables (`EncDec_SecurityAlerts`, `EncDec_AuditLogs`, `EncDec_EmailLogs`, `EncDec_Users`, `EncDec_Rules`, `EncDec_Hosts`) ensure strict relational integrity, indexed queries, and compliance archiving.",
-      "3. Circuit Breaker & Automatic Fallback: In the event of cloud quota limits or network partitions, the backend server seamlessly transitions writes to local persistent storage and MSSQL without dropping incoming alerts.",
-      "4. Dual Database Console: Administrators can inspect live connection statuses, view record counts across all tables, execute manual syncs, and test database health with one click."
+      "The latest software upgrade introduces comprehensive human-factors enhancements and the in-system Professional Certification Protocol.",
+      "1. Dual-Theme Engine (Light & Dark Mode): Allows operators to seamlessly toggle between the high-contrast Dark SOC Command theme and the bright, clean Light Mode. Integrated directly into the Global Header, Sidebar, Landing Page, and Settings.",
+      "2. WCAG AA Accessibility: Ensures strict contrast ratios (4.5:1 text, 3:1 graphical elements), keyboard accessibility (`focus-visible` rings), and responsive layouts tailored to high-stress incident triaging.",
+      "3. In-System Certification Protocol: Operators who study the complete curriculum from Chapter 1 through Chapter 10 directly within the interactive workbook software earn the official **Certified EncDec IDS SOC Specialist (CE-SOC)** professional credential.",
+      "4. Automated Certificate Issuance: Progress is tracked interactively as each chapter is studied. Upon reaching 100% completion within the system, a cryptographically signed, personalized Certificate of Operational Mastery is generated and awarded automatically.",
+      "5. Offline Study vs. Online Certification: Operators retain the choice to download the complete 10-chapter workbook as a PDF for offline reading at any time. However, official digital certificate issuance and verification requires completing the curriculum within the live platform."
     ],
     keyTakeaways: [
-      "Real-time UI responsiveness powered by Cloud Firestore.",
-      "Enterprise audit compliance and structured reporting powered by Microsoft SQL Server.",
-      "Intelligent circuit breakers prevent service interruption during cloud quota events."
-    ]
-  },
-  {
-    chapter: "Chapter 8",
-    title: "Compliance, Auditing & Executive Reports",
-    summary: "Generating audit-ready compliance documentation aligned with ISO 27001, NIST SP 800-53, and PCI-DSS.",
-    content: [
-      "The Reports & Auditing suite empowers organizations to demonstrate continuous compliance with major regulatory standards.",
-      "1. SOC Audit Trail: Records every user interaction, configuration change, detection rule edit, and escalation action with timestamp, user ID, IP address, and cryptographic signature.",
-      "2. Automated Report Generation: Generate executive summaries, technical incident assessments, and network compliance audits in PDF, CSV, or JSON formats.",
-      "3. Regulatory Framework Alignment:",
-      "   - ISO/IEC 27001: Annex A.12.4 (Logging and Monitoring).",
-      "   - NIST SP 800-53: Control Families AU (Audit and Accountability) & SI (System and Information Integrity).",
-      "   - PCI-DSS 4.0: Requirement 10 (Log and Monitor All Access) & Requirement 11 (Test Security Regularly).",
-      "4. PDF Export: Generates professional, multi-page vector PDF documents containing executive overviews, metric visualizers, incident chronologies, and compliance attestations."
-    ],
-    keyTakeaways: [
-      "Immutable audit trails satisfy external auditors and forensic requirements.",
-      "One-click multi-format exports simplify weekly and monthly SOC reporting.",
-      "Built-in compliance mapping ties every intrusion rule to specific ISO/NIST controls."
+      "Effortless theme toggling provides optimal visual comfort across day and night operational shifts.",
+      "Completing the 10 chapters within the platform unlocks the official Certified EncDec IDS SOC Specialist certificate.",
+      "Offline PDF export ensures training materials remain accessible even without an active internet connection."
     ]
   }
 ];
@@ -217,140 +255,132 @@ export function generateWorkbookPdf(): void {
   
   // Background Header Block
   doc.setFillColor(...darkNavy);
-  doc.rect(0, 0, pageWidth, 110, 'F');
+  doc.rect(0, 0, pageWidth, 115, 'F');
 
   // Decorative Accent Bar
   doc.setFillColor(...deepCyan);
-  doc.rect(0, 110, pageWidth, 3, 'F');
+  doc.rect(0, 115, pageWidth, 3, 'F');
 
   // Sub-bar
   doc.setFillColor(...accentBlue);
-  doc.rect(margin, 35, 4, 45, 'F');
+  doc.rect(margin, 35, 4, 48, 'F');
 
   // Document Title Header
   doc.setTextColor(6, 182, 212);
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(13);
-  doc.text('OFFICIAL SECURITY DOCUMENTATION & OPERATIONS MANUAL', margin + 8, 42);
+  doc.setFontSize(11);
+  doc.text('OFFICIAL SECURITY DOCUMENTATION & OPERATIONS MANUAL [UPGRADED MASTER EDITION]', margin + 8, 42);
 
   doc.setTextColor(255, 255, 255);
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(28);
-  doc.text('EncDec IDS Workbook', margin + 8, 55);
+  doc.setFontSize(26);
+  doc.text('EncDec IDS Workbook', margin + 8, 54);
 
   doc.setFont('helvetica', 'normal');
-  doc.setFontSize(13);
+  doc.setFontSize(12);
   doc.setTextColor(203, 213, 225);
-  doc.text('Comprehensive Operational Guide to the Hybrid Intrusion Detection Platform', margin + 8, 66);
+  doc.text('Comprehensive Operational Guide to the Upgraded Hybrid Intrusion Detection Platform', margin + 8, 64);
 
-  doc.setFontSize(9.5);
+  doc.setFontSize(8.5);
   doc.setTextColor(148, 163, 184);
-  doc.text('Network IDS (DPI) • Host IDS (FIM & Syslogs) • Threat Intel • Gmail Dispatch • Dual Database', margin + 8, 76);
+  doc.text('NIDS DPI • HIDS FIM • TopoJSON Incursions • Sensor Fabric • Dual DB • Light/Dark Mode • Certification', margin + 8, 74);
 
   // Metadata Card on Cover
-  doc.setFillColor(...cardBg);
-  doc.setDrawColor(...borderGrey);
-  doc.roundedRect(margin, 125, contentWidth, 55, 3, 3, 'FD');
+  doc.setFillColor(...slateDark);
+  doc.roundedRect(margin, 126, contentWidth, 38, 2, 2, 'F');
 
-  doc.setTextColor(...darkNavy);
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(11);
-  doc.text('SYSTEM SPECIFICATIONS & PUBLICATION METADATA', margin + 6, 135);
-
-  doc.setFont('helvetica', 'normal');
   doc.setFontSize(9);
-  doc.setTextColor(...slateText);
-
-  const metaCols = [
-    { label: 'Platform:', value: 'EncDec Hybrid IDS Security Console' },
-    { label: 'Edition:', value: 'Enterprise Multi-Node Defense Suite v2.4' },
-    { label: 'Classification:', value: 'Internal Operations & SOC Technical Guide' },
-    { label: 'Published Date:', value: new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }) },
-    { label: 'Persistence:', value: 'Cloud Firestore + Microsoft SQL Server 2022' },
-    { label: 'Compliance Scope:', value: 'ISO/IEC 27001, NIST SP 800-53, PCI-DSS v4.0' }
-  ];
-
-  metaCols.forEach((m, idx) => {
-    const colX = margin + 6 + (idx % 2) * (contentWidth / 2);
-    const colY = 144 + Math.floor(idx / 2) * 10;
-    doc.setFont('helvetica', 'bold');
-    doc.text(m.label, colX, colY);
-    doc.setFont('helvetica', 'normal');
-    doc.text(m.value, colX + 32, colY);
-  });
-
-  // Table of Contents Preview Box
-  doc.setFillColor(241, 245, 249);
-  doc.roundedRect(margin, 188, contentWidth, 85, 3, 3, 'FD');
-
-  doc.setTextColor(...darkNavy);
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(11);
-  doc.text('TABLE OF CONTENTS (WORKBOOK CURRICULUM)', margin + 6, 198);
+  doc.setTextColor(6, 182, 212);
+  doc.text('CURRICULUM SPECIFICATIONS & METADATA', margin + 6, 134);
 
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(8.5);
-  doc.setTextColor(...slateText);
+  doc.setTextColor(226, 232, 240);
+  doc.text('• System Version: EncDec IDS v4.2.0 Enterprise Hybrid Engine', margin + 6, 142);
+  doc.text('• Monitored Scope: Chukwuemeka Odumegwu Ojukwu University (COOU) Infrastructure', margin + 6, 149);
+  doc.text('• Certification Award: Certified EncDec IDS SOC Specialist (CE-SOC) (Earned upon system completion)', margin + 6, 156);
 
+  // Table of Contents Section
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(12);
+  doc.setTextColor(...darkNavy);
+  doc.text('MASTER CURRICULUM TABLE OF CONTENTS (10 CHAPTERS)', margin, 175);
+
+  let tocY = 183;
   WORKBOOK_DATA.forEach((sec, idx) => {
-    const tocX = margin + 6 + (idx >= 4 ? contentWidth / 2 : 0);
-    const tocY = 207 + (idx % 4) * 16;
     doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8.5);
     doc.setTextColor(...deepCyan);
-    doc.text(`${sec.chapter}: `, tocX, tocY);
-    
-    doc.setFont('helvetica', 'bold');
-    doc.setTextColor(...darkNavy);
-    doc.text(sec.title, tocX + 20, tocY);
-    
+    doc.text(`${sec.chapter}:`, margin, tocY);
+
     doc.setFont('helvetica', 'normal');
+    doc.setTextColor(...slateText);
+    doc.text(sec.title, margin + 22, tocY);
+
+    doc.setFont('helvetica', 'bold');
     doc.setTextColor(...mutedText);
-    const truncSummary = sec.summary.length > 55 ? sec.summary.substring(0, 52) + '...' : sec.summary;
-    doc.text(truncSummary, tocX + 6, tocY + 5);
+    doc.text(`Page ${idx + 2}`, pageWidth - margin - 15, tocY, { align: 'right' });
+
+    // Dotted leader line
+    doc.setDrawColor(203, 213, 225);
+    doc.setLineDashPattern([1, 2], 0);
+    doc.line(margin + 24 + doc.getTextWidth(sec.title) + 2, tocY - 1, pageWidth - margin - 22, tocY - 1);
+    doc.setLineDashPattern([], 0);
+
+    tocY += 7.8;
   });
 
-  // Footer Cover Page
+  // Notice about In-System Certification
+  doc.setFillColor(236, 254, 255);
+  doc.setDrawColor(165, 243, 252);
+  doc.roundedRect(margin, 264, contentWidth, 18, 2, 2, 'FD');
+
+  doc.setFont('helvetica', 'bold');
   doc.setFontSize(8);
-  doc.setTextColor(...mutedText);
-  doc.text('Confidential & Proprietary • EncDec Hybrid Intrusion Detection System', margin, 287);
-  doc.text('Page 1 of 9', pageWidth - margin - 18, 287);
+  doc.setTextColor(8, 145, 178);
+  doc.text('★ OFFLINE READING VS. IN-SYSTEM PROFESSIONAL CERTIFICATION', margin + 5, 270);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7.5);
+  doc.setTextColor(14, 116, 144);
+  doc.text('You can study this downloaded workbook offline at your convenience. Official certification and credentials are automatically', margin + 5, 275);
+  doc.text('conferred when you complete the 10-chapter curriculum directly inside the EncDec IDS software platform.', margin + 5, 279);
 
   // ==========================================
-  // CHAPTER PAGES (PAGES 2 TO 9)
+  // CHAPTER PAGES (PAGES 2 - 11)
   // ==========================================
+  const totalPages = WORKBOOK_DATA.length + 1;
 
-  WORKBOOK_DATA.forEach((sec, secIdx) => {
+  WORKBOOK_DATA.forEach((sec, idx) => {
     doc.addPage();
-    const currentPage = secIdx + 2;
+    const currentPage = idx + 2;
+    let currentY = margin;
 
-    // Header Running Banner
-    doc.setFillColor(...darkNavy);
-    doc.rect(0, 0, pageWidth, 18, 'F');
-
-    doc.setFillColor(...deepCyan);
-    doc.rect(0, 18, pageWidth, 1, 'F');
-
+    // Running Header
+    doc.setFillColor(...slateDark);
+    doc.rect(0, 0, pageWidth, 12, 'F');
     doc.setTextColor(255, 255, 255);
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(9);
-    doc.text('ENCDEC IDS WORKBOOK — OFFICIAL OPERATIONAL MANUAL', margin, 12);
+    doc.setFontSize(7.5);
+    doc.text('ENCDEC IDS OPERATIONS MANUAL & CERTIFICATION CURRICULUM', margin, 8);
+    doc.setTextColor(6, 182, 212);
+    doc.text(`${sec.chapter} OF 10`, pageWidth - margin - 18, 8);
 
-    doc.setTextColor(...deepCyan);
+    currentY = 22;
+
+    // Chapter Number Pill
+    doc.setFillColor(...deepCyan);
+    doc.roundedRect(margin, currentY, 24, 6, 1.5, 1.5, 'F');
+    doc.setTextColor(255, 255, 255);
     doc.setFont('helvetica', 'bold');
-    doc.text(`${sec.chapter}: ${sec.title}`, pageWidth - margin - doc.getTextWidth(`${sec.chapter}: ${sec.title}`), 12);
+    doc.setFontSize(8);
+    doc.text(sec.chapter.toUpperCase(), margin + 3.5, currentY + 4.2);
+    currentY += 10;
 
-    let currentY = 28;
-
-    // Chapter Title Heading
-    doc.setTextColor(...deepCyan);
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(10);
-    doc.text(sec.chapter.toUpperCase(), margin, currentY);
-    currentY += 7;
-
+    // Section Title
     doc.setTextColor(...darkNavy);
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(18);
+    doc.setFontSize(16);
     doc.text(sec.title, margin, currentY);
     currentY += 7;
 
@@ -363,21 +393,20 @@ export function generateWorkbookPdf(): void {
     doc.rect(margin, currentY, 2.5, 18, 'F');
 
     doc.setFont('helvetica', 'italic');
-    doc.setFontSize(8.5);
+    doc.setFontSize(8);
     doc.setTextColor(...slateText);
     const summaryLines = doc.splitTextToSize(sec.summary, contentWidth - 8);
-    doc.text(summaryLines, margin + 6, currentY + 6);
-    currentY += 24;
+    doc.text(summaryLines, margin + 6, currentY + 5.5);
+    currentY += 23;
 
     // Main Explanatory Content Paragraphs
     doc.setFont('helvetica', 'normal');
-    doc.setFontSize(9);
+    doc.setFontSize(8.5);
     doc.setTextColor(...slateText);
 
     sec.content.forEach((paragraph) => {
       const splitParas = doc.splitTextToSize(paragraph, contentWidth);
       
-      // Highlight numbered bullet points
       if (/^\d+\./.test(paragraph)) {
         doc.setFont('helvetica', 'bold');
         doc.setTextColor(...darkNavy);
@@ -387,18 +416,18 @@ export function generateWorkbookPdf(): void {
       }
 
       doc.text(splitParas, margin, currentY);
-      currentY += splitParas.length * 4.5 + 2;
+      currentY += splitParas.length * 4.2 + 2;
     });
 
-    currentY += 4;
+    currentY += 3;
 
     // Table Section if Present
     if (sec.tables) {
       doc.setFont('helvetica', 'bold');
-      doc.setFontSize(10);
+      doc.setFontSize(9);
       doc.setTextColor(...darkNavy);
       doc.text('REFERENCE MATRIX & TECHNICAL SPECIFICATIONS', margin, currentY);
-      currentY += 5;
+      currentY += 4.5;
 
       const headers = sec.tables.headers;
       const rows = sec.tables.rows;
@@ -406,67 +435,67 @@ export function generateWorkbookPdf(): void {
 
       // Table Header Row
       doc.setFillColor(...slateDark);
-      doc.rect(margin, currentY, contentWidth, 7, 'F');
+      doc.rect(margin, currentY, contentWidth, 6.5, 'F');
       doc.setTextColor(255, 255, 255);
       doc.setFont('helvetica', 'bold');
-      doc.setFontSize(8);
+      doc.setFontSize(7.5);
 
       headers.forEach((h, hIdx) => {
-        doc.text(h, margin + hIdx * colW + 3, currentY + 5);
+        doc.text(h, margin + hIdx * colW + 3, currentY + 4.5);
       });
-      currentY += 7;
+      currentY += 6.5;
 
       // Table Data Rows
       rows.forEach((r, rIdx) => {
         doc.setFillColor(rIdx % 2 === 0 ? 255 : 248, rIdx % 2 === 0 ? 255 : 250, rIdx % 2 === 0 ? 255 : 252);
-        doc.rect(margin, currentY, contentWidth, 6.5, 'F');
+        doc.rect(margin, currentY, contentWidth, 5.8, 'F');
         doc.setDrawColor(...borderGrey);
-        doc.line(margin, currentY + 6.5, margin + contentWidth, currentY + 6.5);
+        doc.line(margin, currentY + 5.8, margin + contentWidth, currentY + 5.8);
 
         doc.setFont('helvetica', 'normal');
-        doc.setFontSize(7.5);
+        doc.setFontSize(7.2);
         doc.setTextColor(...slateText);
 
         r.forEach((cell, cIdx) => {
-          doc.text(cell, margin + cIdx * colW + 3, currentY + 4.5);
+          doc.text(cell, margin + cIdx * colW + 3, currentY + 4);
         });
 
-        currentY += 6.5;
+        currentY += 5.8;
       });
 
-      currentY += 6;
+      currentY += 4;
     }
 
     // Key Takeaways & Operator Checklist Card
-    const takeawayCardHeight = 36;
-    doc.setFillColor(240, 253, 250); // soft cyan/emerald tint
+    const takeawayCardHeight = 30;
+    doc.setFillColor(240, 253, 250);
     doc.setDrawColor(153, 246, 228);
     doc.roundedRect(margin, currentY, contentWidth, takeawayCardHeight, 2, 2, 'FD');
 
     doc.setTextColor(15, 118, 110);
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(9.5);
-    doc.text('OPERATIONAL BEST PRACTICES & KEY TAKEAWAYS', margin + 5, currentY + 7);
+    doc.setFontSize(9);
+    doc.text('OPERATIONAL BEST PRACTICES & KEY TAKEAWAYS', margin + 5, currentY + 6);
 
     doc.setFont('helvetica', 'normal');
-    doc.setFontSize(8.2);
+    doc.setFontSize(7.8);
     doc.setTextColor(19, 78, 74);
 
     sec.keyTakeaways.forEach((k, kIdx) => {
       const kLines = doc.splitTextToSize(`• ${k}`, contentWidth - 10);
-      doc.text(kLines, margin + 5, currentY + 14 + kIdx * 6.5);
+      doc.text(kLines, margin + 5, currentY + 12 + kIdx * 5.5);
     });
 
     // Running Footer
     doc.setFont('helvetica', 'normal');
-    doc.setFontSize(8);
+    doc.setFontSize(7.5);
     doc.setTextColor(...mutedText);
     doc.setDrawColor(...borderGrey);
     doc.line(margin, 282, pageWidth - margin, 282);
     doc.text('EncDec Hybrid IDS Security Operations Workbook • Published for SOC Operations', margin, 287);
-    doc.text(`Page ${currentPage} of 9`, pageWidth - margin - 18, 287);
+    doc.text(`Page ${currentPage} of ${totalPages}`, pageWidth - margin - 22, 287);
   });
 
   // Trigger Save/Download
-  doc.save('EncDec_IDS_Workbook_Operational_Guide.pdf');
+  doc.save('EncDec_IDS_Upgraded_Master_Workbook.pdf');
 }

@@ -237,6 +237,20 @@ export interface EmailLog {
   status: 'sent' | 'queued' | 'simulated';
 }
 
+export interface WorkbookProgress {
+  id: string;
+  userId: string;
+  email: string;
+  chapterIndex: number;
+  paragraphIndex: number;
+  chapterTitle: string;
+  readChapters: number[];
+  completed: boolean;
+  quizScore?: number;
+  quizPassed?: boolean;
+  lastReadAt: string;
+}
+
 export interface MssqlConfig {
   server: string;
   port: number;
