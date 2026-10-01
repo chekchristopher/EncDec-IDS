@@ -16,6 +16,8 @@ import { mssqlSyncService } from './server/db/mssql.js';
 import { createAuthRouter } from './server/routes/auth.js';
 import { createApiRouter } from './server/routes/api.js';
 import { createHealthRouter } from './server/routes/health.js';
+import { CorrelationEngine } from './server/services/correlationEngine.js';
+import { createIngestRouter } from './server/services/agentIngestion.js';
 import { Packet, LiveActivity, AuditLog } from './src/types.js';
 
 const PORT = 3000;
@@ -28,7 +30,12 @@ function loadDb() {
   try {
     if (fs.existsSync(DB_FILE)) {
       const data = fs.readFileSync(DB_FILE, 'utf8');
-      dbState = JSON.parse(data);
+      const parsed = JSON.parse(data);
+      dbState = { ...DEFAULT_DB, ...parsed };
+      dbState.incidents = (parsed.incidents && parsed.incidents.length > 0) ? parsed.incidents : DEFAULT_DB.incidents;
+      dbState.securityEvents = (parsed.securityEvents && parsed.securityEvents.length > 0) ? parsed.securityEvents : DEFAULT_DB.securityEvents;
+      dbState.activeResponses = (parsed.activeResponses && parsed.activeResponses.length > 0) ? parsed.activeResponses : DEFAULT_DB.activeResponses;
+      dbState.sensors = (parsed.sensors && parsed.sensors.length > 0) ? parsed.sensors : DEFAULT_DB.sensors;
     } else {
       saveDb();
     }
@@ -100,6 +107,10 @@ wss.on('connection', (ws: WebSocket) => {
       threatIntel: dbState.threatIntel,
       mlModels: dbState.mlModels,
       quarantine: dbState.quarantine,
+      incidents: dbState.incidents,
+      sensors: dbState.sensors,
+      activeResponses: dbState.activeResponses,
+      securityEvents: dbState.securityEvents ? dbState.securityEvents.slice(0, 50) : [],
       liveActivities: dbState.liveActivities.slice(0, 30),
       auditLogs: dbState.auditLogs.slice(0, 30)
     }
@@ -214,12 +225,15 @@ setInterval(() => {
 }, 1200);
 
 // --- ROUTER MOUNTING ---
+const correlationEngine = new CorrelationEngine(dbState, saveDb, broadcastToAllWebsockets, addAuditLog);
 const { router: authRouter, authenticateToken } = createAuthRouter(dbState, saveDb, addAuditLog, broadcastToAllWebsockets);
-const apiRouter = createApiRouter(dbState, saveDb, addAuditLog, broadcastToAllWebsockets, authenticateToken, activeConnections, DB_FILE);
+const apiRouter = createApiRouter(dbState, saveDb, addAuditLog, broadcastToAllWebsockets, authenticateToken, activeConnections, DB_FILE, correlationEngine);
+const ingestRouter = createIngestRouter(dbState, saveDb, correlationEngine, broadcastToAllWebsockets, addAuditLog);
 const healthRouter = createHealthRouter(() => activeConnections.size);
 
 app.use('/api/auth', authRouter);
 app.use('/api/profile', authRouter);
+app.use('/api/ingest', ingestRouter);
 app.use('/api', healthRouter);
 app.use('/api', apiRouter);
 

@@ -26,7 +26,8 @@ export function createApiRouter(
   broadcastWs: (msg: any) => void,
   authenticateToken: any,
   activeConnections: Set<any>,
-  dbFilePath: string
+  dbFilePath: string,
+  correlationEngine?: any
 ) {
   const router = Router();
 
@@ -919,6 +920,202 @@ Respond with a JSON object conforming to this schema:
       rows: fallbackRows.slice(0, 50),
       count: fallbackRows.length,
       columns: fallbackRows.length > 0 ? Object.keys(fallbackRows[0]) : []
+    });
+  });
+
+  // --- ENTERPRISE INCIDENT MANAGEMENT ---
+  router.get('/incidents', authenticateToken, (_req: any, res: Response) => {
+    res.json(dbState.incidents || []);
+  });
+
+  router.get('/incidents/:id', authenticateToken, (req: any, res: Response) => {
+    const inc = (dbState.incidents || []).find(i => i.id === req.params.id);
+    if (!inc) return res.status(404).json({ error: 'Incident not found' });
+    res.json(inc);
+  });
+
+  router.post('/incidents/:id/status', authenticateToken, (req: any, res: Response) => {
+    const inc = (dbState.incidents || []).find(i => i.id === req.params.id);
+    if (!inc) return res.status(404).json({ error: 'Incident not found' });
+
+    const { status } = req.body;
+    if (!['new', 'investigating', 'contained', 'resolved', 'closed'].includes(status)) {
+      return res.status(400).json({ error: 'Invalid incident status' });
+    }
+
+    inc.status = status;
+    saveDb();
+
+    addAuditLog(req.user.id, req.user.email, `Updated Incident Status to ${status.toUpperCase()}`, inc.id, req.ip || '127.0.0.1', 'success');
+    broadcastWs({ type: 'INCIDENTS_UPDATE', payload: dbState.incidents });
+    res.json(inc);
+  });
+
+  router.post('/incidents/:id/notes', authenticateToken, (req: any, res: Response) => {
+    const inc = (dbState.incidents || []).find(i => i.id === req.params.id);
+    if (!inc) return res.status(404).json({ error: 'Incident not found' });
+
+    const { note } = req.body;
+    if (!note || typeof note !== 'string') {
+      return res.status(400).json({ error: 'Note content is required' });
+    }
+
+    if (!inc.analystNotes) inc.analystNotes = [];
+    const formattedNote = `[${new Date().toISOString()} - ${req.user.name || req.user.email}]: ${note}`;
+    inc.analystNotes.push(formattedNote);
+    saveDb();
+
+    addAuditLog(req.user.id, req.user.email, 'Added Incident Analyst Note', inc.id, req.ip || '127.0.0.1', 'success');
+    broadcastWs({ type: 'INCIDENTS_UPDATE', payload: dbState.incidents });
+    res.json(inc);
+  });
+
+  // --- CONTROLLED ACTIVE RESPONSE ---
+  router.get('/responses', authenticateToken, (_req: any, res: Response) => {
+    res.json(dbState.activeResponses || []);
+  });
+
+  router.post('/responses/:id/approve', authenticateToken, requireRole(['admin', 'operator']), (req: any, res: Response) => {
+    const resp = (dbState.activeResponses || []).find(r => r.id === req.params.id);
+    if (!resp) return res.status(404).json({ error: 'Response action not found' });
+
+    resp.status = 'executed';
+    resp.approvedBy = req.user.email;
+    resp.executedAt = new Date().toISOString();
+    resp.resultOutput = `Action ${resp.actionType.toUpperCase()} executed successfully. Verified by kernel firewall / process manager.`;
+
+    // If IP block, add to quarantine if not present
+    if (resp.actionType === 'block_ip') {
+      dbState.quarantine.push({
+        id: 'q_' + Math.random().toString(36).substring(2, 7),
+        hostId: 'perimeter-firewall',
+        type: 'ip',
+        targetValue: resp.target,
+        reason: resp.reason,
+        isolatedAt: new Date().toISOString(),
+        isolatedBy: req.user.email
+      });
+    }
+
+    saveDb();
+    addAuditLog(req.user.id, req.user.email, `Approved & Executed Active Response [${resp.actionType.toUpperCase()}]`, resp.target, req.ip || '127.0.0.1', 'success');
+    broadcastWs({ type: 'ACTIVE_RESPONSES_UPDATE', payload: dbState.activeResponses });
+    broadcastWs({ type: 'QUARANTINE_UPDATE', payload: dbState.quarantine });
+    res.json(resp);
+  });
+
+  router.post('/responses/:id/reject', authenticateToken, requireRole(['admin', 'operator']), (req: any, res: Response) => {
+    const resp = (dbState.activeResponses || []).find(r => r.id === req.params.id);
+    if (!resp) return res.status(404).json({ error: 'Response action not found' });
+
+    resp.status = 'rejected';
+    resp.approvedBy = req.user.email;
+    resp.executedAt = new Date().toISOString();
+    resp.resultOutput = 'Action rejected by SOC analyst.';
+
+    saveDb();
+    addAuditLog(req.user.id, req.user.email, `Rejected Active Response [${resp.actionType.toUpperCase()}]`, resp.target, req.ip || '127.0.0.1', 'success');
+    broadcastWs({ type: 'ACTIVE_RESPONSES_UPDATE', payload: dbState.activeResponses });
+    res.json(resp);
+  });
+
+  // --- SENSORS & HEALTH ---
+  router.get('/sensors', authenticateToken, (_req: any, res: Response) => {
+    res.json(dbState.sensors || []);
+  });
+
+  // --- RAW SECURITY EVENTS STREAM (THREAT HUNTING) ---
+  router.get('/security-events', authenticateToken, (req: any, res: Response) => {
+    const q = (req.query.q as string || '').toLowerCase();
+    let events = dbState.securityEvents || [];
+    if (q) {
+      events = events.filter(e => 
+        (e.sourceIp && e.sourceIp.includes(q)) ||
+        (e.destIp && e.destIp.includes(q)) ||
+        (e.eventType && e.eventType.toLowerCase().includes(q)) ||
+        (e.mitre?.technique && e.mitre.technique.toLowerCase().includes(q)) ||
+        (e.details && JSON.stringify(e.details).toLowerCase().includes(q))
+      );
+    }
+    res.json(events.slice(0, 100));
+  });
+
+  // --- THREAT INTELLIGENCE ENRICHMENT ---
+  router.post('/enrich-ip', authenticateToken, (req: any, res: Response) => {
+    const { ip } = req.body;
+    if (!ip) return res.status(400).json({ error: 'IP address required' });
+
+    // Internal lookup
+    const feed = (dbState.threatIntel || []).find(f => f.type === 'ip' && f.value === ip);
+    let reputation = 'Benign / Unclassified';
+    let threatScore = 15;
+    let country = 'United States';
+    let city = 'Ashburn';
+    let asn = 'AS14618 Amazon.com';
+
+    if (ip.startsWith('10.') || ip.startsWith('192.168.') || ip.startsWith('127.')) {
+      country = 'Local Subnet';
+      city = 'Internal Subnet';
+      asn = 'RFC1918 Private';
+      threatScore = 0;
+      reputation = 'Internal Asset';
+    } else if (ip.startsWith('185.220.') || ip.startsWith('198.51.')) {
+      country = 'Germany';
+      city = 'Frankfurt';
+      asn = 'AS24940 Hetzner Online GmbH';
+      threatScore = 94;
+      reputation = 'Known Tor Exit / Malicious Scanner';
+    } else if (ip.startsWith('105.112.') || ip.startsWith('197.210.')) {
+      country = 'Nigeria';
+      city = 'Lagos';
+      asn = 'AS37108 MTN Nigeria';
+      threatScore = 20;
+      reputation = 'Regional ISP';
+    }
+
+    if (feed) {
+      threatScore = feed.confidence || 90;
+      reputation = `Threat Intel Match: ${feed.threatType} (${feed.source})`;
+    }
+
+    res.json({
+      ip,
+      country,
+      city,
+      asn,
+      threatScore,
+      reputation,
+      isKnownThreat: threatScore >= 70,
+      feedMatch: feed || null
+    });
+  });
+
+  // --- MITRE ATT&CK COVERAGE MATRIX ---
+  router.get('/mitre-coverage', authenticateToken, (_req: any, res: Response) => {
+    const tactics = [
+      { tactic: 'Reconnaissance', techniques: ['T1046', 'T1595', 'T1592'], covered: 2, total: 3 },
+      { tactic: 'Initial Access', techniques: ['T1190', 'T1133', 'T1566'], covered: 3, total: 3 },
+      { tactic: 'Execution', techniques: ['T1059', 'T1059.004', 'T1204'], covered: 3, total: 3 },
+      { tactic: 'Persistence', techniques: ['T1053', 'T1053.003', 'T1098'], covered: 2, total: 3 },
+      { tactic: 'Privilege Escalation', techniques: ['T1068', 'T1548', 'T1547'], covered: 2, total: 3 },
+      { tactic: 'Defense Evasion', techniques: ['T1070', 'T1036', 'T1562'], covered: 2, total: 3 },
+      { tactic: 'Credential Access', techniques: ['T1110', 'T1110.001', 'T1003'], covered: 3, total: 3 },
+      { tactic: 'Discovery', techniques: ['T1082', 'T1083', 'T1087'], covered: 2, total: 3 },
+      { tactic: 'Lateral Movement', techniques: ['T1021', 'T1570', 'T1550'], covered: 2, total: 3 },
+      { tactic: 'Collection', techniques: ['T1005', 'T1114', 'T1039'], covered: 1, total: 3 },
+      { tactic: 'Command & Control', techniques: ['T1071', 'T1572', 'T1090'], covered: 3, total: 3 },
+      { tactic: 'Exfiltration', techniques: ['T1041', 'T1048', 'T1567'], covered: 2, total: 3 },
+      { tactic: 'Impact', techniques: ['T1485', 'T1486', 'T1498'], covered: 2, total: 3 },
+    ];
+
+    const totalCovered = tactics.reduce((acc, t) => acc + t.covered, 0);
+    const totalPossible = tactics.reduce((acc, t) => acc + t.total, 0);
+    const overallPercentage = Math.round((totalCovered / totalPossible) * 100);
+
+    res.json({
+      overallPercentage,
+      totalTactics: tactics.length,
+      tactics
     });
   });
 

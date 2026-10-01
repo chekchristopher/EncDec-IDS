@@ -15,7 +15,8 @@ import { apiRequest, WS_BASE, getAuthToken, setAuthToken } from './api.js';
 // Types
 import { 
   User, Host, Packet, Rule, Alert, Threat, APIKey, 
-  AuditLog, LiveActivity, ThreatIntelFeed, MLModel, QuarantineItem, EmailLog 
+  AuditLog, LiveActivity, ThreatIntelFeed, MLModel, QuarantineItem, EmailLog,
+  Incident, ActiveResponseAction, SensorStatus 
 } from './types.js';
 
 // Components
@@ -26,6 +27,8 @@ import Overview from './components/Overview.jsx';
 import NetworkIDS from './components/NetworkIDS.jsx';
 import HostIDS from './components/HostIDS.jsx';
 import ThreatIntel from './components/ThreatIntel.jsx';
+import IncidentsWorkspace from './components/IncidentsWorkspace.jsx';
+import SensorFabric from './components/SensorFabric.jsx';
 import ReportsGenerator from './components/ReportsGenerator.jsx';
 import AuditConsole from './components/AuditConsole.jsx';
 import SettingsScreen from './components/SettingsScreen.jsx';
@@ -65,6 +68,9 @@ export default function App() {
   const [quarantine, setQuarantine] = useState<QuarantineItem[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [emailLogs, setEmailLogs] = useState<EmailLog[]>([]);
+  const [incidents, setIncidents] = useState<Incident[]>([]);
+  const [activeResponses, setActiveResponses] = useState<ActiveResponseAction[]>([]);
+  const [sensors, setSensors] = useState<SensorStatus[]>([]);
   
   // Realtime Live Stream Paclets
   const [livePackets, setLivePackets] = useState<Packet[]>([]);
@@ -154,6 +160,32 @@ export default function App() {
             if (msg.payload.emailLogs) {
               setEmailLogs(dedup(msg.payload.emailLogs));
             }
+            if (msg.payload.incidents) {
+              setIncidents(msg.payload.incidents);
+            }
+            if (msg.payload.sensors) {
+              setSensors(msg.payload.sensors);
+            }
+            if (msg.payload.activeResponses) {
+              setActiveResponses(msg.payload.activeResponses);
+            }
+            break;
+
+          case 'INCIDENTS_UPDATE':
+            setIncidents(msg.payload);
+            break;
+
+          case 'INCIDENT_ALERT':
+            setIncidents(prev => [msg.payload, ...prev.filter(i => i.id !== msg.payload.id)]);
+            triggerUIWarning(`🚨 High Confidence Incident Correlated: ${msg.payload.id} - ${msg.payload.title}`);
+            break;
+
+          case 'ACTIVE_RESPONSES_UPDATE':
+            setActiveResponses(msg.payload);
+            break;
+
+          case 'SENSORS_UPDATE':
+            setSensors(msg.payload);
             break;
 
           case 'LIVE_PACKET':
@@ -336,6 +368,21 @@ export default function App() {
     }
   };
 
+  const refreshAllData = async () => {
+    try {
+      const [fetchedIncidents, fetchedResponses, fetchedSensors] = await Promise.all([
+        apiRequest('/api/incidents').catch(() => []),
+        apiRequest('/api/responses').catch(() => []),
+        apiRequest('/api/sensors').catch(() => [])
+      ]);
+      setIncidents(fetchedIncidents);
+      setActiveResponses(fetchedResponses);
+      setSensors(fetchedSensors);
+    } catch (err) {
+      console.warn('Failed to refresh SOC telemetry:', err);
+    }
+  };
+
   if (!authChecked) {
     return (
       <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center font-mono text-xs text-slate-500">
@@ -482,7 +529,19 @@ export default function App() {
                 setSelectedIncidentForEmail(alert);
                 setActiveView('gmail');
               }}
+              onNavigateToIncidents={() => setActiveView('incidents')}
               packetCount={totalPacketsCount}
+            />
+          )}
+
+          {activeView === 'incidents' && (
+            <IncidentsWorkspace 
+              currentUser={currentUser}
+              incidents={incidents}
+              activeResponses={activeResponses}
+              sensors={sensors}
+              onRefreshData={refreshAllData}
+              onShowAlert={(msg) => triggerUIWarning(msg)}
             />
           )}
 
@@ -510,6 +569,14 @@ export default function App() {
               threatIntel={threatIntel}
               mlModels={mlModels}
               onTrainModel={handleTrainModel}
+            />
+          )}
+
+          {activeView === 'sensors' && (
+            <SensorFabric 
+              sensors={sensors}
+              onRefreshData={refreshAllData}
+              onShowAlert={(msg) => triggerUIWarning(msg)}
             />
           )}
 

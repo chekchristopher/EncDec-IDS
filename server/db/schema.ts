@@ -5,7 +5,8 @@
 
 import { 
   User, Host, Rule, Alert, Threat, APIKey, 
-  AuditLog, LiveActivity, ThreatIntelFeed, MLModel, QuarantineItem, EmailLog
+  AuditLog, LiveActivity, ThreatIntelFeed, MLModel, QuarantineItem, EmailLog,
+  Incident, RawSecurityEvent, ActiveResponseAction, SensorStatus
 } from '../../src/types.js';
 
 export interface DbSchema {
@@ -21,4 +22,8 @@ export interface DbSchema {
   mlModels: MLModel[];
   quarantine: QuarantineItem[];
   emailLogs: EmailLog[];
+  incidents: Incident[];
+  securityEvents: RawSecurityEvent[];
+  activeResponses: ActiveResponseAction[];
+  sensors: SensorStatus[];
 }

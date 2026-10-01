@@ -281,3 +281,115 @@ export interface DualDatabaseStatus {
   };
 }
 
+// --- ENTERPRISE DETECTION & RESPONSE EXTENSIONS ---
+
+export type KillChainStage = 
+  | 'Reconnaissance'
+  | 'Initial Access'
+  | 'Execution'
+  | 'Persistence'
+  | 'Privilege Escalation'
+  | 'Defense Evasion'
+  | 'Credential Access'
+  | 'Discovery'
+  | 'Lateral Movement'
+  | 'Collection'
+  | 'Command & Control'
+  | 'Exfiltration'
+  | 'Impact';
+
+export interface IncidentTimelineEvent {
+  id: string;
+  timestamp: string;
+  layer: 'network' | 'host' | 'auth' | 'correlation';
+  sensor: string; // e.g. 'suricata-01', 'zeek-nsm', 'agent-linux-web01'
+  stage: KillChainStage;
+  title: string;
+  description: string;
+  evidence: Record<string, any>;
+  mitreTechnique?: string;
+  severity: 'critical' | 'high' | 'medium' | 'low';
+}
+
+export interface Incident {
+  id: string; // e.g. INC-1042
+  title: string;
+  summary: string;
+  status: 'new' | 'investigating' | 'contained' | 'resolved' | 'closed';
+  severity: 'critical' | 'high' | 'medium' | 'low';
+  confidenceScore: number; // 0-100%
+  targetHostId?: string;
+  targetHostName?: string;
+  targetIp?: string;
+  attackerIp?: string;
+  attackerGeo?: {
+    country: string;
+    city?: string;
+    asn?: string;
+    reputation?: string;
+  };
+  stagesDetected: KillChainStage[];
+  firstSeen: string;
+  lastSeen: string;
+  associatedAlertIds: string[];
+  associatedEventIds: string[];
+  timeline: IncidentTimelineEvent[];
+  recommendedActions: string[];
+  assignedAnalyst?: string;
+  analystNotes?: string[];
+  mitreTechniques: string[];
+}
+
+export interface RawSecurityEvent {
+  id: string;
+  timestamp: string;
+  sourceType: 'suricata' | 'zeek' | 'host_agent' | 'syslog' | 'packet_capture';
+  sensorId: string;
+  hostId?: string;
+  sourceIp?: string;
+  sourcePort?: number;
+  destIp?: string;
+  destPort?: number;
+  protocol?: string;
+  eventType: string; // 'dns_query', 'http_request', 'process_spawn', 'file_modify', 'exploit_detected', 'failed_auth'
+  details: Record<string, any>;
+  severity: 'critical' | 'high' | 'medium' | 'low' | 'info';
+  confidence: number;
+  mitre?: {
+    tactic: KillChainStage;
+    technique: string;
+    subtechnique?: string;
+  };
+}
+
+export interface ActiveResponseAction {
+  id: string;
+  incidentId?: string;
+  actionType: 'block_ip' | 'isolate_host' | 'kill_process' | 'quarantine_file';
+  target: string; // IP, Host ID, PID, or filepath
+  targetHost?: string;
+  reason: string;
+  mode: 'manual' | 'approval_required' | 'automatic';
+  status: 'pending_approval' | 'executed' | 'rejected' | 'failed';
+  requestedBy: string;
+  approvedBy?: string;
+  timestamp: string;
+  executedAt?: string;
+  commandExecuted?: string;
+  resultOutput?: string;
+}
+
+export interface SensorStatus {
+  id: string;
+  name: string;
+  type: 'nids_suricata' | 'nsm_zeek' | 'hids_agent' | 'syslog_collector';
+  status: 'online' | 'degraded' | 'offline';
+  ipAddress: string;
+  hostOs?: string;
+  lastHeartbeat: string;
+  eventRateSec: number;
+  droppedEvents: number;
+  rulesetVersion: string;
+  uptimeSeconds: number;
+}
+

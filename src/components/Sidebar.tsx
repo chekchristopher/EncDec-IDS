@@ -6,7 +6,8 @@
 import React from 'react';
 import { 
   LayoutDashboard, Activity, Terminal, ShieldAlert, FileText, 
-  Settings, LogOut, Lock, Database, X, UserPen, ArrowRightLeft, Mail, BookOpen 
+  Settings, LogOut, Lock, Database, X, UserPen, ArrowRightLeft, Mail, BookOpen,
+  Flame, Radio
 } from 'lucide-react';
 import EncDecLogo from './EncDecLogo.js';
 
@@ -36,9 +37,11 @@ export default function Sidebar({
 
   const menuItems = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+    { id: 'incidents', label: 'Incidents & Hunting', icon: Flame },
     { id: 'network', label: 'Network IDS', icon: Activity },
     { id: 'host', label: 'Host IDS', icon: Terminal },
     { id: 'threatIntel', label: 'Threat Intel', icon: ShieldAlert },
+    { id: 'sensors', label: 'Sensor Fabric', icon: Radio },
     { id: 'gmail', label: 'Gmail Dispatch', icon: Mail },
     { id: 'reports', label: 'Reports', icon: FileText },
     { id: 'workbook', label: 'EncDec Workbook', icon: BookOpen },

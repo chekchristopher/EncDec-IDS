@@ -9,6 +9,7 @@ import {
   Bell, ChevronRight, Activity, ShieldAlert, ArrowUpRight, Mail 
 } from 'lucide-react';
 import { Alert, Host, Threat } from '../types.js';
+import RealTimeMap from './RealTimeMap.jsx';
 
 interface OverviewProps {
   metrics: {
@@ -26,6 +27,7 @@ interface OverviewProps {
   onIgnore: (id: string) => void;
   onResolve: (id: string) => void;
   onEmailAlert?: (alert: Alert) => void;
+  onNavigateToIncidents?: () => void;
   packetCount: number;
 }
 
@@ -38,6 +40,7 @@ export default function Overview({
   onIgnore,
   onResolve,
   onEmailAlert,
+  onNavigateToIncidents,
   packetCount
 }: OverviewProps) {
   
@@ -81,100 +84,52 @@ export default function Overview({
           </div>
         </div>
         <div className="flex items-center gap-2 text-xs font-mono text-slate-400 relative z-10 shrink-0">
-          <span className="text-[10px] uppercase text-slate-500">Sensor Status:</span>
-          <span className="text-emerald-400 font-bold">100% COVERAGE</span>
+          <span className="text-[10px] uppercase text-slate-500">Sensor Fabric:</span>
+          <span className="text-emerald-400 font-bold">SURICATA + ZEEK + AGENT</span>
         </div>
       </div>
 
-      {/* Overview Bento Grid */}
-      <section className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        
-        {/* System Health */}
-        <div className="bg-slate-900 border border-white/5 rounded-lg p-5 relative overflow-hidden group">
-          <div className="absolute top-0 right-0 p-3 opacity-10">
-            <ShieldCheck className="w-16 h-16 text-cyan-400" />
-          </div>
-          <p className="font-mono text-[10px] text-slate-400 uppercase tracking-wider">System Protection</p>
-          <div className="flex items-baseline gap-2 mt-2">
-            <span className="text-3xl font-bold text-white">Active</span>
-            <span className="text-xs font-mono text-emerald-400 flex items-center gap-1">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-              Live
-            </span>
-          </div>
-          <div className="mt-4 flex items-center justify-between text-[11px] font-mono text-slate-500">
-            <span>Uptime last 24h</span>
-            <span className="text-emerald-400">99.99%</span>
-          </div>
-        </div>
-
-        {/* Threat Severity level */}
-        <div className="bg-slate-900 border border-white/5 rounded-lg p-5 relative overflow-hidden">
-          <p className="font-mono text-[10px] text-slate-400 uppercase tracking-wider">Active Threat Index</p>
-          <div className="flex items-baseline gap-2 mt-2">
-            <span className={`text-3xl font-bold ${activeThreatLevel.color}`}>{metrics.globalThreatScore}</span>
-            <span className="text-[10px] font-mono text-slate-400">/ 100</span>
-          </div>
-          <div className="mt-4 w-full h-1.5 bg-slate-950 rounded-full overflow-hidden">
-            <div 
-              className={`h-full transition-all duration-500 ${
-                metrics.globalThreatScore > 75 ? 'bg-red-500' : metrics.globalThreatScore > 40 ? 'bg-orange-500' : 'bg-emerald-500'
-              }`}
-              style={{ width: `${metrics.globalThreatScore}%` }}
-            />
-          </div>
-        </div>
-
-        {/* Pending Alerts count */}
-        <div className={`bg-slate-900 border rounded-lg p-5 transition-colors ${
-          metrics.criticalAlerts > 0 ? 'border-red-500/20 bg-red-500/[0.02]' : 'border-white/5'
-        }`}>
-          <div className="flex justify-between items-start">
-            <p className="font-mono text-[10px] text-slate-400 uppercase tracking-wider">Active Alerts</p>
-            {metrics.criticalAlerts > 0 && (
-              <span className="flex h-2 w-2 relative">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500"></span>
-              </span>
-            )}
-          </div>
-          <div className="flex items-baseline gap-2 mt-2">
-            <span className={`text-3xl font-bold ${metrics.criticalAlerts > 0 ? 'text-red-400' : 'text-white'}`}>
-              {alerts.filter(a => a.status === 'unhandled').length}
-            </span>
-            <span className="text-xs text-slate-500">unresolved</span>
-          </div>
-          <div className="mt-4 text-[11px] font-mono text-red-400 flex items-center gap-1">
-            <AlertTriangle className="w-3.5 h-3.5" />
-            <span>{metrics.criticalAlerts} Critical unhandled</span>
-          </div>
-        </div>
-
-        {/* Connected Agent Fleet */}
-        <div className="bg-slate-900 border border-white/5 rounded-lg p-5">
-          <p className="font-mono text-[10px] text-slate-400 uppercase tracking-wider">Agent Fleet Nodes</p>
-          <div className="flex items-baseline gap-2 mt-2">
-            <span className="text-3xl font-bold text-white">{metrics.hostsOnline}</span>
-            <span className="text-xs text-slate-500">/ {metrics.hostsTotal} Online</span>
-          </div>
-          <div className="mt-4 flex items-center gap-2">
-            <div className="flex -space-x-1">
-              {hosts.map((h, i) => (
-                <div 
-                  key={h.id} 
-                  title={h.name}
-                  className={`w-4 h-4 rounded-full border border-slate-900 flex items-center justify-center text-[8px] font-bold ${
-                    h.status === 'online' ? 'bg-emerald-500 text-slate-950' : 'bg-slate-800 text-slate-500'
-                  }`}
-                >
-                  {h.os[0].toUpperCase()}
-                </div>
-              ))}
+      {/* Correlated Multi-Stage Incident Quick Access Alert */}
+      {onNavigateToIncidents && (
+        <div 
+          onClick={onNavigateToIncidents}
+          className="p-4 bg-gradient-to-r from-red-950/40 via-slate-900 to-slate-900 border border-red-500/40 hover:border-red-500/70 rounded-lg flex flex-col md:flex-row items-start md:items-center justify-between gap-4 cursor-pointer transition-all shadow-xl group"
+        >
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-lg bg-red-500/20 border border-red-500/40 text-red-400 flex items-center justify-center shrink-0">
+              <ShieldAlert className="w-5 h-5 animate-pulse" />
             </div>
-            <span className="text-[11px] font-mono text-slate-400">Deploy coverage: 98%</span>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="px-2 py-0.5 rounded bg-red-500/20 border border-red-500/40 text-red-300 text-[10px] font-mono font-bold uppercase">
+                  INC-1042 CRITICAL
+                </span>
+                <span className="text-xs font-bold text-white group-hover:text-red-300 transition-colors">
+                  Multi-Stage Web Server Compromise Correlated
+                </span>
+                <span className="text-[10px] font-mono text-cyan-400 bg-cyan-950 px-1.5 py-0.2 rounded border border-cyan-500/30">
+                  96% Confidence
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-400 mt-0.5 line-clamp-1">
+                Recon (Zeek) ➔ CVE Exploit (Suricata) ➔ Shell Spawn (Agent) ➔ C2 Outbound ➔ Persistence
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 shrink-0 text-xs font-mono font-bold text-red-300 group-hover:translate-x-1 transition-transform">
+            <span>Investigate Incident & Response</span>
+            <ArrowUpRight className="w-4 h-4" />
           </div>
         </div>
+      )}
 
+      {/* Live Global Intrusion Attempt Map (D3.js Ingress Visualizer) */}
+      <section className="w-full">
+        <RealTimeMap 
+          alerts={alerts} 
+          onSelectThreat={onNavigateToIncidents ? () => onNavigateToIncidents() : undefined} 
+        />
       </section>
 
       {/* Main Charts area */}
