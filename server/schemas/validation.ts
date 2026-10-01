@@ -21,9 +21,16 @@ export const forgotPasswordSchema = z.object({
   email: z.string().email('Invalid email address format'),
 });
 
+export const verifyResetCodeSchema = z.object({
+  email: z.string().email('Invalid email address format'),
+  code: z.string().length(6, 'Verification code must be 6 digits'),
+});
+
 export const resetPasswordSchema = z.object({
   email: z.string().email('Invalid email address format'),
+  code: z.string().length(6, 'Verification code must be 6 digits'),
   newPassword: z.string().min(6, 'New password must be at least 6 characters'),
+  confirmPassword: z.string().min(6, 'Confirm password must be at least 6 characters').optional(),
 });
 
 export const profileUpdateSchema = z.object({

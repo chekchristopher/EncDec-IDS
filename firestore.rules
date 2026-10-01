@@ -59,5 +59,9 @@ service cloud.firestore {
     match /workbookProgress/{progressId} {
       allow read, write: if true;
     }
+
+    match /certificates/{certId} {
+      allow read, write: if true; // Publicly verifiable for employer authentication
+    }
   }
 }

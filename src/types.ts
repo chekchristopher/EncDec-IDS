@@ -407,3 +407,24 @@ export interface SensorStatus {
   uptimeSeconds: number;
 }
 
+export interface StoredCertificate {
+  certificateId: string;
+  userId?: string;
+  firstName: string;
+  middleName?: string;
+  lastName: string;
+  fullName: string;
+  recipientEmail: string;
+  courseTitle: string;
+  accreditationLevel: string;
+  quizScore: number;
+  quizPassed: boolean;
+  issueDate: string;
+  verificationCode: string;
+  verifiedAt: string;
+  verificationUrl: string;
+  qrCodeDataUrl?: string;
+  status: 'active' | 'revoked';
+  attestationStatement: string;
+}
+

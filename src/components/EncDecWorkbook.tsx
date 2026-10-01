@@ -10,11 +10,16 @@ import {
   Layers, Lock, ExternalLink, HelpCircle, ArrowRight, Award,
   CheckCircle2, Eye, RotateCcw, X, Share2, Printer, Star,
   Bookmark, Cloud, MapPin, Check, AlertCircle, HelpCircle as QuizIcon,
-  RefreshCw, CheckSquare
+  RefreshCw, CheckSquare, Copy, FileCheck, ShieldAlert, Award as CertIcon,
+  User, CheckCheck, SlidersHorizontal
 } from 'lucide-react';
 import { apiRequest } from '../api.js';
 import { WORKBOOK_DATA, generateWorkbookPdf } from '../services/workbookPdf.js';
-import { generateCertificatePdf, CertificateData } from '../services/certificatePdf.js';
+import { 
+  generateCertificatePdf, 
+  createCertificatePdfDoc, 
+  CertificateData 
+} from '../services/certificatePdf.js';
 
 interface EncDecWorkbookProps {
   currentUser?: {
@@ -119,6 +124,21 @@ const STORAGE_READ_KEY = 'encdec_workbook_read_chapters';
 const STORAGE_POS_KEY = 'encdec_workbook_last_position';
 const STORAGE_QUIZ_KEY = 'encdec_workbook_quiz_status';
 
+/**
+ * Splits a full name string into First, Middle, and Last name components.
+ */
+function parseNameParts(fullName: string) {
+  const parts = (fullName || '').trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return { first: 'Chris', middle: '', last: 'Analyst' };
+  if (parts.length === 1) return { first: parts[0], middle: '', last: '' };
+  if (parts.length === 2) return { first: parts[0], middle: '', last: parts[1] };
+  return { 
+    first: parts[0], 
+    middle: parts.slice(1, -1).join(' '), 
+    last: parts[parts.length - 1] 
+  };
+}
+
 export default function EncDecWorkbook({ currentUser }: EncDecWorkbookProps) {
   const [activeChapterIndex, setActiveChapterIndex] = useState(0);
   const [lastReadParagraphIndex, setLastReadParagraphIndex] = useState(0);
@@ -126,8 +146,8 @@ export default function EncDecWorkbook({ currentUser }: EncDecWorkbookProps) {
   const [downloading, setDownloading] = useState(false);
   const [downloadingCert, setDownloadingCert] = useState(false);
 
-  // View state: reading regular chapter vs taking capstone quiz
-  const [isQuizMode, setIsQuizMode] = useState(false);
+  // View state: 'reader' | 'quiz' | 'certificate_download'
+  const [activeView, setActiveView] = useState<'reader' | 'quiz' | 'certificate_download'>('reader');
 
   // Database Persistence States
   const [isSyncingWithDb, setIsSyncingWithDb] = useState(false);
@@ -152,15 +172,30 @@ export default function EncDecWorkbook({ currentUser }: EncDecWorkbookProps) {
     }
   });
 
-  // Modals
+  // Candidate Name Arrangement States (First, Middle, Last)
+  const initialNameParts = parseNameParts(currentUser?.name || 'Chris Analyst');
+  const [candidateFirstName, setCandidateFirstName] = useState(initialNameParts.first);
+  const [candidateMiddleName, setCandidateMiddleName] = useState(initialNameParts.middle);
+  const [candidateLastName, setCandidateLastName] = useState(initialNameParts.last);
+  const [nameArrangementFormat, setNameArrangementFormat] = useState<'standard' | 'initial' | 'surname_first'>('standard');
+  const [showNameModal, setShowNameModal] = useState(false);
+  const [pendingActionAfterName, setPendingActionAfterName] = useState<'download' | 'print' | null>(null);
+  const [nameError, setNameError] = useState<string | null>(null);
+
+  // Modals & UI States
   const [showSampleCert, setShowSampleCert] = useState(false);
   const [showEarnedCertModal, setShowEarnedCertModal] = useState(false);
-  const [recipientName, setRecipientName] = useState(currentUser?.name || 'Chris Analyst');
   const [recipientEmail, setRecipientEmail] = useState(currentUser?.email || 'chekchris85@gmail.com');
+  const [copiedHash, setCopiedHash] = useState(false);
 
   // Sync recipient details if currentUser changes
   useEffect(() => {
-    if (currentUser?.name) setRecipientName(currentUser.name);
+    if (currentUser?.name) {
+      const parts = parseNameParts(currentUser.name);
+      setCandidateFirstName(parts.first);
+      setCandidateMiddleName(parts.middle);
+      setCandidateLastName(parts.last);
+    }
     if (currentUser?.email) setRecipientEmail(currentUser.email);
   }, [currentUser]);
 
@@ -258,9 +293,7 @@ export default function EncDecWorkbook({ currentUser }: EncDecWorkbookProps) {
 
   // Jump to last saved paragraph position
   const handleScrollToLastRead = () => {
-    if (isQuizMode) {
-      setIsQuizMode(false);
-    }
+    setActiveView('reader');
     setTimeout(() => {
       const el = document.getElementById(`workbook-paragraph-${lastReadParagraphIndex}`);
       if (el) {
@@ -284,19 +317,21 @@ export default function EncDecWorkbook({ currentUser }: EncDecWorkbookProps) {
       const nextIdx = activeChapterIndex + 1;
       setActiveChapterIndex(nextIdx);
       setLastReadParagraphIndex(0);
-      setIsQuizMode(false);
+      setActiveView('reader');
       persistProgressToDb(nextIdx, 0);
       window.scrollTo({ top: 120, behavior: 'smooth' });
     } else {
-      // Transition from Chapter 10 to Knowledge Check Quiz!
-      setIsQuizMode(true);
+      setActiveView('quiz');
       window.scrollTo({ top: 120, behavior: 'smooth' });
     }
   };
 
   const handlePrevChapter = () => {
-    if (isQuizMode) {
-      setIsQuizMode(false);
+    if (activeView === 'certificate_download') {
+      setActiveView('quiz');
+      window.scrollTo({ top: 120, behavior: 'smooth' });
+    } else if (activeView === 'quiz') {
+      setActiveView('reader');
       setActiveChapterIndex(totalChapters - 1);
       window.scrollTo({ top: 120, behavior: 'smooth' });
     } else if (activeChapterIndex > 0) {
@@ -353,7 +388,6 @@ export default function EncDecWorkbook({ currentUser }: EncDecWorkbookProps) {
     setQuizSubmitted(true);
     setQuizError(null);
 
-    // Persist quiz result to database
     await persistProgressToDb(
       activeChapterIndex, 
       lastReadParagraphIndex, 
@@ -363,7 +397,6 @@ export default function EncDecWorkbook({ currentUser }: EncDecWorkbookProps) {
     );
 
     if (passed) {
-      // Automatically present the official certificate award modal upon passing!
       setTimeout(() => {
         setShowEarnedCertModal(true);
       }, 700);
@@ -376,14 +409,44 @@ export default function EncDecWorkbook({ currentUser }: EncDecWorkbookProps) {
     setQuizError(null);
   };
 
+  // Computes the arranged full name based on candidate's First, Middle, Last and format
+  const getArrangedFullName = (
+    first = candidateFirstName, 
+    middle = candidateMiddleName, 
+    last = candidateLastName, 
+    format = nameArrangementFormat
+  ): string => {
+    const f = first.trim();
+    const m = middle.trim();
+    const l = last.trim();
+
+    if (!f && !l) return 'Security Operations Specialist';
+
+    if (format === 'initial' && m) {
+      const initial = m[0].toUpperCase() + '.';
+      return [f, initial, l].filter(Boolean).join(' ');
+    }
+
+    if (format === 'surname_first' && l) {
+      const rest = [f, m].filter(Boolean).join(' ');
+      return rest ? `${l.toUpperCase()}, ${rest}` : l.toUpperCase();
+    }
+
+    // Default Standard: First Middle Last
+    return [f, m, l].filter(Boolean).join(' ');
+  };
+
+  const currentArrangedFullName = getArrangedFullName();
+
+  // Certificate Data Factory
   const generateCertData = (isSample = false): CertificateData => {
     const certNumber = isSample 
       ? 'CERT-ENCDEC-SAMPLE-2026' 
       : `CERT-ENCDEC-${new Date().getFullYear()}-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
 
     return {
-      recipientName: isSample ? 'Alexandra Vance (Sample Candidate)' : recipientName,
-      recipientEmail: isSample ? 'alex.vance@enterprise.sec' : recipientEmail,
+      recipientName: isSample ? 'Alexandra Vance (Sample Candidate)' : (currentArrangedFullName || 'Security Operations Specialist'),
+      recipientEmail: isSample ? 'alex.vance@enterprise.sec' : (recipientEmail.trim() || 'operator@coou.edu.ng'),
       certificateId: certNumber,
       issueDate: new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }),
       courseTitle: 'Certified EncDec IDS SOC Specialist (CE-SOC)',
@@ -395,6 +458,7 @@ export default function EncDecWorkbook({ currentUser }: EncDecWorkbookProps) {
     };
   };
 
+  // Certificate Download Action
   const handleDownloadCertificate = (isSample = false) => {
     setDownloadingCert(true);
     try {
@@ -407,6 +471,80 @@ export default function EncDecWorkbook({ currentUser }: EncDecWorkbookProps) {
     }
   };
 
+  // Direct Browser Print Certificate Action (using hidden iframe)
+  const handlePrintCertificate = () => {
+    try {
+      const certData = generateCertData(false);
+      const pdfDoc = createCertificatePdfDoc(certData);
+      const blob = pdfDoc.output('blob');
+      const blobUrl = URL.createObjectURL(blob);
+      const printFrame = document.createElement('iframe');
+      printFrame.style.position = 'fixed';
+      printFrame.style.right = '0';
+      printFrame.style.bottom = '0';
+      printFrame.style.width = '0';
+      printFrame.style.height = '0';
+      printFrame.style.border = '0';
+      printFrame.src = blobUrl;
+      document.body.appendChild(printFrame);
+      printFrame.onload = () => {
+        setTimeout(() => {
+          printFrame.contentWindow?.focus();
+          printFrame.contentWindow?.print();
+        }, 200);
+      };
+    } catch (err) {
+      console.error('Print iframe failed:', err);
+      window.print();
+    }
+  };
+
+  // Initiate action with Name Prompt Verification first
+  const initiatePrint = () => {
+    setPendingActionAfterName('print');
+    setNameError(null);
+    setShowNameModal(true);
+  };
+
+  const initiateDownload = (isSample = false) => {
+    if (isSample) {
+      handleDownloadCertificate(true);
+      return;
+    }
+    setPendingActionAfterName('download');
+    setNameError(null);
+    setShowNameModal(true);
+  };
+
+  const handleConfirmNameAndProceed = () => {
+    if (!candidateFirstName.trim()) {
+      setNameError('Please enter candidate First Name.');
+      return;
+    }
+    if (!candidateLastName.trim()) {
+      setNameError('Please enter candidate Last Name / Surname.');
+      return;
+    }
+    setNameError(null);
+    setShowNameModal(false);
+
+    const action = pendingActionAfterName;
+    setPendingActionAfterName(null);
+
+    if (action === 'print') {
+      handlePrintCertificate();
+    } else {
+      handleDownloadCertificate(false);
+    }
+  };
+
+  const handleCopyVerificationHash = (hash: string) => {
+    navigator.clipboard.writeText(hash).then(() => {
+      setCopiedHash(true);
+      setTimeout(() => setCopiedHash(false), 2500);
+    });
+  };
+
   const filteredSections = WORKBOOK_DATA.filter((sec) => 
     sec.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
     sec.summary.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -417,7 +555,7 @@ export default function EncDecWorkbook({ currentUser }: EncDecWorkbookProps) {
     <div className="space-y-6 animate-fadeIn" id="encdec-workbook-view">
       
       {/* ============================================================== */}
-      {/* PROMINENT TOP CERTIFICATION PROGRESS TRACKING BAR               */}
+      {/* PROMINENT TOP CERTIFICATION PROGRESS & DOWNLOAD BAR             */}
       {/* ============================================================== */}
       <div className="bg-slate-900/95 border-2 border-cyan-500/40 rounded-2xl p-5 sm:p-6 shadow-[0_0_30px_rgba(6,182,212,0.15)] relative overflow-hidden backdrop-blur-md" id="workbook-top-progress-bar">
         <div className="absolute -right-10 -top-10 w-64 h-64 bg-cyan-500/10 rounded-full blur-3xl pointer-events-none" />
@@ -460,16 +598,17 @@ export default function EncDecWorkbook({ currentUser }: EncDecWorkbookProps) {
 
               <p className="text-xs text-slate-300 font-mono">
                 {isCertified ? (
-                  <span className="text-emerald-400 font-bold">
-                    🎉 Curriculum and Capstone Knowledge Check passed ({quizScore}%)! You are certified as a Certified EncDec IDS SOC Specialist (CE-SOC).
+                  <span className="text-emerald-400 font-bold flex items-center gap-1.5">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                    <span>Official CE-SOC Credential unlocked for {currentArrangedFullName}! Download or print your high-resolution certificate PDF below.</span>
                   </span>
                 ) : isChaptersFinished && !quizPassed ? (
                   <span className="text-amber-300 font-bold">
-                    ★ All 10 chapters read! Pass the Capstone Knowledge Check (80% score required) below to unlock your official certificate.
+                    ★ All 10 chapters completed! Pass the Capstone Knowledge Check (80% minimum) to unlock high-resolution certificate PDF download.
                   </span>
                 ) : (
                   <span>
-                    Read all 10 chapters and pass the Capstone Knowledge Check to automatically receive your verified <strong>Certified EncDec IDS SOC Specialist (CE-SOC)</strong> credential.
+                    Complete all 10 chapters and pass the Capstone Knowledge Check to download your verified <strong>Certified EncDec IDS SOC Specialist (CE-SOC)</strong> PDF certificate.
                   </span>
                 )}
               </p>
@@ -490,48 +629,34 @@ export default function EncDecWorkbook({ currentUser }: EncDecWorkbookProps) {
               <div className="text-right hidden sm:block">
                 <span className="text-[10px] text-slate-400 uppercase block">Curriculum Status</span>
                 <span className="text-xs font-bold text-white">
-                  {readChapters.length}/10 Chapters • Quiz: {quizPassed ? 'Passed ✓' : 'Pending'}
+                  {readChapters.length}/10 Chapters • Quiz: {quizPassed ? `Passed (${quizScore}%)` : 'Pending'}
                 </span>
                 <span className="text-[10px] text-cyan-400 block">
                   {isCertified 
-                    ? 'All requirements satisfied' 
+                    ? 'Certificate Ready For Download' 
                     : !isChaptersFinished 
                     ? `${totalChapters - readChapters.length} chapter(s) remaining` 
-                    : 'Pass quiz to unlock certificate'}
+                    : 'Pass quiz to unlock PDF'}
                 </span>
               </div>
 
-              {isCertified ? (
-                <button
-                  onClick={() => setShowEarnedCertModal(true)}
-                  className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 font-bold text-xs flex items-center gap-1.5 transition-all shadow-[0_0_20px_rgba(16,185,129,0.4)] animate-pulse cursor-pointer shrink-0"
-                  id="btn-claim-certificate-top"
-                >
-                  <Award className="w-4 h-4" />
-                  <span>Claim Certificate</span>
-                </button>
-              ) : isChaptersFinished ? (
-                <button
-                  onClick={() => {
-                    setIsQuizMode(true);
-                    window.scrollTo({ top: 120, behavior: 'smooth' });
-                  }}
-                  className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 font-bold text-xs flex items-center gap-1.5 transition-all shadow-[0_0_15px_rgba(245,158,11,0.3)] cursor-pointer shrink-0 animate-pulse"
-                  id="btn-start-quiz-top"
-                >
-                  <QuizIcon className="w-4 h-4" />
-                  <span>Take Knowledge Check</span>
-                </button>
-              ) : (
-                <button
-                  onClick={() => setShowSampleCert(true)}
-                  className="px-3.5 py-2 rounded-xl bg-slate-950 hover:bg-slate-800 text-amber-300 border border-amber-500/30 hover:border-amber-400 text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer shadow-sm shrink-0"
-                  id="btn-preview-sample-top"
-                >
-                  <Eye className="w-3.5 h-3.5 text-amber-400" />
-                  <span>Preview Cert Sample</span>
-                </button>
-              )}
+              {/* Dedicated Certificate Download Feature Trigger */}
+              <button
+                onClick={() => {
+                  setActiveView('certificate_download');
+                  window.scrollTo({ top: 180, behavior: 'smooth' });
+                }}
+                className={`px-4 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 transition-all cursor-pointer shadow-md hover:scale-105 active:scale-95 shrink-0 ${
+                  isCertified
+                    ? 'bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-500 hover:from-emerald-400 hover:to-cyan-400 text-slate-950 shadow-[0_0_20px_rgba(16,185,129,0.4)] animate-pulse'
+                    : 'bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40'
+                }`}
+                id="btn-certificate-download-feature-top"
+                title="Open the Certificate Download Station"
+              >
+                <Download className="w-4 h-4" />
+                <span>{isCertified ? 'Download Certificate (PDF)' : 'Certificate Download Station'}</span>
+              </button>
             </div>
           </div>
 
@@ -549,30 +674,30 @@ export default function EncDecWorkbook({ currentUser }: EncDecWorkbookProps) {
               <span className="text-cyan-400 font-bold">
                 {completionPercentage}% Progress ({readChapters.length}/10 Modules + {quizPassed ? 'Quiz Passed' : 'Quiz Required'})
               </span>
-              <span>Final: CE-SOC Credential</span>
+              <span>Candidate: <strong className="text-white">{currentArrangedFullName}</strong></span>
             </div>
           </div>
 
-          {/* Interactive Stepper Nodes (Chapters 1 to 10 + Final Quiz) */}
+          {/* Interactive Stepper Nodes (Chapters 1 to 10 + Final Quiz + Certificate Download) */}
           <div className="pt-2 border-t border-white/5">
             <div className="text-[10px] font-mono text-slate-400 mb-2 flex items-center justify-between">
-              <span>Curriculum & Assessment Stepper (Click any module or the Knowledge Check exam):</span>
+              <span>Curriculum & Certification Stepper:</span>
               <span className="text-slate-500">
-                80% Quiz Score Required for Certificate
+                A4 Landscape High-Resolution PDF Issuance
               </span>
             </div>
 
-            <div className="grid grid-cols-6 sm:grid-cols-11 gap-1.5 sm:gap-2">
+            <div className="grid grid-cols-6 sm:grid-cols-12 gap-1.5 sm:gap-2">
               {WORKBOOK_DATA.map((ch, idx) => {
                 const isRead = readChapters.includes(idx);
-                const isCurrent = !isQuizMode && activeChapterIndex === idx;
+                const isCurrent = activeView === 'reader' && activeChapterIndex === idx;
 
                 return (
                   <button
                     key={idx}
                     type="button"
                     onClick={() => {
-                      setIsQuizMode(false);
+                      setActiveView('reader');
                       setActiveChapterIndex(idx);
                       window.scrollTo({ top: 220, behavior: 'smooth' });
                     }}
@@ -603,12 +728,12 @@ export default function EncDecWorkbook({ currentUser }: EncDecWorkbookProps) {
               <button
                 type="button"
                 onClick={() => {
-                  setIsQuizMode(true);
+                  setActiveView('quiz');
                   window.scrollTo({ top: 220, behavior: 'smooth' });
                 }}
                 title="Capstone Knowledge Check Quiz"
                 className={`py-2 px-1 rounded-lg text-center font-mono text-xs transition-all cursor-pointer border flex flex-col items-center justify-center gap-1 ${
-                  isQuizMode
+                  activeView === 'quiz'
                     ? 'bg-amber-500/20 border-amber-400 text-amber-300 shadow-[0_0_12px_rgba(245,158,11,0.3)] ring-1 ring-amber-400'
                     : quizPassed
                     ? 'bg-emerald-950/50 border-emerald-400 text-emerald-300'
@@ -624,6 +749,31 @@ export default function EncDecWorkbook({ currentUser }: EncDecWorkbookProps) {
                 </div>
                 <span className="text-[9px] font-bold tracking-tighter truncate w-full block">
                   Exam
+                </span>
+              </button>
+
+              {/* 12th Node: Certificate Download Feature */}
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveView('certificate_download');
+                  window.scrollTo({ top: 220, behavior: 'smooth' });
+                }}
+                title="Certificate Download Feature"
+                className={`py-2 px-1 rounded-lg text-center font-mono text-xs transition-all cursor-pointer border flex flex-col items-center justify-center gap-1 ${
+                  activeView === 'certificate_download'
+                    ? 'bg-emerald-500/25 border-emerald-400 text-emerald-300 shadow-[0_0_15px_rgba(16,185,129,0.3)] ring-1 ring-emerald-400'
+                    : isCertified
+                    ? 'bg-emerald-950/70 border-emerald-400/80 text-emerald-300 animate-pulse'
+                    : 'bg-slate-950 border-white/10 text-slate-400 hover:border-emerald-500/30 hover:text-white'
+                }`}
+                id="btn-stepper-cert-download"
+              >
+                <div className="flex items-center justify-center">
+                  <Download className={`w-3.5 h-3.5 ${isCertified ? 'text-emerald-400' : 'text-slate-400'}`} />
+                </div>
+                <span className="text-[9px] font-bold tracking-tighter truncate w-full block">
+                  Cert PDF
                 </span>
               </button>
             </div>
@@ -649,27 +799,30 @@ export default function EncDecWorkbook({ currentUser }: EncDecWorkbookProps) {
               <span className="px-2.5 py-0.5 rounded-full bg-cyan-500/10 border border-cyan-500/30 text-cyan-400 font-mono text-[10px] font-bold uppercase">
                 Upgraded v4.2 Software Edition
               </span>
-              <span className="px-2.5 py-0.5 rounded-full bg-amber-500/10 border border-amber-500/30 text-amber-300 font-mono text-[10px] font-bold uppercase flex items-center gap-1">
-                <Award className="w-3 h-3 text-amber-400" />
-                Accredited Knowledge Check Required
+              <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 font-mono text-[10px] font-bold uppercase flex items-center gap-1">
+                <FileCheck className="w-3 h-3 text-emerald-400" />
+                Proper Candidate Name Arrangement
               </span>
             </div>
             <p className="text-xs text-slate-300 font-mono mt-1.5 max-w-2xl leading-relaxed">
-              Complete 10-Chapter master operational curriculum and Capstone Knowledge Check explaining DPI packet sniffing, TopoJSON geodesic radar, distributed sensor fabric, dual database architecture, and SOC incident triage.
+              Complete 10-Chapter master operational curriculum and Capstone Knowledge Check. Verify candidate first, middle, and last name for proper academic arrangement before printing or downloading your high-resolution certificate.
             </p>
           </div>
         </div>
 
-        {/* Action Controls: Download PDF & Sample Certificate */}
+        {/* Action Controls */}
         <div className="flex flex-wrap items-center gap-3 relative z-10 shrink-0">
           <button
-            onClick={() => setShowSampleCert(true)}
-            className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-slate-950/80 hover:bg-slate-800 text-amber-300 border border-amber-500/30 hover:border-amber-400 font-mono text-xs font-semibold transition-all cursor-pointer shadow-sm hover:scale-105 active:scale-95"
-            title="Inspect sample certificate"
-            id="btn-view-sample-cert"
+            onClick={() => {
+              setActiveView('certificate_download');
+              window.scrollTo({ top: 180, behavior: 'smooth' });
+            }}
+            className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-slate-950/90 hover:bg-slate-800 text-emerald-400 border border-emerald-500/30 hover:border-emerald-400 font-mono text-xs font-bold transition-all cursor-pointer shadow-sm hover:scale-105 active:scale-95"
+            title="Open Certificate Download Feature"
+            id="btn-header-open-cert-download"
           >
-            <Eye className="w-4 h-4 text-amber-400" />
-            <span>View Sample Certificate</span>
+            <CertIcon className="w-4 h-4 text-emerald-400" />
+            <span>Certificate Download Station</span>
           </button>
 
           <button
@@ -684,10 +837,10 @@ export default function EncDecWorkbook({ currentUser }: EncDecWorkbookProps) {
         </div>
       </div>
 
-      {/* Main Grid: Chapter Navigation & Reader OR Quiz Mode */}
+      {/* Main Grid: Chapter Navigation & Active View */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
         
-        {/* Left Column: Chapters Directory & Assessment Shortcut */}
+        {/* Left Column: Chapters Directory, Assessment & Certificate Download Links */}
         <div className="lg:col-span-4 space-y-4">
           
           {/* Search Box */}
@@ -711,17 +864,17 @@ export default function EncDecWorkbook({ currentUser }: EncDecWorkbookProps) {
               <span className="text-[10px] text-cyan-400">{readChapters.length}/{totalChapters} Read</span>
             </div>
 
-            <div className="space-y-1 max-h-[500px] overflow-y-auto pr-1">
+            <div className="space-y-1 max-h-[440px] overflow-y-auto pr-1">
               {filteredSections.map((sec) => {
                 const originalIndex = WORKBOOK_DATA.findIndex(s => s.chapter === sec.chapter);
-                const isSelected = !isQuizMode && originalIndex === activeChapterIndex;
+                const isSelected = activeView === 'reader' && originalIndex === activeChapterIndex;
                 const isRead = readChapters.includes(originalIndex);
 
                 return (
                   <button
                     key={sec.chapter}
                     onClick={() => {
-                      setIsQuizMode(false);
+                      setActiveView('reader');
                       setActiveChapterIndex(originalIndex);
                     }}
                     className={`w-full text-left p-2.5 rounded-lg text-xs transition-all flex items-start gap-2.5 cursor-pointer border ${
@@ -761,14 +914,14 @@ export default function EncDecWorkbook({ currentUser }: EncDecWorkbookProps) {
             </div>
 
             {/* Assessment Button in Left Sidebar */}
-            <div className="pt-2 border-t border-white/5">
+            <div className="pt-2 border-t border-white/5 space-y-1.5">
               <button
                 onClick={() => {
-                  setIsQuizMode(true);
+                  setActiveView('quiz');
                   window.scrollTo({ top: 120, behavior: 'smooth' });
                 }}
-                className={`w-full p-3 rounded-xl border text-left text-xs transition-all flex items-center justify-between gap-2 cursor-pointer font-mono ${
-                  isQuizMode
+                className={`w-full p-2.5 rounded-xl border text-left text-xs transition-all flex items-center justify-between gap-2 cursor-pointer font-mono ${
+                  activeView === 'quiz'
                     ? 'bg-amber-500/20 border-amber-400 text-amber-300 shadow-[0_0_15px_rgba(245,158,11,0.2)]'
                     : quizPassed
                     ? 'bg-emerald-950/30 border-emerald-500/30 text-emerald-300'
@@ -793,10 +946,42 @@ export default function EncDecWorkbook({ currentUser }: EncDecWorkbookProps) {
                   </span>
                 )}
               </button>
+
+              {/* DEDICATED CERTIFICATE DOWNLOAD BUTTON IN SIDEBAR */}
+              <button
+                onClick={() => {
+                  setActiveView('certificate_download');
+                  window.scrollTo({ top: 120, behavior: 'smooth' });
+                }}
+                className={`w-full p-2.5 rounded-xl border text-left text-xs transition-all flex items-center justify-between gap-2 cursor-pointer font-mono ${
+                  activeView === 'certificate_download'
+                    ? 'bg-emerald-500/20 border-emerald-400 text-emerald-300 shadow-[0_0_15px_rgba(16,185,129,0.2)] ring-1 ring-emerald-400'
+                    : isCertified
+                    ? 'bg-slate-950 border-emerald-500/40 text-emerald-300 hover:border-emerald-400 hover:bg-emerald-950/20'
+                    : 'bg-slate-950 border-white/10 text-slate-400 hover:border-white/20 hover:text-white'
+                }`}
+                id="btn-sidebar-cert-download"
+              >
+                <div className="flex items-center gap-2">
+                  <Download className={`w-4 h-4 shrink-0 ${isCertified ? 'text-emerald-400' : 'text-slate-400'}`} />
+                  <div>
+                    <span className="text-[10px] uppercase font-bold block">Accreditation Feature</span>
+                    <span className="text-xs font-bold text-white">Certificate Download</span>
+                  </div>
+                </div>
+
+                <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
+                  isCertified 
+                    ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' 
+                    : 'bg-slate-800 text-slate-400'
+                }`}>
+                  {isCertified ? 'PDF Ready' : 'Requirements'}
+                </span>
+              </button>
             </div>
           </div>
 
-          {/* Quick Offline Download Card */}
+          {/* Quick Offline PDF Card */}
           <div className="p-4 rounded-xl bg-slate-900 border border-white/5 font-mono text-xs space-y-2">
             <div className="flex items-center gap-2 text-cyan-400 font-bold">
               <Download className="w-4 h-4" />
@@ -817,13 +1002,391 @@ export default function EncDecWorkbook({ currentUser }: EncDecWorkbookProps) {
 
         </div>
 
-        {/* Right Column: Active View (Quiz Mode vs. Chapter Reader) */}
+        {/* Right Column: Active View */}
         <div className="lg:col-span-8 space-y-5">
           
-          {isQuizMode ? (
-            /* ============================================================== */
-            /* KNOWLEDGE CHECK QUIZ COMPONENT                                 */
-            /* ============================================================== */
+          {/* ================================================================ */}
+          {/* VIEW 1: DEDICATED CERTIFICATE DOWNLOAD & PRINTING FEATURE        */}
+          {/* ================================================================ */}
+          {activeView === 'certificate_download' && (
+            <div className="bg-slate-900 border-2 border-emerald-500/40 rounded-2xl p-6 sm:p-8 space-y-6 shadow-2xl relative font-mono animate-fadeIn" id="certificate-download-station">
+              
+              {/* Header */}
+              <div className="border-b border-white/10 pb-5 space-y-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="px-3 py-1 rounded bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs font-bold uppercase flex items-center gap-1.5">
+                    <Award className="w-4 h-4" />
+                    High-Resolution PDF Certificate Issuance Station
+                  </span>
+
+                  <span className="text-xs text-slate-400">
+                    Format: <strong className="text-white">A4 Landscape Vector (300 DPI)</strong>
+                  </span>
+                </div>
+
+                <h2 className="text-xl sm:text-2xl font-bold text-white font-sans tracking-tight">
+                  Certificate of Operational Mastery: CE-SOC
+                </h2>
+
+                <p className="text-xs text-slate-300 leading-relaxed bg-slate-950/80 p-3.5 rounded-xl border border-white/5">
+                  Before printing or downloading your certificate, verify candidate <strong>First Name, Middle Name, and Last Name</strong> below so that the full name is arranged properly in the certificate. Conferred by the EncDec Cybersecurity Academy & Threat Research Lab with institutional endorsement from COOU.
+                </p>
+              </div>
+
+              {/* Status / Requirement Checklist */}
+              <div className={`p-4 rounded-xl border space-y-3 ${
+                isCertified 
+                  ? 'bg-emerald-950/30 border-emerald-500/50' 
+                  : 'bg-amber-950/30 border-amber-500/40'
+              }`}>
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-bold uppercase text-white flex items-center gap-2">
+                    {isCertified ? (
+                      <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                    ) : (
+                      <AlertCircle className="w-4 h-4 text-amber-400" />
+                    )}
+                    <span>Credential Accreditation Status:</span>
+                  </h4>
+
+                  <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded ${
+                    isCertified 
+                      ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' 
+                      : 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                  }`}>
+                    {isCertified ? 'Qualified & Verified' : 'In Progress'}
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+                  <div className="p-2.5 rounded-lg bg-slate-950/60 border border-white/5 flex items-center gap-2">
+                    {isChaptersFinished ? (
+                      <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                    ) : (
+                      <div className="w-4 h-4 rounded-full border border-slate-600 flex items-center justify-center text-[9px] text-slate-500">
+                        {readChapters.length}/10
+                      </div>
+                    )}
+                    <div>
+                      <span className="text-[10px] text-slate-400 uppercase block">1. Modules Read</span>
+                      <span className="text-white font-bold">{readChapters.length} of 10 Read</span>
+                    </div>
+                  </div>
+
+                  <div className="p-2.5 rounded-lg bg-slate-950/60 border border-white/5 flex items-center gap-2">
+                    {quizPassed ? (
+                      <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                    ) : (
+                      <QuizIcon className="w-4 h-4 text-amber-400 shrink-0" />
+                    )}
+                    <div>
+                      <span className="text-[10px] text-slate-400 uppercase block">2. Knowledge Check</span>
+                      <span className="text-white font-bold">{quizPassed ? `Passed (${quizScore}%)` : 'Pending (80% req.)'}</span>
+                    </div>
+                  </div>
+
+                  <div className="p-2.5 rounded-lg bg-slate-950/60 border border-white/5 flex items-center gap-2">
+                    <Cloud className="w-4 h-4 text-cyan-400 shrink-0" />
+                    <div>
+                      <span className="text-[10px] text-slate-400 uppercase block">3. DB Accreditation</span>
+                      <span className="text-white font-bold">Cloud Synced ✓</span>
+                    </div>
+                  </div>
+                </div>
+
+                {!isCertified && (
+                  <div className="flex items-center justify-between pt-1">
+                    <p className="text-[11px] text-amber-200/90">
+                      {!isChaptersFinished 
+                        ? `Please complete all 10 modules (${totalChapters - readChapters.length} remaining) and pass the Knowledge Check.`
+                        : 'Pass the Capstone Knowledge Check (80% required) to unlock your official high-resolution PDF download.'}
+                    </p>
+                    <button
+                      onClick={() => {
+                        if (!isChaptersFinished) {
+                          setActiveView('reader');
+                        } else {
+                          setActiveView('quiz');
+                        }
+                        window.scrollTo({ top: 120, behavior: 'smooth' });
+                      }}
+                      className="px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs cursor-pointer shrink-0 transition-colors"
+                    >
+                      {!isChaptersFinished ? 'Continue Reading →' : 'Take Knowledge Check →'}
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {/* CANDIDATE NAME ARRANGEMENT FORM (FIRST, MIDDLE, LAST) */}
+              <div className="bg-slate-950 p-5 rounded-xl border border-cyan-500/30 space-y-4 shadow-lg">
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 pb-3">
+                  <div className="flex items-center gap-2 text-cyan-400 font-bold text-xs uppercase tracking-wider">
+                    <User className="w-4 h-4 text-cyan-400" />
+                    <span>Candidate Name Verification & Arrangement</span>
+                  </div>
+                  <span className="text-[10px] text-emerald-400 font-bold flex items-center gap-1">
+                    <CheckCheck className="w-3.5 h-3.5" />
+                    <span>Arranged properly for certificate</span>
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  {/* First Name */}
+                  <div className="space-y-1">
+                    <label className="text-[10px] text-slate-400 uppercase font-bold flex items-center justify-between">
+                      <span>First Name (Given)</span>
+                      <span className="text-red-400">*Required</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={candidateFirstName}
+                      onChange={(e) => setCandidateFirstName(e.target.value)}
+                      placeholder="e.g. Christopher"
+                      className="w-full bg-slate-900 border border-white/15 focus:border-cyan-400 rounded-lg px-3 py-2 text-xs text-white focus:outline-none font-mono"
+                    />
+                  </div>
+
+                  {/* Middle Name */}
+                  <div className="space-y-1">
+                    <label className="text-[10px] text-slate-400 uppercase font-bold flex items-center justify-between">
+                      <span>Middle Name</span>
+                      <span className="text-slate-500">Optional</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={candidateMiddleName}
+                      onChange={(e) => setCandidateMiddleName(e.target.value)}
+                      placeholder="e.g. Chukwudi (or C.)"
+                      className="w-full bg-slate-900 border border-white/15 focus:border-cyan-400 rounded-lg px-3 py-2 text-xs text-white focus:outline-none font-mono"
+                    />
+                  </div>
+
+                  {/* Last Name */}
+                  <div className="space-y-1">
+                    <label className="text-[10px] text-slate-400 uppercase font-bold flex items-center justify-between">
+                      <span>Last Name (Surname)</span>
+                      <span className="text-red-400">*Required</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={candidateLastName}
+                      onChange={(e) => setCandidateLastName(e.target.value)}
+                      placeholder="e.g. Okeke"
+                      className="w-full bg-slate-900 border border-white/15 focus:border-cyan-400 rounded-lg px-3 py-2 text-xs text-white focus:outline-none font-mono"
+                    />
+                  </div>
+                </div>
+
+                {/* Name Arrangement Style Selector */}
+                <div className="pt-2 border-t border-white/5 space-y-2">
+                  <div className="flex items-center justify-between text-[11px] text-slate-400">
+                    <span className="flex items-center gap-1.5 font-bold">
+                      <SlidersHorizontal className="w-3.5 h-3.5 text-cyan-400" />
+                      <span>Select Name Arrangement Format on Certificate:</span>
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
+                    <button
+                      type="button"
+                      onClick={() => setNameArrangementFormat('standard')}
+                      className={`p-2.5 rounded-lg border text-left cursor-pointer transition-all ${
+                        nameArrangementFormat === 'standard'
+                          ? 'bg-cyan-500/15 border-cyan-400 text-white font-bold ring-1 ring-cyan-400'
+                          : 'bg-slate-900/60 border-white/10 text-slate-400 hover:border-white/25'
+                      }`}
+                    >
+                      <span className="text-[10px] uppercase text-cyan-400 block font-bold">Standard Full Name</span>
+                      <span className="truncate block font-mono text-[11px]">
+                        {getArrangedFullName(candidateFirstName, candidateMiddleName, candidateLastName, 'standard')}
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setNameArrangementFormat('initial')}
+                      className={`p-2.5 rounded-lg border text-left cursor-pointer transition-all ${
+                        nameArrangementFormat === 'initial'
+                          ? 'bg-cyan-500/15 border-cyan-400 text-white font-bold ring-1 ring-cyan-400'
+                          : 'bg-slate-900/60 border-white/10 text-slate-400 hover:border-white/25'
+                      }`}
+                    >
+                      <span className="text-[10px] uppercase text-cyan-400 block font-bold">With Middle Initial</span>
+                      <span className="truncate block font-mono text-[11px]">
+                        {getArrangedFullName(candidateFirstName, candidateMiddleName, candidateLastName, 'initial')}
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setNameArrangementFormat('surname_first')}
+                      className={`p-2.5 rounded-lg border text-left cursor-pointer transition-all ${
+                        nameArrangementFormat === 'surname_first'
+                          ? 'bg-cyan-500/15 border-cyan-400 text-white font-bold ring-1 ring-cyan-400'
+                          : 'bg-slate-900/60 border-white/10 text-slate-400 hover:border-white/25'
+                      }`}
+                    >
+                      <span className="text-[10px] uppercase text-cyan-400 block font-bold">Formal Surname First</span>
+                      <span className="truncate block font-mono text-[11px]">
+                        {getArrangedFullName(candidateFirstName, candidateMiddleName, candidateLastName, 'surname_first')}
+                      </span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Live Arrangement Banner */}
+                <div className="p-3 rounded-lg bg-cyan-950/40 border border-cyan-500/40 flex items-center justify-between gap-3 text-xs">
+                  <div>
+                    <span className="text-[10px] text-cyan-400 font-bold uppercase block">
+                      Live Arrangement Preview (Printed on Official Certificate):
+                    </span>
+                    <span className="text-white font-bold text-sm tracking-wide">
+                      {currentArrangedFullName}
+                    </span>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPendingActionAfterName(null);
+                      setShowNameModal(true);
+                    }}
+                    className="px-3 py-1.5 rounded-md bg-slate-900 hover:bg-slate-800 text-cyan-300 border border-cyan-500/30 text-xs font-semibold cursor-pointer shrink-0"
+                  >
+                    Open Arrangement Assistant
+                  </button>
+                </div>
+              </div>
+
+              {/* Interactive High-Resolution Live Preview Parchment */}
+              <div className="p-6 sm:p-8 rounded-xl bg-slate-950 border-2 border-cyan-500/50 relative overflow-hidden shadow-2xl space-y-6 text-center" id="printable-certificate-parchment">
+                <div className="border border-amber-500/40 p-6 sm:p-8 rounded-lg relative">
+                  
+                  {/* Watermark Tag */}
+                  <div className="absolute top-3 right-3 px-2 py-0.5 rounded bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 font-bold text-[9px] uppercase tracking-widest">
+                    {isCertified ? '★ OFFICIAL ACCREDITATION ★' : '★ PREVIEW MODE ★'}
+                  </div>
+
+                  <div className="space-y-1 mb-4">
+                    <p className="text-[10px] text-cyan-400 font-bold tracking-widest uppercase">
+                      ENCDEC CYBERSECURITY ACADEMY & THREAT RESEARCH LAB
+                    </p>
+                    <p className="text-[8px] text-slate-400">
+                      NATIONAL CYBER DEFENSE ALLIANCE • CHUKWUEMEKA ODUMEGWU OJUKWU UNIVERSITY
+                    </p>
+                  </div>
+
+                  <h2 className="text-xl sm:text-2xl font-bold text-white uppercase font-sans tracking-tight mb-2">
+                    Certificate of Operational Mastery
+                  </h2>
+                  <p className="text-xs text-slate-400 mb-4">
+                    This credential is officially conferred upon completion of the master curriculum to
+                  </p>
+
+                  <div className="text-xl sm:text-2xl font-bold text-cyan-400 border-b border-amber-500/40 pb-2 inline-block px-8 max-w-full truncate mb-3 font-sans shadow-sm">
+                    {currentArrangedFullName}
+                  </div>
+
+                  <p className="text-xs text-slate-300 max-w-xl mx-auto mb-2">
+                    For successfully studying, verifying, and completing the comprehensive operational curriculum for:
+                  </p>
+                  <p className="text-base font-bold text-white mb-2">
+                    Certified EncDec IDS SOC Specialist (CE-SOC)
+                  </p>
+                  <p className="text-[11px] font-bold text-cyan-400 mb-5">
+                    ★ Capstone Knowledge Check Score: {quizScore || 100}% (Verified Mastery)
+                  </p>
+
+                  {/* Signatures & Seal Row */}
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-6 pt-6 border-t border-white/10 items-center text-xs">
+                    <div>
+                      <div className="border-b border-slate-600 pb-1 font-bold text-white">
+                        Dr. Chidubem Eze (CISSP, CISM)
+                      </div>
+                      <span className="text-[9px] text-slate-400">Chief Information Security Officer</span>
+                    </div>
+
+                    <div className="flex flex-col items-center">
+                      <div className="w-16 h-16 rounded-full border-2 border-amber-400/80 flex flex-col items-center justify-center bg-amber-500/10 text-amber-300 text-[8px] font-bold">
+                        <span>OFFICIAL</span>
+                        <span>SOC SEAL</span>
+                        <span>VERIFIED</span>
+                      </div>
+                    </div>
+
+                    <div>
+                      <div className="border-b border-slate-600 pb-1 font-bold text-white">
+                        Prof. K. C. Okafor (IEEE Senior)
+                      </div>
+                      <span className="text-[9px] text-slate-400">Director of SOC Operations</span>
+                    </div>
+                  </div>
+
+                  {/* Footer Metadata */}
+                  <div className="pt-4 text-[9px] text-slate-500 flex flex-wrap items-center justify-between gap-2 border-t border-white/5 mt-4">
+                    <span>REGISTRY ID: CERT-ENCDEC-2026-X892A</span>
+                    <div className="flex items-center gap-1.5">
+                      <span>SHA256: 7f83b165...126d9069</span>
+                      <button
+                        onClick={() => handleCopyVerificationHash('SHA256: 7f83b1657ff1fc53b92dc18148a1d65dfc2d4b1fa3d677284addd200126d9069')}
+                        className="text-cyan-400 hover:text-cyan-300 cursor-pointer text-[8px] underline"
+                      >
+                        {copiedHash ? '✓ Copied' : 'Copy Hash'}
+                      </button>
+                    </div>
+                  </div>
+
+                </div>
+              </div>
+
+              {/* High-Resolution Printing & Download Actions */}
+              <div className="border-t border-white/10 pt-5 flex flex-col sm:flex-row items-center justify-between gap-4">
+                <button
+                  onClick={() => {
+                    setActiveView('reader');
+                    window.scrollTo({ top: 120, behavior: 'smooth' });
+                  }}
+                  className="w-full sm:w-auto px-4 py-2.5 rounded-xl bg-slate-950 hover:bg-slate-800 border border-white/10 text-slate-300 font-bold cursor-pointer text-xs"
+                >
+                  ← Return to Workbook Reader
+                </button>
+
+                <div className="flex flex-wrap items-center gap-3 w-full sm:w-auto justify-end">
+                  {/* Print Certificate Button */}
+                  <button
+                    onClick={initiatePrint}
+                    className="px-4 py-2.5 rounded-xl bg-slate-950 hover:bg-slate-800 text-white border border-white/20 hover:border-cyan-400 text-xs font-bold flex items-center gap-2 cursor-pointer shadow-md transition-all hover:scale-105 active:scale-95"
+                    id="btn-print-certificate"
+                    title="Verify Name and Print Certificate"
+                  >
+                    <Printer className="w-4 h-4 text-cyan-400" />
+                    <span>Print Certificate</span>
+                  </button>
+
+                  {/* Download Official Certificate PDF Button */}
+                  <button
+                    onClick={() => initiateDownload(false)}
+                    disabled={downloadingCert}
+                    className="px-6 py-2.5 rounded-xl bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-500 hover:from-emerald-400 hover:to-cyan-400 text-slate-950 font-bold text-xs flex items-center gap-2 cursor-pointer shadow-[0_0_20px_rgba(16,185,129,0.3)] hover:scale-105 active:scale-95 transition-all"
+                    id="btn-download-high-res-pdf"
+                    title="Verify Name and Download High-Resolution PDF"
+                  >
+                    <Download className={`w-4 h-4 ${downloadingCert ? 'animate-bounce' : ''}`} />
+                    <span>
+                      {downloadingCert ? 'Compiling Vector PDF...' : 'Download Certificate (PDF)'}
+                    </span>
+                  </button>
+                </div>
+              </div>
+
+            </div>
+          )}
+
+          {/* ================================================================ */}
+          {/* VIEW 2: CAPSTONE KNOWLEDGE CHECK QUIZ COMPONENT                  */}
+          {/* ================================================================ */}
+          {activeView === 'quiz' && (
             <div className="bg-slate-900 border-2 border-amber-500/40 rounded-2xl p-6 sm:p-8 space-y-6 shadow-2xl relative font-mono" id="knowledge-check-quiz">
               
               {/* Quiz Header */}
@@ -849,7 +1412,7 @@ export default function EncDecWorkbook({ currentUser }: EncDecWorkbookProps) {
                 </p>
               </div>
 
-              {/* Status Banner (Passed / Failed / Error) */}
+              {/* Status Banner */}
               {quizError && (
                 <div className="p-3.5 rounded-xl bg-red-950/30 border border-red-500/40 text-red-300 text-xs flex items-center gap-2">
                   <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
@@ -884,12 +1447,15 @@ export default function EncDecWorkbook({ currentUser }: EncDecWorkbookProps) {
                   <div className="shrink-0 flex items-center gap-3">
                     {quizPassed ? (
                       <button
-                        onClick={() => setShowEarnedCertModal(true)}
+                        onClick={() => {
+                          setActiveView('certificate_download');
+                          window.scrollTo({ top: 120, behavior: 'smooth' });
+                        }}
                         className="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs flex items-center gap-1.5 transition-all shadow-[0_0_15px_rgba(16,185,129,0.3)] cursor-pointer"
                         id="btn-quiz-view-cert"
                       >
-                        <Award className="w-4 h-4" />
-                        <span>View Certificate</span>
+                        <Download className="w-4 h-4" />
+                        <span>Download Certificate (PDF)</span>
                       </button>
                     ) : (
                       <button
@@ -982,7 +1548,6 @@ export default function EncDecWorkbook({ currentUser }: EncDecWorkbookProps) {
                         })}
                       </div>
 
-                      {/* Explanation if submitted */}
                       {showFeedback && (
                         <div className="mt-3 p-3 rounded-lg bg-slate-950 border border-white/10 text-[11px] text-slate-300 space-y-1">
                           <span className="text-cyan-400 font-bold uppercase text-[9px] block">
@@ -1000,7 +1565,7 @@ export default function EncDecWorkbook({ currentUser }: EncDecWorkbookProps) {
               <div className="border-t border-white/10 pt-5 flex flex-col sm:flex-row items-center justify-between gap-4">
                 <button
                   onClick={() => {
-                    setIsQuizMode(false);
+                    setActiveView('reader');
                     setActiveChapterIndex(totalChapters - 1);
                     window.scrollTo({ top: 120, behavior: 'smooth' });
                   }}
@@ -1030,22 +1595,27 @@ export default function EncDecWorkbook({ currentUser }: EncDecWorkbookProps) {
                     </button>
                   ) : (
                     <button
-                      onClick={() => setShowEarnedCertModal(true)}
+                      onClick={() => {
+                        setActiveView('certificate_download');
+                        window.scrollTo({ top: 120, behavior: 'smooth' });
+                      }}
                       className="w-full sm:w-auto px-6 py-2.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-500 text-slate-950 font-bold cursor-pointer text-xs transition-all shadow-[0_0_20px_rgba(16,185,129,0.3)] flex items-center justify-center gap-2 animate-bounce"
                       id="btn-quiz-claim-cert"
                     >
-                      <Award className="w-4 h-4" />
-                      <span>Claim Official Certificate</span>
+                      <Download className="w-4 h-4" />
+                      <span>Go to Certificate Download Station →</span>
                     </button>
                   )}
                 </div>
               </div>
 
             </div>
-          ) : (
-            /* ============================================================== */
-            /* CHAPTER READER COMPONENT                                       */
-            /* ============================================================== */
+          )}
+
+          {/* ================================================================ */}
+          {/* VIEW 3: CHAPTER READER COMPONENT                                 */}
+          {/* ================================================================ */}
+          {activeView === 'reader' && (
             <div className="bg-slate-900 border border-white/5 rounded-2xl p-6 sm:p-8 space-y-6 shadow-xl relative">
               
               {/* Chapter Header */}
@@ -1243,6 +1813,189 @@ export default function EncDecWorkbook({ currentUser }: EncDecWorkbookProps) {
 
       </div>
 
+      {/* ============================================================== */}
+      {/* CANDIDATE NAME VERIFICATION MODAL (BEFORE PRINTING/DOWNLOADING) */}
+      {/* ============================================================== */}
+      {showNameModal && (
+        <div className="fixed inset-0 bg-slate-950/85 backdrop-blur-md z-50 flex items-center justify-center p-4">
+          <div className="bg-slate-900 border-2 border-cyan-500/50 rounded-2xl max-w-xl w-full p-6 sm:p-7 space-y-5 shadow-2xl relative font-mono animate-fadeIn">
+            
+            {/* Header */}
+            <div className="flex items-center justify-between border-b border-white/10 pb-4">
+              <div className="flex items-center gap-2.5 text-cyan-400">
+                <User className="w-5 h-5 text-cyan-400" />
+                <h3 className="text-base font-bold text-white uppercase font-sans tracking-tight">
+                  Candidate Name Verification for Certificate
+                </h3>
+              </div>
+              <button
+                onClick={() => {
+                  setShowNameModal(false);
+                  setPendingActionAfterName(null);
+                }}
+                className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <p className="text-xs text-slate-300 leading-relaxed bg-slate-950 p-3 rounded-xl border border-white/5">
+              Before printing or downloading your certificate, please verify your <strong>First Name</strong>, <strong>Middle Name</strong>, and <strong>Last Name</strong> so that your official name is arranged with complete precision on the certificate.
+            </p>
+
+            {nameError && (
+              <div className="p-3 rounded-lg bg-red-950/40 border border-red-500/40 text-red-300 text-xs flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
+                <span>{nameError}</span>
+              </div>
+            )}
+
+            {/* Inputs */}
+            <div className="space-y-3">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="space-y-1">
+                  <label className="text-[10px] text-slate-400 uppercase font-bold flex items-center justify-between">
+                    <span>First Name</span>
+                    <span className="text-red-400">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={candidateFirstName}
+                    onChange={(e) => {
+                      setCandidateFirstName(e.target.value);
+                      setNameError(null);
+                    }}
+                    placeholder="e.g. Christopher"
+                    autoFocus
+                    className="w-full bg-slate-950 border border-white/15 focus:border-cyan-400 rounded-lg px-3 py-2 text-xs text-white focus:outline-none font-mono"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[10px] text-slate-400 uppercase font-bold flex items-center justify-between">
+                    <span>Middle Name</span>
+                    <span className="text-slate-500">Optional</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={candidateMiddleName}
+                    onChange={(e) => setCandidateMiddleName(e.target.value)}
+                    placeholder="e.g. Chukwudi"
+                    className="w-full bg-slate-950 border border-white/15 focus:border-cyan-400 rounded-lg px-3 py-2 text-xs text-white focus:outline-none font-mono"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[10px] text-slate-400 uppercase font-bold flex items-center justify-between">
+                    <span>Last Name</span>
+                    <span className="text-red-400">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={candidateLastName}
+                    onChange={(e) => {
+                      setCandidateLastName(e.target.value);
+                      setNameError(null);
+                    }}
+                    placeholder="e.g. Okeke"
+                    className="w-full bg-slate-950 border border-white/15 focus:border-cyan-400 rounded-lg px-3 py-2 text-xs text-white focus:outline-none font-mono"
+                  />
+                </div>
+              </div>
+
+              {/* Arrangement Style Selector */}
+              <div className="space-y-1.5 pt-1">
+                <label className="text-[10px] text-slate-400 uppercase font-bold block">
+                  Arrangement Style:
+                </label>
+                <div className="grid grid-cols-3 gap-2 text-xs">
+                  <button
+                    type="button"
+                    onClick={() => setNameArrangementFormat('standard')}
+                    className={`p-2 rounded-lg border text-center cursor-pointer transition-all ${
+                      nameArrangementFormat === 'standard'
+                        ? 'bg-cyan-500/20 border-cyan-400 text-white font-bold'
+                        : 'bg-slate-950 border-white/10 text-slate-400 hover:border-white/20'
+                    }`}
+                  >
+                    <span className="text-[9px] block text-cyan-400">First Middle Last</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setNameArrangementFormat('initial')}
+                    className={`p-2 rounded-lg border text-center cursor-pointer transition-all ${
+                      nameArrangementFormat === 'initial'
+                        ? 'bg-cyan-500/20 border-cyan-400 text-white font-bold'
+                        : 'bg-slate-950 border-white/10 text-slate-400 hover:border-white/20'
+                    }`}
+                  >
+                    <span className="text-[9px] block text-cyan-400">First M. Last</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setNameArrangementFormat('surname_first')}
+                    className={`p-2 rounded-lg border text-center cursor-pointer transition-all ${
+                      nameArrangementFormat === 'surname_first'
+                        ? 'bg-cyan-500/20 border-cyan-400 text-white font-bold'
+                        : 'bg-slate-950 border-white/10 text-slate-400 hover:border-white/20'
+                    }`}
+                  >
+                    <span className="text-[9px] block text-cyan-400">Last, First Middle</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Live Preview Box */}
+              <div className="p-3.5 rounded-xl bg-slate-950 border border-cyan-500/40 text-center space-y-1">
+                <span className="text-[10px] text-slate-400 uppercase block font-bold">
+                  Official Certificate Name Preview:
+                </span>
+                <span className="text-cyan-300 font-bold text-base tracking-wide font-sans">
+                  {currentArrangedFullName}
+                </span>
+              </div>
+            </div>
+
+            {/* Actions */}
+            <div className="flex items-center justify-end gap-3 pt-3 border-t border-white/10">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowNameModal(false);
+                  setPendingActionAfterName(null);
+                }}
+                className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold cursor-pointer"
+              >
+                Cancel
+              </button>
+
+              <button
+                type="button"
+                onClick={handleConfirmNameAndProceed}
+                disabled={downloadingCert}
+                className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 font-bold text-xs flex items-center gap-2 cursor-pointer shadow-[0_0_15px_rgba(16,185,129,0.3)] transition-all hover:scale-105 active:scale-95"
+                id="btn-confirm-name-proceed"
+              >
+                {pendingActionAfterName === 'print' ? (
+                  <>
+                    <Printer className="w-4 h-4" />
+                    <span>Confirm & Print Certificate</span>
+                  </>
+                ) : (
+                  <>
+                    <Download className="w-4 h-4" />
+                    <span>Confirm & Download PDF</span>
+                  </>
+                )}
+              </button>
+            </div>
+
+          </div>
+        </div>
+      )}
+
       {/* SAMPLE CERTIFICATE MODAL */}
       {showSampleCert && (
         <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-50 flex items-center justify-center p-4">
@@ -1271,7 +2024,6 @@ export default function EncDecWorkbook({ currentUser }: EncDecWorkbookProps) {
             <div className="p-6 sm:p-8 rounded-xl bg-slate-950 border-2 border-cyan-500/50 relative overflow-hidden shadow-2xl space-y-6 text-center">
               <div className="border border-amber-500/40 p-6 sm:p-8 rounded-lg relative">
                 
-                {/* Sample Watermark Banner */}
                 <div className="absolute top-3 right-3 px-2 py-0.5 rounded bg-amber-500/20 border border-amber-500/40 text-amber-300 font-bold text-[9px] uppercase tracking-widest">
                   ★ SAMPLE PREVIEW ★
                 </div>
@@ -1394,39 +2146,58 @@ export default function EncDecWorkbook({ currentUser }: EncDecWorkbookProps) {
               </div>
             </div>
 
-            {/* Recipient Customization Form */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-slate-950 p-4 rounded-xl border border-white/5">
-              <div className="space-y-1">
-                <label className="text-[10px] text-slate-400 uppercase">Candidate Name on Certificate</label>
-                <input
-                  type="text"
-                  value={recipientName}
-                  onChange={(e) => setRecipientName(e.target.value)}
-                  className="w-full bg-slate-900 border border-white/15 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-400"
-                />
-              </div>
+            {/* Candidate Name Form in Modal (First, Middle, Last) */}
+            <div className="space-y-3 bg-slate-950 p-4 rounded-xl border border-white/5">
+              <span className="text-[10px] text-cyan-400 uppercase font-bold block">
+                Arrange Candidate Name for Official Certificate:
+              </span>
 
-              <div className="space-y-1">
-                <label className="text-[10px] text-slate-400 uppercase">Operator Email</label>
-                <input
-                  type="email"
-                  value={recipientEmail}
-                  onChange={(e) => setRecipientEmail(e.target.value)}
-                  className="w-full bg-slate-900 border border-white/15 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-400"
-                />
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="space-y-1">
+                  <label className="text-[10px] text-slate-400 uppercase">First Name</label>
+                  <input
+                    type="text"
+                    value={candidateFirstName}
+                    onChange={(e) => setCandidateFirstName(e.target.value)}
+                    placeholder="e.g. Christopher"
+                    className="w-full bg-slate-900 border border-white/15 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-400"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[10px] text-slate-400 uppercase">Middle Name</label>
+                  <input
+                    type="text"
+                    value={candidateMiddleName}
+                    onChange={(e) => setCandidateMiddleName(e.target.value)}
+                    placeholder="e.g. Chukwudi"
+                    className="w-full bg-slate-900 border border-white/15 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-400"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[10px] text-slate-400 uppercase">Last Name</label>
+                  <input
+                    type="text"
+                    value={candidateLastName}
+                    onChange={(e) => setCandidateLastName(e.target.value)}
+                    placeholder="e.g. Okeke"
+                    className="w-full bg-slate-900 border border-white/15 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-400"
+                  />
+                </div>
               </div>
             </div>
 
             {/* Certificate Preview Card */}
             <div className="p-6 rounded-xl bg-slate-950 border border-cyan-500/40 text-center space-y-3">
               <span className="text-[9px] uppercase px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 font-bold border border-emerald-500/30">
-                Official Credential Ready For Download
+                Official Credential Ready For Download & Print
               </span>
               <h4 className="text-base font-bold text-white font-sans">
                 Certified EncDec IDS SOC Specialist (CE-SOC)
               </h4>
-              <p className="text-xs text-cyan-400 font-bold">
-                Awarded To: {recipientName}
+              <p className="text-xs text-cyan-400 font-bold text-sm">
+                Awarded To: {currentArrangedFullName}
               </p>
               <p className="text-[11px] text-slate-400">
                 Knowledge Check Score: <span className="text-emerald-400 font-bold">{quizScore || 100}%</span> • Verified on: {new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}
@@ -1436,21 +2207,41 @@ export default function EncDecWorkbook({ currentUser }: EncDecWorkbookProps) {
             {/* Action Controls */}
             <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-2">
               <button
-                onClick={() => setShowEarnedCertModal(false)}
+                onClick={() => {
+                  setShowEarnedCertModal(false);
+                  setActiveView('certificate_download');
+                  window.scrollTo({ top: 120, behavior: 'smooth' });
+                }}
                 className="w-full sm:w-auto px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold cursor-pointer"
               >
-                Close & Return to Workbook
+                Go to Certificate Station
               </button>
 
-              <button
-                onClick={() => handleDownloadCertificate(false)}
-                disabled={downloadingCert}
-                className="w-full sm:w-auto px-6 py-2.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-slate-950 font-bold text-xs flex items-center justify-center gap-2 cursor-pointer shadow-[0_0_20px_rgba(16,185,129,0.3)] hover:scale-105 active:scale-95 transition-all"
-                id="btn-download-official-cert"
-              >
-                <Download className="w-4 h-4" />
-                <span>{downloadingCert ? 'Compiling Certificate...' : 'Download Official Certificate (PDF)'}</span>
-              </button>
+              <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto justify-end">
+                <button
+                  onClick={() => {
+                    setShowEarnedCertModal(false);
+                    initiatePrint();
+                  }}
+                  className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-white border border-white/20 text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-sm"
+                >
+                  <Printer className="w-4 h-4 text-cyan-400" />
+                  <span>Print Certificate</span>
+                </button>
+
+                <button
+                  onClick={() => {
+                    setShowEarnedCertModal(false);
+                    initiateDownload(false);
+                  }}
+                  disabled={downloadingCert}
+                  className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-slate-950 font-bold text-xs flex items-center justify-center gap-2 cursor-pointer shadow-[0_0_20px_rgba(16,185,129,0.3)] hover:scale-105 active:scale-95 transition-all"
+                  id="btn-download-official-cert"
+                >
+                  <Download className="w-4 h-4" />
+                  <span>{downloadingCert ? 'Compiling Vector PDF...' : 'Download Official Certificate (PDF)'}</span>
+                </button>
+              </div>
             </div>
 
           </div>

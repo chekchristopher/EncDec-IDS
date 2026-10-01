@@ -442,7 +442,9 @@ export function getInitialDatabaseState(): DbSchema {
         timestamp: new Date(Date.now() - 150000).toISOString(),
         commandExecuted: 'ip link set dev eth0 down && iptables -A OUTPUT -p tcp --dport 3000 -j ACCEPT -m comment --comment "EncDec SOC Only"'
       }
-    ]
+    ],
+    workbookProgress: [],
+    certificates: []
   };
 }
 

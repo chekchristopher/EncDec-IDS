@@ -105,7 +105,7 @@ export class FirestoreSyncService {
   public async syncFromFirestore(dbState: DbSchema, onSynced?: () => void): Promise<boolean> {
     if (!this.db || this.quotaExceeded) return false;
     const collectionsList = [
-      'users', 'hosts', 'rules', 'alerts', 'threats', 'apiKeys', 'auditLogs', 'liveActivities', 'threatIntel', 'mlModels', 'quarantine', 'emailLogs', 'workbookProgress'
+      'users', 'hosts', 'rules', 'alerts', 'threats', 'apiKeys', 'auditLogs', 'liveActivities', 'threatIntel', 'mlModels', 'quarantine', 'emailLogs', 'workbookProgress', 'certificates'
     ];
     let updatedAny = false;
 
@@ -160,7 +160,7 @@ export class FirestoreSyncService {
     this.isSyncing = true;
     try {
       const collectionsList = [
-        'users', 'hosts', 'rules', 'alerts', 'threats', 'apiKeys', 'auditLogs', 'liveActivities', 'threatIntel', 'mlModels', 'quarantine', 'emailLogs', 'workbookProgress'
+        'users', 'hosts', 'rules', 'alerts', 'threats', 'apiKeys', 'auditLogs', 'liveActivities', 'threatIntel', 'mlModels', 'quarantine', 'emailLogs', 'workbookProgress', 'certificates'
       ];
       for (const colName of collectionsList) {
         if (this.quotaExceeded) break;
@@ -168,9 +168,10 @@ export class FirestoreSyncService {
         const itemsToSync = items.slice(0, 30);
         for (const item of itemsToSync) {
           if (this.quotaExceeded) break;
-          if (item && item.id) {
+          const docId = item?.id || item?.certificateId;
+          if (docId) {
             const cleanDoc = sanitizeForFirestore(item);
-            await setDoc(doc(this.db!, colName, item.id), cleanDoc);
+            await setDoc(doc(this.db!, colName, docId), cleanDoc);
           }
         }
       }

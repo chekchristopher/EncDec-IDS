@@ -213,6 +213,32 @@
         "lastReadAt": { "type": "string" }
       },
       "required": ["id", "userId", "chapterIndex", "paragraphIndex", "lastReadAt"]
+    },
+    "certificate": {
+      "title": "Certificate",
+      "description": "Accredited CE-SOC certification records for employer verification",
+      "type": "object",
+      "properties": {
+        "certificateId": { "type": "string" },
+        "userId": { "type": "string" },
+        "firstName": { "type": "string" },
+        "middleName": { "type": "string" },
+        "lastName": { "type": "string" },
+        "fullName": { "type": "string" },
+        "recipientEmail": { "type": "string" },
+        "courseTitle": { "type": "string" },
+        "accreditationLevel": { "type": "string" },
+        "quizScore": { "type": "number" },
+        "quizPassed": { "type": "boolean" },
+        "issueDate": { "type": "string" },
+        "verificationCode": { "type": "string" },
+        "verifiedAt": { "type": "string" },
+        "verificationUrl": { "type": "string" },
+        "qrCodeDataUrl": { "type": "string" },
+        "status": { "type": "string" },
+        "attestationStatement": { "type": "string" }
+      },
+      "required": ["certificateId", "firstName", "lastName", "fullName", "quizScore", "verificationCode", "verificationUrl"]
     }
   },
   "firestore": {
@@ -267,6 +293,10 @@
     "workbookProgress": {
       "schema": "workbookProgress",
       "description": "User reading progress state and bookmarks"
+    },
+    "certificates": {
+      "schema": "certificate",
+      "description": "Registered CE-SOC credentials and verification records"
     }
   }
 }

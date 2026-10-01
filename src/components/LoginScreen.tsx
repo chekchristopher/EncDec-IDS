@@ -3,8 +3,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
-import { Shield, Key, Mail, User, Eye, EyeOff, Radio, Lock, Unlock, HelpCircle, ShieldCheck, Sparkles, Check, ArrowRight, AlertTriangle, Send } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { 
+  Shield, Key, Mail, User, Eye, EyeOff, Radio, Lock, Unlock, 
+  HelpCircle, ShieldCheck, Sparkles, Check, ArrowRight, AlertTriangle, 
+  Send, RefreshCw, CheckCircle2, ChevronRight, RotateCcw
+} from 'lucide-react';
 import { apiRequest, setAuthToken } from '../api.js';
 import EncDecLogo from './EncDecLogo.js';
 import { signInWithGoogle, getGoogleAccessToken } from '../services/googleAuth.js';
@@ -18,6 +22,18 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
   const [isSignUp, setIsSignUp] = useState(false);
   const [isForgotPassword, setIsForgotPassword] = useState(false);
   
+  // 3-Step Password Reset Flow:
+  // 1: 'enter_email' -> asks for Gmail
+  // 2: 'enter_code' -> asks for 6-digit code dispatched to Gmail
+  // 3: 'set_new_password' -> asks user to input new password twice and auto-logs them in
+  const [forgotStep, setForgotStep] = useState<'enter_email' | 'enter_code' | 'set_new_password'>('enter_email');
+  const [resetCode, setResetCode] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [showNewPassword, setShowNewPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [resendCooldown, setResendCooldown] = useState(0);
+
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [name, setName] = useState('');
@@ -38,19 +54,31 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
   const [safeBoxError, setSafeBoxError] = useState<string | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
+  // Cooldown countdown effect for Resend Code
+  useEffect(() => {
+    if (resendCooldown <= 0) return;
+    const interval = setInterval(() => {
+      setResendCooldown((prev) => (prev > 0 ? prev - 1 : 0));
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [resendCooldown]);
+
   const resetFormState = () => {
     setError(null);
     setMessage(null);
     setGoogleAuthNotice(null);
     setPassword('');
     setMfaCode('');
+    setResetCode('');
+    setNewPassword('');
+    setConfirmPassword('');
+    setForgotStep('enter_email');
   };
 
   const handleUnlockSafeBox = (e: React.FormEvent) => {
     e.preventDefault();
     setSafeBoxError(null);
     
-    // Validate 6-digit MFA or numeric security token
     const cleaned = safeBoxMfaInput.trim();
     if (!cleaned) {
       setSafeBoxError('Please enter the Admin 6-digit MFA code.');
@@ -130,6 +158,23 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
     }
   };
 
+  // Resend 6-digit Code to Gmail
+  const handleResendCode = async () => {
+    if (resendCooldown > 0 || loading) return;
+    setError(null);
+    setLoading(true);
+    try {
+      const response = await apiRequest('/api/auth/forgot-password', 'POST', { email });
+      setMessage(response.message || `A fresh 6-digit code has been dispatched to ${email}.`);
+      setResendCooldown(60);
+    } catch (err: any) {
+      setError(err?.message || 'Failed to resend verification code.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Main Form Submission Handler
   const handleAuthSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
@@ -138,13 +183,79 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
     setLoading(true);
 
     try {
+      // -------------------------------------------------------------
+      // 1. FORGOT PASSWORD WORKFLOW
+      // -------------------------------------------------------------
       if (isForgotPassword) {
-        const response = await apiRequest('/api/auth/forgot-password', 'POST', { email });
-        setMessage(response.message);
-        setLoading(false);
-        return;
+        
+        // STEP 1: User inputs their Gmail to receive the 6-digit code
+        if (forgotStep === 'enter_email') {
+          if (!email || !email.includes('@')) {
+            throw new Error('Please enter a valid Gmail / operator address.');
+          }
+
+          const response = await apiRequest('/api/auth/forgot-password', 'POST', { email });
+          setMessage(response.message || `A 6-digit verification code was sent to ${email}.`);
+          setForgotStep('enter_code');
+          setResendCooldown(60);
+          setLoading(false);
+          return;
+        }
+
+        // STEP 2: User inputs the 6-digit code sent to their Gmail
+        if (forgotStep === 'enter_code') {
+          const cleanCode = resetCode.trim();
+          if (cleanCode.length !== 6 || !/^\d{6}$/.test(cleanCode)) {
+            throw new Error('Please enter the complete 6-digit numeric verification code.');
+          }
+
+          const response = await apiRequest('/api/auth/verify-reset-code', 'POST', { 
+            email, 
+            code: cleanCode 
+          });
+
+          setMessage(response.message || '6-digit code verified! Please enter and confirm your new password below.');
+          setForgotStep('set_new_password');
+          setLoading(false);
+          return;
+        }
+
+        // STEP 3: User inputs new password twice as if signing up, and is auto-logged in!
+        if (forgotStep === 'set_new_password') {
+          if (!newPassword || newPassword.length < 6) {
+            throw new Error('New password must be at least 6 characters in length.');
+          }
+
+          if (newPassword !== confirmPassword) {
+            throw new Error('Passwords do not match. Please ensure both password fields match exactly.');
+          }
+
+          const response = await apiRequest('/api/auth/reset-password', 'POST', {
+            email,
+            code: resetCode.trim(),
+            newPassword,
+            confirmPassword
+          });
+
+          setMessage('Password updated successfully! Authenticating and entering console...');
+
+          // Auto-login: Store token and transition immediately into dashboard
+          if (response.token && response.user) {
+            setAuthToken(response.token);
+            setTimeout(() => {
+              onLoginSuccess(response.user);
+            }, 600);
+          } else {
+            setIsForgotPassword(false);
+            setForgotStep('enter_email');
+          }
+          return;
+        }
       }
 
+      // -------------------------------------------------------------
+      // 2. STANDARD SIGNUP & LOGIN WORKFLOW
+      // -------------------------------------------------------------
       const cachedGoogleToken = await getGoogleAccessToken();
 
       if (isSignUp) {
@@ -155,7 +266,6 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
           googleAccessToken: cachedGoogleToken || undefined
         });
 
-        // Trigger direct Gmail dispatch if token available
         sendDirectAuthEmailToGmail({
           email: response.user.email,
           name: response.user.name,
@@ -168,7 +278,7 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
       } else {
         const payload: any = { 
           email, 
-          password,
+          password, 
           googleAccessToken: cachedGoogleToken || undefined
         };
         if (mfaRequired) {
@@ -184,7 +294,6 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
           return;
         }
 
-        // Trigger direct Gmail dispatch if token available
         sendDirectAuthEmailToGmail({
           email: response.user.email,
           name: response.user.name,
@@ -217,10 +326,10 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
         }}
       />
 
-      <div className="relative z-10 w-full max-w-md bg-slate-900/80 backdrop-blur-xl border border-white/10 rounded-xl p-8 shadow-2xl shadow-black/80 transition-all duration-300 hover:border-cyan-500/30">
+      <div className="relative z-10 w-full max-w-md bg-slate-900/90 backdrop-blur-xl border border-white/10 rounded-2xl p-8 shadow-2xl shadow-black/80 transition-all duration-300 hover:border-cyan-500/30">
         
         {/* Brand identity */}
-        <div className="flex flex-col items-center mb-8 gap-3 text-center">
+        <div className="flex flex-col items-center mb-6 gap-3 text-center">
           <div className="relative">
             <EncDecLogo size="xl" showGlow={true} />
             <span className="absolute bottom-0 right-0 w-3.5 h-3.5 rounded-full bg-emerald-400 border-2 border-slate-900 shadow-[0_0_8px_#34d399]" />
@@ -231,33 +340,67 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
           </div>
         </div>
 
-        {/* Title */}
+        {/* Title & Dynamic Header for Password Reset / Login */}
         <div className="mb-6">
-          <h2 className="text-xl font-semibold text-white mb-1">
-            {isForgotPassword ? 'Reset Security Key' : mfaRequired ? 'Security Challenge' : isSignUp ? 'Enlist Operator' : 'Operator Credentials'}
-          </h2>
-          <p className="text-sm text-slate-400">
-            {isForgotPassword 
-              ? 'Enter your operator identification to begin credential rotation.' 
-              : mfaRequired 
-              ? 'Verification required for secure console node entry.' 
-              : 'Identity verification required for secure node entry.'}
-          </p>
+          {isForgotPassword ? (
+            <div className="space-y-2">
+              <div className="flex items-center gap-2 text-cyan-400 font-mono text-xs uppercase font-bold">
+                <ShieldCheck className="w-4 h-4 text-cyan-400" />
+                <span>Password Recovery Protocol</span>
+              </div>
+              <h2 className="text-xl font-bold text-white tracking-tight font-sans">
+                {forgotStep === 'enter_email' && 'Retrieve Your Password'}
+                {forgotStep === 'enter_code' && 'Enter 6-Digit Verification Code'}
+                {forgotStep === 'set_new_password' && 'Set New Password & Log In'}
+              </h2>
+              <p className="text-xs text-slate-400 font-mono leading-relaxed">
+                {forgotStep === 'enter_email' && 'Enter your Gmail address. We will dispatch a 6-digit verification code to your inbox.'}
+                {forgotStep === 'enter_code' && `A 6-digit code has been sent to ${email}. Check your Gmail inbox and enter the code below.`}
+                {forgotStep === 'set_new_password' && 'Enter your new password of choice twice to confirm and log straight into the SOC console.'}
+              </p>
+
+              {/* Step indicator progress pills */}
+              <div className="flex items-center gap-1.5 pt-2 font-mono text-[10px]">
+                <span className={`px-2 py-0.5 rounded ${forgotStep === 'enter_email' ? 'bg-cyan-500 text-slate-950 font-bold' : 'bg-slate-800 text-slate-400'}`}>
+                  1. Gmail
+                </span>
+                <ChevronRight className="w-3 h-3 text-slate-600" />
+                <span className={`px-2 py-0.5 rounded ${forgotStep === 'enter_code' ? 'bg-cyan-500 text-slate-950 font-bold' : forgotStep === 'set_new_password' ? 'bg-emerald-950 text-emerald-400 border border-emerald-500/30' : 'bg-slate-800 text-slate-400'}`}>
+                  2. 6-Digit Code
+                </span>
+                <ChevronRight className="w-3 h-3 text-slate-600" />
+                <span className={`px-2 py-0.5 rounded ${forgotStep === 'set_new_password' ? 'bg-cyan-500 text-slate-950 font-bold' : 'bg-slate-800 text-slate-400'}`}>
+                  3. New Password
+                </span>
+              </div>
+            </div>
+          ) : (
+            <div>
+              <h2 className="text-xl font-semibold text-white mb-1">
+                {mfaRequired ? 'Security Challenge' : isSignUp ? 'Enlist Operator' : 'Operator Credentials'}
+              </h2>
+              <p className="text-sm text-slate-400">
+                {mfaRequired 
+                  ? 'Verification required for secure console node entry.' 
+                  : 'Identity verification required for secure node entry.'}
+              </p>
+            </div>
+          )}
         </div>
 
         {/* Status Messages */}
         {error && (
-          <div className="mb-4 p-3 rounded bg-red-500/10 border border-red-500/30 text-red-400 text-xs font-mono" id="auth-error-banner">
+          <div className="mb-4 p-3 rounded-xl bg-red-500/10 border border-red-500/30 text-red-400 text-xs font-mono" id="auth-error-banner">
             ❌ {error}
           </div>
         )}
         {message && (
-          <div className="mb-4 p-3 rounded bg-cyan-500/10 border border-cyan-500/30 text-cyan-400 text-xs font-mono" id="auth-message-banner">
+          <div className="mb-4 p-3 rounded-xl bg-cyan-500/10 border border-cyan-500/30 text-cyan-400 text-xs font-mono" id="auth-message-banner">
             ℹ️ {message}
           </div>
         )}
         {googleAuthNotice && (
-          <div className="mb-4 p-3 rounded bg-amber-950/60 border border-amber-500/40 text-amber-200 text-xs font-mono space-y-2" id="google-auth-notice">
+          <div className="mb-4 p-3 rounded-xl bg-amber-950/60 border border-amber-500/40 text-amber-200 text-xs font-mono space-y-2" id="google-auth-notice">
             <div className="flex items-center gap-2 text-amber-300 font-bold">
               <AlertTriangle className="w-4 h-4 shrink-0" />
               <span>Browser Notice</span>
@@ -278,14 +421,14 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
           </div>
         )}
 
-        {/* Direct Google Auth Button */}
+        {/* Direct Google Auth Button (Only visible on initial login/signup) */}
         {!mfaRequired && !isForgotPassword && (
           <div className="mb-5 space-y-2.5">
             <button
               type="button"
               disabled={googleLoading || loading}
               onClick={handleGoogleAuth}
-              className="w-full flex items-center justify-center gap-2.5 py-3 px-4 rounded-lg bg-slate-800/90 hover:bg-slate-750 border border-white/15 hover:border-cyan-400/50 text-white text-xs font-medium transition-all shadow-md active:scale-98 cursor-pointer disabled:opacity-50"
+              className="w-full flex items-center justify-center gap-2.5 py-3 px-4 rounded-xl bg-slate-800/90 hover:bg-slate-750 border border-white/15 hover:border-cyan-400/50 text-white text-xs font-medium transition-all shadow-md active:scale-98 cursor-pointer disabled:opacity-50"
               id="google-signin-btn"
             >
               <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24">
@@ -316,9 +459,9 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
             </button>
 
             {/* Direct Gmail delivery badge */}
-            <div className="flex items-center justify-center gap-1.5 text-[11px] text-cyan-400/90 font-mono bg-cyan-950/30 border border-cyan-500/20 py-1.5 px-2.5 rounded">
+            <div className="flex items-center justify-center gap-1.5 text-[11px] text-cyan-400/90 font-mono bg-cyan-950/30 border border-cyan-500/20 py-1.5 px-2.5 rounded-lg">
               <Send className="w-3 h-3 text-cyan-400 shrink-0" />
-              <span>Direct Gmail dispatch enabled for login & registration</span>
+              <span>Direct Gmail dispatch enabled for security verification</span>
             </div>
 
             <div className="flex items-center gap-3 my-3">
@@ -329,124 +472,324 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
           </div>
         )}
 
+        {/* ============================================================== */}
+        {/* MAIN AUTH & PASSWORD RESET FORM                                 */}
+        {/* ============================================================== */}
         <form onSubmit={handleAuthSubmit} className="space-y-4">
           
-          {/* Email / Username field */}
-          {!mfaRequired && (
-            <div className="space-y-1">
-              <label className="block font-mono text-[10px] text-slate-400 uppercase tracking-wider" htmlFor="email-input">
-                OPERATOR_ID
-              </label>
-              <div className="relative flex items-center bg-slate-950 rounded border border-white/10 focus-within:border-cyan-500 transition-colors">
-                <Mail className="absolute left-3 w-4 h-4 text-cyan-400/60" />
-                <input
-                  id="email-input"
-                  type="email"
-                  required
-                  placeholder="operator@enterprise.sec"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  className="w-full bg-transparent border-none py-3 pl-10 pr-4 text-sm text-white placeholder-slate-600 focus:outline-none focus:ring-0"
-                />
-              </div>
-            </div>
-          )}
-
-          {/* Operator Name Field for Signup */}
-          {isSignUp && !mfaRequired && (
-            <div className="space-y-1">
-              <label className="block font-mono text-[10px] text-slate-400 uppercase tracking-wider" htmlFor="name-input">
-                OPERATOR_FULLNAME
-              </label>
-              <div className="relative flex items-center bg-slate-950 rounded border border-white/10 focus-within:border-cyan-500 transition-colors">
-                <User className="absolute left-3 w-4 h-4 text-cyan-400/60" />
-                <input
-                  id="name-input"
-                  type="text"
-                  required
-                  placeholder="Full name"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  className="w-full bg-transparent border-none py-3 pl-10 pr-4 text-sm text-white placeholder-slate-600 focus:outline-none focus:ring-0"
-                />
-              </div>
-            </div>
-          )}
-
-          {/* Password field */}
-          {!isForgotPassword && !mfaRequired && (
-            <div className="space-y-1">
-              <div className="flex justify-between items-center">
-                <label className="block font-mono text-[10px] text-slate-400 uppercase tracking-wider" htmlFor="password-input">
-                  ACCESS_TOKEN
+          {/* ----------------------------------------------------------- */}
+          {/* FORGOT PASSWORD: STEP 1 - ASK FOR GMAIL ADDRESS             */}
+          {/* ----------------------------------------------------------- */}
+          {isForgotPassword && forgotStep === 'enter_email' && (
+            <div className="space-y-3 animate-fadeIn">
+              <div className="space-y-1">
+                <label className="block font-mono text-[10px] text-slate-400 uppercase tracking-wider" htmlFor="recovery-email-input">
+                  YOUR GMAIL / OPERATOR ADDRESS
                 </label>
-                {!isSignUp && (
-                  <button
-                    type="button"
-                    onClick={() => { resetFormState(); setIsForgotPassword(true); }}
-                    className="text-xs text-cyan-400 hover:underline hover:text-cyan-300"
-                    id="recover-password-btn"
-                  >
-                    Forgot?
-                  </button>
-                )}
+                <div className="relative flex items-center bg-slate-950 rounded-xl border border-white/10 focus-within:border-cyan-500 transition-colors">
+                  <Mail className="absolute left-3 w-4 h-4 text-cyan-400" />
+                  <input
+                    id="recovery-email-input"
+                    type="email"
+                    required
+                    placeholder="e.g. chekchris85@gmail.com"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    className="w-full bg-transparent border-none py-3 pl-10 pr-4 text-sm text-white placeholder-slate-600 focus:outline-none focus:ring-0 font-mono"
+                  />
+                </div>
               </div>
-              <div className="relative flex items-center bg-slate-950 rounded border border-white/10 focus-within:border-cyan-500 transition-colors">
-                <Key className="absolute left-3 w-4 h-4 text-cyan-400/60" />
-                <input
-                  id="password-input"
-                  type={showPassword ? 'text' : 'password'}
-                  required
-                  placeholder="••••••••••••"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  className="w-full bg-transparent border-none py-3 pl-10 pr-12 text-sm text-white placeholder-slate-600 focus:outline-none focus:ring-0"
-                />
+
+              <div className="p-3 rounded-lg bg-cyan-950/20 border border-cyan-500/20 text-[11px] text-cyan-300 font-mono flex items-start gap-2">
+                <Send className="w-4 h-4 text-cyan-400 shrink-0 mt-0.5" />
+                <span>We will dispatch a 6-digit verification code directly to this Gmail address.</span>
+              </div>
+            </div>
+          )}
+
+          {/* ----------------------------------------------------------- */}
+          {/* FORGOT PASSWORD: STEP 2 - INPUT 6-DIGIT CODE FROM GMAIL     */}
+          {/* ----------------------------------------------------------- */}
+          {isForgotPassword && forgotStep === 'enter_code' && (
+            <div className="space-y-3 animate-fadeIn">
+              <div className="space-y-1">
+                <div className="flex items-center justify-between">
+                  <label className="block font-mono text-[10px] text-slate-400 uppercase tracking-wider" htmlFor="reset-code-input">
+                    6-DIGIT VERIFICATION CODE
+                  </label>
+                  <span className="text-[10px] text-cyan-400 font-mono">
+                    Sent to: {email}
+                  </span>
+                </div>
+                
+                <div className="relative flex items-center bg-slate-950 rounded-xl border-2 border-cyan-500/50 focus-within:border-cyan-400 transition-colors shadow-[0_0_15px_rgba(6,182,212,0.15)]">
+                  <Key className="absolute left-3 w-4 h-4 text-cyan-400" />
+                  <input
+                    id="reset-code-input"
+                    type="text"
+                    required
+                    maxLength={6}
+                    autoFocus
+                    placeholder="••••••"
+                    value={resetCode}
+                    onChange={(e) => setResetCode(e.target.value.replace(/\D/g, ''))}
+                    className="w-full bg-transparent border-none py-3.5 pl-10 pr-4 text-center text-lg text-white placeholder-slate-600 focus:outline-none focus:ring-0 font-mono tracking-[0.5em] font-bold"
+                  />
+                </div>
+              </div>
+
+              {/* Resend and change email actions */}
+              <div className="flex items-center justify-between text-xs font-mono pt-1">
                 <button
                   type="button"
-                  onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-3 text-slate-500 hover:text-white"
-                  id="toggle-password-visibility"
+                  onClick={handleResendCode}
+                  disabled={resendCooldown > 0 || loading}
+                  className="text-cyan-400 hover:text-cyan-300 disabled:text-slate-600 flex items-center gap-1 cursor-pointer disabled:cursor-not-allowed"
                 >
-                  {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+                  <span>{resendCooldown > 0 ? `Resend code in ${resendCooldown}s` : 'Resend 6-Digit Code'}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setForgotStep('enter_email');
+                    setError(null);
+                  }}
+                  className="text-slate-400 hover:text-white underline cursor-pointer"
+                >
+                  Change email
                 </button>
               </div>
             </div>
           )}
 
-          {/* MFA Challenge Input */}
-          {mfaRequired && (
-            <div className="space-y-1 animate-fadeIn">
-              <label className="block font-mono text-[10px] text-slate-400 uppercase tracking-wider" htmlFor="mfa-input">
-                MFA_KEY_DIGITS
-              </label>
-              <div className="relative flex items-center bg-slate-950 rounded border border-white/10 focus-within:border-cyan-500 transition-colors">
-                <Lock className="absolute left-3 w-4 h-4 text-cyan-400/60" />
-                <input
-                  id="mfa-input"
-                  type="text"
-                  required
-                  maxLength={6}
-                  placeholder="Enter any 6 digit simulated code"
-                  value={mfaCode}
-                  onChange={(e) => setMfaCode(e.target.value.replace(/\D/g, ''))}
-                  className="w-full bg-transparent border-none py-3 pl-10 pr-4 text-sm text-white placeholder-slate-600 focus:outline-none focus:ring-0 tracking-widest font-mono text-center"
-                />
+          {/* ----------------------------------------------------------- */}
+          {/* FORGOT PASSWORD: STEP 3 - INPUT NEW PASSWORD TWICE & LOGIN */}
+          {/* ----------------------------------------------------------- */}
+          {isForgotPassword && forgotStep === 'set_new_password' && (
+            <div className="space-y-3.5 animate-fadeIn">
+              <div className="p-2.5 rounded-lg bg-emerald-950/30 border border-emerald-500/30 flex items-center gap-2 text-xs text-emerald-300 font-mono">
+                <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                <span>Identity verified via Gmail code. Set your new password:</span>
               </div>
-              <p className="text-[10px] text-slate-500 font-mono text-center">
-                Simulator notice: Enter any 6-digit digits to pass security.
-              </p>
+
+              {/* New Password */}
+              <div className="space-y-1">
+                <label className="block font-mono text-[10px] text-slate-400 uppercase tracking-wider" htmlFor="new-password-input">
+                  NEW_PASSWORD_CHOICE
+                </label>
+                <div className="relative flex items-center bg-slate-950 rounded-xl border border-white/10 focus-within:border-cyan-500 transition-colors">
+                  <Key className="absolute left-3 w-4 h-4 text-cyan-400/60" />
+                  <input
+                    id="new-password-input"
+                    type={showNewPassword ? 'text' : 'password'}
+                    required
+                    placeholder="Enter new password (min. 6 chars)"
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                    className="w-full bg-transparent border-none py-3 pl-10 pr-12 text-sm text-white placeholder-slate-600 focus:outline-none focus:ring-0"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowNewPassword(!showNewPassword)}
+                    className="absolute right-3 text-slate-500 hover:text-white"
+                  >
+                    {showNewPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+              </div>
+
+              {/* Confirm New Password (Input twice to verify) */}
+              <div className="space-y-1">
+                <div className="flex justify-between items-center">
+                  <label className="block font-mono text-[10px] text-slate-400 uppercase tracking-wider" htmlFor="confirm-password-input">
+                    CONFIRM_NEW_PASSWORD (INPUT TWICE)
+                  </label>
+                  {confirmPassword && (
+                    <span className={`text-[10px] font-mono font-bold ${newPassword === confirmPassword ? 'text-emerald-400' : 'text-red-400'}`}>
+                      {newPassword === confirmPassword ? '✓ Passwords Match' : '✗ Must Match'}
+                    </span>
+                  )}
+                </div>
+                <div className="relative flex items-center bg-slate-950 rounded-xl border border-white/10 focus-within:border-cyan-500 transition-colors">
+                  <Lock className="absolute left-3 w-4 h-4 text-cyan-400/60" />
+                  <input
+                    id="confirm-password-input"
+                    type={showConfirmPassword ? 'text' : 'password'}
+                    required
+                    placeholder="Re-enter your new password to confirm"
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    className="w-full bg-transparent border-none py-3 pl-10 pr-12 text-sm text-white placeholder-slate-600 focus:outline-none focus:ring-0"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                    className="absolute right-3 text-slate-500 hover:text-white"
+                  >
+                    {showConfirmPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+              </div>
             </div>
           )}
 
-          {/* Submit Action */}
+          {/* ----------------------------------------------------------- */}
+          {/* STANDARD LOGIN / SIGNUP FIELDS                              */}
+          {/* ----------------------------------------------------------- */}
+          {!isForgotPassword && (
+            <>
+              {/* Email / Username field */}
+              {!mfaRequired && (
+                <div className="space-y-1">
+                  <label className="block font-mono text-[10px] text-slate-400 uppercase tracking-wider" htmlFor="email-input">
+                    OPERATOR_ID
+                  </label>
+                  <div className="relative flex items-center bg-slate-950 rounded-xl border border-white/10 focus-within:border-cyan-500 transition-colors">
+                    <Mail className="absolute left-3 w-4 h-4 text-cyan-400/60" />
+                    <input
+                      id="email-input"
+                      type="email"
+                      required
+                      placeholder="operator@enterprise.sec"
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      className="w-full bg-transparent border-none py-3 pl-10 pr-4 text-sm text-white placeholder-slate-600 focus:outline-none focus:ring-0"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* Operator Name Field for Signup */}
+              {isSignUp && !mfaRequired && (
+                <div className="space-y-1">
+                  <label className="block font-mono text-[10px] text-slate-400 uppercase tracking-wider" htmlFor="name-input">
+                    OPERATOR_FULLNAME
+                  </label>
+                  <div className="relative flex items-center bg-slate-950 rounded-xl border border-white/10 focus-within:border-cyan-500 transition-colors">
+                    <User className="absolute left-3 w-4 h-4 text-cyan-400/60" />
+                    <input
+                      id="name-input"
+                      type="text"
+                      required
+                      placeholder="Full name"
+                      value={name}
+                      onChange={(e) => setName(e.target.value)}
+                      className="w-full bg-transparent border-none py-3 pl-10 pr-4 text-sm text-white placeholder-slate-600 focus:outline-none focus:ring-0"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* Password field */}
+              {!mfaRequired && (
+                <div className="space-y-1">
+                  <div className="flex justify-between items-center">
+                    <label className="block font-mono text-[10px] text-slate-400 uppercase tracking-wider" htmlFor="password-input">
+                      ACCESS_TOKEN
+                    </label>
+                    {!isSignUp && (
+                      <button
+                        type="button"
+                        onClick={() => { 
+                          resetFormState(); 
+                          setIsForgotPassword(true); 
+                          setForgotStep('enter_email');
+                        }}
+                        className="text-xs text-cyan-400 hover:underline hover:text-cyan-300 cursor-pointer"
+                        id="recover-password-btn"
+                      >
+                        Forgot Password?
+                      </button>
+                    )}
+                  </div>
+                  <div className="relative flex items-center bg-slate-950 rounded-xl border border-white/10 focus-within:border-cyan-500 transition-colors">
+                    <Key className="absolute left-3 w-4 h-4 text-cyan-400/60" />
+                    <input
+                      id="password-input"
+                      type={showPassword ? 'text' : 'password'}
+                      required
+                      placeholder="••••••••••••"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      className="w-full bg-transparent border-none py-3 pl-10 pr-12 text-sm text-white placeholder-slate-600 focus:outline-none focus:ring-0"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword(!showPassword)}
+                      className="absolute right-3 text-slate-500 hover:text-white"
+                      id="toggle-password-visibility"
+                    >
+                      {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* MFA Challenge Input */}
+              {mfaRequired && (
+                <div className="space-y-1 animate-fadeIn">
+                  <label className="block font-mono text-[10px] text-slate-400 uppercase tracking-wider" htmlFor="mfa-input">
+                    MFA_KEY_DIGITS
+                  </label>
+                  <div className="relative flex items-center bg-slate-950 rounded-xl border border-white/10 focus-within:border-cyan-500 transition-colors">
+                    <Lock className="absolute left-3 w-4 h-4 text-cyan-400/60" />
+                    <input
+                      id="mfa-input"
+                      type="text"
+                      required
+                      maxLength={6}
+                      placeholder="Enter any 6 digit simulated code"
+                      value={mfaCode}
+                      onChange={(e) => setMfaCode(e.target.value.replace(/\D/g, ''))}
+                      className="w-full bg-transparent border-none py-3 pl-10 pr-4 text-sm text-white placeholder-slate-600 focus:outline-none focus:ring-0 tracking-widest font-mono text-center"
+                    />
+                  </div>
+                  <p className="text-[10px] text-slate-500 font-mono text-center">
+                    Simulator notice: Enter any 6-digit digits to pass security.
+                  </p>
+                </div>
+              )}
+            </>
+          )}
+
+          {/* Submit Action Button */}
           <button
             type="submit"
             disabled={loading}
-            className="w-full bg-cyan-500 hover:bg-cyan-400 disabled:bg-cyan-800 text-slate-950 py-3.5 rounded font-mono text-xs font-bold uppercase tracking-wider shadow-[0_0_15px_rgba(34,211,238,0.2)] active:scale-95 transition-all mt-6"
+            className="w-full bg-cyan-500 hover:bg-cyan-400 disabled:bg-cyan-800 text-slate-950 py-3.5 rounded-xl font-mono text-xs font-bold uppercase tracking-wider shadow-[0_0_15px_rgba(34,211,238,0.2)] active:scale-95 transition-all mt-6 cursor-pointer flex items-center justify-center gap-2"
             id="auth-submit-btn"
           >
-            {loading ? 'Authenticating...' : isForgotPassword ? 'Initiate Password Recovery' : mfaRequired ? 'Verify & Enter console' : isSignUp ? 'Initiate Operator Roll' : 'Initiate Authentication'}
+            {loading ? (
+              <span className="flex items-center gap-2">
+                <RefreshCw className="w-4 h-4 animate-spin" />
+                <span>Processing Request...</span>
+              </span>
+            ) : isForgotPassword ? (
+              forgotStep === 'enter_email' ? (
+                <>
+                  <Send className="w-4 h-4" />
+                  <span>Send 6-Digit Code to Gmail →</span>
+                </>
+              ) : forgotStep === 'enter_code' ? (
+                <>
+                  <ShieldCheck className="w-4 h-4" />
+                  <span>Verify 6-Digit Code →</span>
+                </>
+              ) : (
+                <>
+                  <CheckCircle2 className="w-4 h-4" />
+                  <span>Confirm Password & Log In →</span>
+                </>
+              )
+            ) : mfaRequired ? (
+              'Verify & Enter Console'
+            ) : isSignUp ? (
+              'Initiate Operator Roll'
+            ) : (
+              'Initiate Authentication'
+            )}
           </button>
         </form>
 
@@ -455,15 +798,16 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
           {isForgotPassword ? (
             <button
               onClick={() => { resetFormState(); setIsForgotPassword(false); }}
-              className="text-xs text-cyan-400 hover:underline"
+              className="text-xs text-cyan-400 hover:underline cursor-pointer flex items-center gap-1"
               id="back-to-login-btn"
             >
-              Back to Authentication login
+              <RotateCcw className="w-3.5 h-3.5" />
+              <span>Back to standard login</span>
             </button>
           ) : mfaRequired ? (
             <button
               onClick={() => { resetFormState(); setMfaRequired(false); }}
-              className="text-xs text-red-400 hover:underline"
+              className="text-xs text-red-400 hover:underline cursor-pointer"
               id="abort-mfa-btn"
             >
               Abort security verification
@@ -471,7 +815,7 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
           ) : (
             <button
               onClick={() => { resetFormState(); setIsSignUp(!isSignUp); }}
-              className="text-xs text-cyan-400 hover:underline"
+              className="text-xs text-cyan-400 hover:underline cursor-pointer"
               id="toggle-signup-login-btn"
             >
               {isSignUp ? 'Already registered operator? Identify here' : 'New operator? Enroll profile here'}
@@ -480,7 +824,7 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
         </div>
 
         {/* Admin Safe Box - MFA Locked Vault */}
-        <div className={`mt-6 p-4 rounded-lg border transition-all duration-300 font-mono text-xs ${
+        <div className={`mt-6 p-4 rounded-xl border transition-all duration-300 font-mono text-xs ${
           isSafeBoxUnlocked 
             ? 'bg-slate-950/95 border-emerald-500/40 shadow-[0_0_20px_rgba(16,185,129,0.15)]' 
             : 'bg-slate-950/80 border-white/10 hover:border-amber-500/30'
@@ -505,7 +849,7 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
 
               <form onSubmit={handleUnlockSafeBox} className="space-y-2">
                 <div className="flex items-center gap-2">
-                  <div className="relative flex-1 bg-slate-900 rounded border border-white/15 focus-within:border-amber-400 transition-colors">
+                  <div className="relative flex-1 bg-slate-900 rounded-lg border border-white/15 focus-within:border-amber-400 transition-colors">
                     <Key className="absolute left-3 w-3.5 h-3.5 text-amber-400/60" />
                     <input
                       id="safebox-mfa-input"
@@ -519,23 +863,16 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
                   </div>
                   <button
                     type="submit"
-                    className="px-3.5 py-2 rounded bg-amber-500 hover:bg-amber-400 active:scale-95 text-slate-950 font-bold font-mono text-xs uppercase transition-all shadow-[0_0_10px_rgba(245,158,11,0.25)] cursor-pointer shrink-0"
-                    id="btn-unlock-safebox"
+                    className="px-3.5 py-2 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 rounded-lg font-bold text-xs transition-all cursor-pointer shrink-0"
                   >
                     Unlock
                   </button>
                 </div>
-
                 {safeBoxError && (
-                  <p className="text-[10px] text-red-400 font-mono flex items-center gap-1">
-                    <span>❌ {safeBoxError}</span>
+                  <p className="text-[10px] text-red-400 font-mono">
+                    {safeBoxError}
                   </p>
                 )}
-                
-                <div className="flex items-center justify-between text-[10px] text-slate-500 pt-1">
-                  <span>Protected by TOTP MFA simulation</span>
-                  <span className="text-slate-600">e.g. 123456</span>
-                </div>
               </form>
             </div>
           ) : (
@@ -543,85 +880,67 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
             <div className="space-y-3 animate-fadeIn">
               <div className="flex items-center justify-between border-b border-emerald-500/20 pb-2">
                 <div className="flex items-center gap-2 text-emerald-400 font-bold">
-                  <Unlock className="w-4 h-4 text-emerald-400 animate-bounce" />
-                  <span className="tracking-wider">ADMIN SAFE BOX [UNLOCKED]</span>
+                  <Unlock className="w-4 h-4 text-emerald-400" />
+                  <span className="tracking-wider">ADMIN VAULT UNLOCKED</span>
                 </div>
                 <button
-                  type="button"
                   onClick={handleLockSafeBox}
-                  className="flex items-center gap-1 px-2 py-0.5 rounded bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-white text-[10px] font-mono border border-white/10 transition-all cursor-pointer"
-                  title="Lock Safe Box"
-                  id="btn-relock-safebox"
+                  className="text-[10px] text-slate-400 hover:text-white underline cursor-pointer"
                 >
-                  <Lock className="w-3 h-3 text-amber-400" />
-                  <span>Lock Vault</span>
+                  Lock Safe Box
                 </button>
               </div>
 
-              <div className="flex items-center gap-1.5 text-cyan-400 font-semibold text-[11px]">
-                <Radio className="w-3.5 h-3.5 animate-pulse" />
-                <span>SECURE DEMO SIMULATION KEYS</span>
-              </div>
+              <p className="text-[11px] text-slate-300 leading-relaxed">
+                Click any credential below to auto-fill into authentication fields:
+              </p>
 
-              {/* Admin Credentials */}
-              <div className="p-2.5 rounded bg-slate-900 border border-amber-500/20 space-y-1.5">
-                <div className="flex items-center justify-between">
-                  <span className="text-amber-400 font-bold text-[10px] uppercase">👑 Administrator Clearance</span>
-                  <button
-                    type="button"
-                    onClick={() => handleFillCredentials('chekchris85@gmail.com', 'admin123')}
-                    className="flex items-center gap-1 px-2 py-0.5 rounded bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 font-bold text-[9px] border border-amber-500/40 transition-all cursor-pointer"
-                  >
-                    {copiedKey === 'chekchris85@gmail.com' ? <Check className="w-3 h-3 text-emerald-400" /> : <ArrowRight className="w-3 h-3" />}
-                    <span>{copiedKey === 'chekchris85@gmail.com' ? 'Filled!' : 'Auto-Fill'}</span>
-                  </button>
-                </div>
-                <div className="text-[11px]">
-                  <span className="text-slate-500">Operator ID:</span> <span className="text-white font-bold select-all">chekchris85@gmail.com</span>
-                </div>
-                <div className="text-[11px]">
-                  <span className="text-slate-500">Access Token:</span> <span className="text-white font-bold select-all">admin123</span>
-                </div>
-              </div>
+              <div className="space-y-2">
+                {/* Admin credentials */}
+                <button
+                  type="button"
+                  onClick={() => handleFillCredentials('chekchris85@gmail.com', 'admin123')}
+                  className="w-full text-left p-2.5 rounded bg-slate-900/90 border border-emerald-500/30 hover:border-emerald-400/80 hover:bg-emerald-950/20 transition-all flex items-center justify-between group cursor-pointer"
+                >
+                  <div>
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[9px] font-bold uppercase px-1.5 py-0.2 rounded bg-red-500/20 text-red-300 border border-red-500/30">
+                        Admin Role
+                      </span>
+                      <span className="text-white font-bold text-xs">chekchris85@gmail.com</span>
+                    </div>
+                    <span className="text-[10px] text-slate-400">Password: admin123 • MFA: 123456</span>
+                  </div>
+                  <span className="text-[10px] text-emerald-400 opacity-0 group-hover:opacity-100 transition-opacity">
+                    {copiedKey === 'chekchris85@gmail.com' ? '✓ Filled' : 'Click to Fill'}
+                  </span>
+                </button>
 
-              {/* Analyst Credentials */}
-              <div className="p-2.5 rounded bg-slate-900 border border-sky-500/20 space-y-1.5">
-                <div className="flex items-center justify-between">
-                  <span className="text-sky-400 font-bold text-[10px] uppercase">🛡️ Analyst Clearance</span>
-                  <button
-                    type="button"
-                    onClick={() => handleFillCredentials('analyst@enterprise.sec', 'analyst123')}
-                    className="flex items-center gap-1 px-2 py-0.5 rounded bg-sky-500/20 hover:bg-sky-500/30 text-sky-300 font-bold text-[9px] border border-sky-500/40 transition-all cursor-pointer"
-                  >
-                    {copiedKey === 'analyst@enterprise.sec' ? <Check className="w-3 h-3 text-emerald-400" /> : <ArrowRight className="w-3 h-3" />}
-                    <span>{copiedKey === 'analyst@enterprise.sec' ? 'Filled!' : 'Auto-Fill'}</span>
-                  </button>
-                </div>
-                <div className="text-[11px]">
-                  <span className="text-slate-500">Operator ID:</span> <span className="text-white font-bold select-all">analyst@enterprise.sec</span>
-                </div>
-                <div className="text-[11px]">
-                  <span className="text-slate-500">Access Token:</span> <span className="text-white font-bold select-all">analyst123</span>
-                </div>
-              </div>
-
-              <div className="text-[10px] text-slate-500 font-mono">
-                ℹ️ MFA Challenge upon login: Enter any 6-digit code.
+                {/* Analyst credentials */}
+                <button
+                  type="button"
+                  onClick={() => handleFillCredentials('analyst@coou.edu.ng', 'analyst123')}
+                  className="w-full text-left p-2.5 rounded bg-slate-900/90 border border-cyan-500/30 hover:border-cyan-400/80 hover:bg-cyan-950/20 transition-all flex items-center justify-between group cursor-pointer"
+                >
+                  <div>
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[9px] font-bold uppercase px-1.5 py-0.2 rounded bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">
+                        Analyst Role
+                      </span>
+                      <span className="text-white font-bold text-xs">analyst@coou.edu.ng</span>
+                    </div>
+                    <span className="text-[10px] text-slate-400">Password: analyst123</span>
+                  </div>
+                  <span className="text-[10px] text-cyan-400 opacity-0 group-hover:opacity-100 transition-opacity">
+                    {copiedKey === 'analyst@coou.edu.ng' ? '✓ Filled' : 'Click to Fill'}
+                  </span>
+                </button>
               </div>
             </div>
           )}
 
         </div>
-      </div>
 
-      {/* Connection Indicator footer */}
-      <div className="fixed bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-4 opacity-50 text-xs font-mono text-slate-400">
-        <span className="flex items-center gap-1.5">
-          <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)] animate-pulse" />
-          Vigil Console Gateway Live
-        </span>
-        <span className="h-4 w-px bg-white/10" />
-        <span>v4.0.1-vigil</span>
       </div>
     </div>
   );

@@ -15,8 +15,18 @@ import {
   profileUpdateSchema, 
   mfaToggleSchema, 
   forgotPasswordSchema, 
+  verifyResetCodeSchema,
   resetPasswordSchema 
 } from '../schemas/validation.js';
+
+interface PasswordResetSession {
+  email: string;
+  code: string;
+  expiresAt: number;
+  verified: boolean;
+}
+
+const passwordResetSessions = new Map<string, PasswordResetSession>();
 
 function getJwtSecret(): string {
   const secret = process.env.JWT_SECRET;
@@ -321,40 +331,195 @@ export function createAuthRouter(
     });
   });
 
-  // POST /api/auth/forgot-password
-  router.post('/forgot-password', (req: any, res: Response) => {
+  // POST /api/auth/forgot-password (Dispatches 6-digit verification code to user's Gmail)
+  router.post('/forgot-password', async (req: any, res: Response) => {
     const parseResult = forgotPasswordSchema.safeParse(req.body);
     if (!parseResult.success) {
       const err = parseResult.error.issues?.[0]?.message || 'Valid email required';
       return res.status(400).json({ error: err });
     }
     const { email } = parseResult.data;
-    const user = dbState.users.find(u => u.email.toLowerCase() === email.toLowerCase());
+    const normalizedEmail = email.toLowerCase().trim();
+    const user = dbState.users.find(u => u.email.toLowerCase() === normalizedEmail);
     if (!user) {
-      return res.status(404).json({ error: 'No operator found with that identifier.' });
+      return res.status(404).json({ error: `No registered operator found with email "${email}". Please verify your Gmail address.` });
     }
+
+    // Generate secure 6-digit OTP code
+    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    const expiresAt = Date.now() + 15 * 60 * 1000; // 15 minutes validity
+
+    passwordResetSessions.set(normalizedEmail, {
+      email: normalizedEmail,
+      code,
+      expiresAt,
+      verified: false
+    });
+
+    const timestamp = new Date().toLocaleString();
+    const subject = `[EncDec IDS] Your 6-Digit Password Reset Code: ${code}`;
+    const textBody = `Hello ${user.name},\n\nA password reset request was initiated for your EncDec IDS operator account (${user.email}).\n\nYour 6-digit verification code is:\n\n   >>> ${code} <<<\n\nThis verification code expires in 15 minutes. Enter this code into your EncDec IDS software to proceed with setting a new password.\n\nIf you did not initiate this request, your account credentials remain unchanged.\n\nTimestamp: ${timestamp}\nIP Address: ${req.ip || '127.0.0.1'}\n\nRegards,\nEncDec Security Operations Team`;
     
-    addAuditLog(user.id, user.email, 'Password Recovery Requested', 'Operator Profile', req.ip || '127.0.0.1', 'success');
-    res.json({ status: 'ok', message: 'A simulated password recovery token has been initialized and logged in our secure audit stream.' });
+    const htmlBody = `
+      <div style="font-family: Arial, sans-serif; background-color: #0f172a; color: #e2e8f0; padding: 24px; border-radius: 8px; border: 1px solid #1e293b; max-width: 540px; margin: 0 auto;">
+        <div style="border-bottom: 1px solid #1e293b; padding-bottom: 12px; margin-bottom: 16px;">
+          <h2 style="color: #06b6d4; margin: 0; font-size: 20px;">EncDec IDS Security Gateway</h2>
+          <p style="color: #64748b; font-size: 11px; margin: 4px 0 0 0;">CONFIDENTIAL OPERATIONAL ACCESS VERIFICATION</p>
+        </div>
+        <p style="font-size: 14px; margin-top: 0;">Hello <strong>${user.name}</strong>,</p>
+        <p style="font-size: 13px; line-height: 1.5; color: #cbd5e1;">A password recovery request was initiated for your operator account (<strong>${user.email}</strong>).</p>
+        <p style="font-size: 13px; color: #94a3b8;">Enter the 6-digit verification code below in your software console:</p>
+        
+        <div style="background: #1e293b; border: 2px solid #06b6d4; padding: 18px; border-radius: 8px; text-align: center; margin: 20px 0; box-shadow: 0 0 15px rgba(6, 182, 212, 0.2);">
+          <span style="font-family: 'Courier New', monospace; font-size: 32px; font-weight: bold; letter-spacing: 8px; color: #38bdf8;">${code}</span>
+        </div>
+
+        <div style="background: #1e293b/60; border-left: 3px solid #f59e0b; padding: 10px 14px; margin: 16px 0; font-size: 12px; color: #cbd5e1;">
+          <p style="margin: 0;"><strong>Expiry Window:</strong> 15 minutes</p>
+          <p style="margin: 4px 0 0 0;"><strong>Request Time:</strong> ${timestamp}</p>
+          <p style="margin: 4px 0 0 0;"><strong>Origin IP:</strong> ${req.ip || '127.0.0.1'}</p>
+        </div>
+
+        <p style="color: #94a3b8; font-size: 12px;">If you did not request this password reset, please contact your SOC Administrator immediately.</p>
+        <hr style="border: none; border-top: 1px solid #334155; margin: 20px 0;" />
+        <p style="color: #64748b; font-size: 11px; margin-bottom: 0;">Chukwuemeka Odumegwu Ojukwu University • EncDec Cybersecurity Platform</p>
+      </div>
+    `;
+
+    // Dispatch real email to Gmail
+    sendEmail({
+      to: user.email,
+      subject,
+      text: textBody,
+      html: htmlBody,
+      fromName: 'EncDec IDS Security Gateway'
+    }).catch(err => {
+      console.warn(`[PASSWORD RESET EMAIL NOTICE] ${err?.message || err}`);
+    });
+
+    // Record into email logs
+    const logEntry: EmailLog = {
+      id: 'eml_' + Math.random().toString(36).substring(2, 9),
+      recipient: user.email,
+      recipientName: user.name,
+      senderEmail: 'security@encdec-ids.sec',
+      senderUserId: 'auth_service',
+      subject,
+      eventType: 'login',
+      type: 'login',
+      role: user.role,
+      status: 'sent',
+      timestamp: new Date().toISOString(),
+      previewSnippet: `Password recovery 6-digit code: ${code} dispatched to ${user.email}`,
+      bodyText: textBody,
+      htmlBody
+    };
+
+    if (!dbState.emailLogs) dbState.emailLogs = [];
+    dbState.emailLogs.unshift(logEntry);
+    if (dbState.emailLogs.length > 300) dbState.emailLogs.pop();
+    saveDb();
+    broadcastWs({ type: 'EMAIL_LOG_UPDATE', payload: logEntry });
+
+    addAuditLog(user.id, user.email, 'Password Recovery Code Dispatched', `Gmail: ${user.email}`, req.ip || '127.0.0.1', 'success');
+
+    res.json({ 
+      status: 'ok', 
+      success: true, 
+      message: `A 6-digit verification code has been dispatched to ${user.email}. Check your Gmail inbox.`,
+      email: user.email
+    });
   });
 
-  // POST /api/auth/reset-password
-  router.post('/reset-password', (req: any, res: Response) => {
+  // POST /api/auth/verify-reset-code (Validates 6-digit OTP code before asking for new password)
+  router.post('/verify-reset-code', (req: any, res: Response) => {
+    const parseResult = verifyResetCodeSchema.safeParse(req.body);
+    if (!parseResult.success) {
+      const err = parseResult.error.issues?.[0]?.message || 'Invalid 6-digit verification code';
+      return res.status(400).json({ error: err });
+    }
+
+    const { email, code } = parseResult.data;
+    const normalizedEmail = email.toLowerCase().trim();
+    const session = passwordResetSessions.get(normalizedEmail);
+
+    if (!session || session.expiresAt < Date.now()) {
+      return res.status(400).json({ 
+        error: 'Verification code has expired or was not requested. Please request a new 6-digit code.' 
+      });
+    }
+
+    if (session.code !== code.trim()) {
+      return res.status(400).json({ 
+        error: 'Incorrect 6-digit verification code. Please check your Gmail message and re-enter.' 
+      });
+    }
+
+    session.verified = true;
+    res.json({
+      status: 'ok',
+      success: true,
+      message: 'Verification code confirmed. You can now set your new password.'
+    });
+  });
+
+  // POST /api/auth/reset-password (Saves new password and logs the user in immediately)
+  router.post('/reset-password', async (req: any, res: Response) => {
     const parseResult = resetPasswordSchema.safeParse(req.body);
     if (!parseResult.success) {
       const err = parseResult.error.issues?.[0]?.message || 'Invalid parameters';
       return res.status(400).json({ error: err });
     }
-    const { email, newPassword } = parseResult.data;
-    const user = dbState.users.find(u => u.email.toLowerCase() === email.toLowerCase());
+
+    const { email, code, newPassword, confirmPassword } = parseResult.data;
+    const normalizedEmail = email.toLowerCase().trim();
+
+    if (confirmPassword && newPassword !== confirmPassword) {
+      return res.status(400).json({ error: 'Passwords do not match. Please ensure both passwords match.' });
+    }
+
+    const session = passwordResetSessions.get(normalizedEmail);
+    if (!session || session.code !== code.trim() || session.expiresAt < Date.now()) {
+      return res.status(400).json({ 
+        error: 'Password reset session expired or invalid. Please request a new code.' 
+      });
+    }
+
+    const user = dbState.users.find(u => u.email.toLowerCase() === normalizedEmail);
     if (!user) {
       return res.status(404).json({ error: 'Operator entry not found.' });
     }
     
+    // Rotate password
     user.passwordHash = bcryptjs.hashSync(newPassword, 10);
     saveDb();
-    addAuditLog(user.id, user.email, 'Password Reset Completed', 'Operator Profile', req.ip || '127.0.0.1', 'success');
-    res.json({ status: 'ok', message: 'Credentials successfully rotated.' });
+
+    // Clear reset session
+    passwordResetSessions.delete(normalizedEmail);
+
+    addAuditLog(user.id, user.email, 'Password Reset & Authenticated', 'Operator Profile', req.ip || '127.0.0.1', 'success');
+
+    // Notify user of successful change
+    sendNotificationEmail(user, 'login', req.ip).catch(console.error);
+
+    // Auto-login: issue session token and user profile
+    const token = jwt.sign({ id: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '8h' });
+
+    res.json({ 
+      status: 'ok', 
+      success: true, 
+      token,
+      user: {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        role: user.role,
+        mfaEnabled: user.mfaEnabled,
+        avatarUrl: user.avatarUrl,
+        lastNameChangeDate: user.lastNameChangeDate
+      },
+      message: 'Password successfully updated! Logging you in...' 
+    });
   });
 
   // Profile endpoints

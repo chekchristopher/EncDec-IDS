@@ -4,6 +4,7 @@
  */
 
 import { jsPDF } from 'jspdf';
+import QRCode from 'qrcode';
 
 export interface CertificateData {
   recipientName: string;
@@ -14,16 +15,45 @@ export interface CertificateData {
   accreditationLevel: string;
   verificationCode: string;
   quizScore?: number;
+  qrCodeDataUrl?: string;
+  verificationUrl?: string;
+  firstName?: string;
+  middleName?: string;
+  lastName?: string;
 }
 
 /**
- * Generates an official, high-resolution landscape certificate in PDF format.
+ * Generates a high-resolution QR code data URL for certificate verification.
  */
-export function generateCertificatePdf(data: CertificateData): void {
+export async function generateQrCodeDataUrl(url: string): Promise<string> {
+  return await QRCode.toDataURL(url, {
+    errorCorrectionLevel: 'H',
+    margin: 1,
+    width: 280,
+    color: {
+      dark: '#081426',
+      light: '#ffffff'
+    }
+  });
+}
+
+/**
+ * Creates an official, high-resolution landscape certificate in PDF format using jsPDF.
+ */
+export function createCertificatePdfDoc(data: CertificateData): jsPDF {
   const doc = new jsPDF({
     orientation: 'landscape',
     unit: 'mm',
-    format: 'a4'
+    format: 'a4',
+    compress: true
+  });
+
+  doc.setDocumentProperties({
+    title: `EncDec IDS CE-SOC Certificate - ${data.recipientName}`,
+    subject: 'Certified EncDec IDS SOC Specialist (CE-SOC) Accreditation',
+    author: 'EncDec Cybersecurity Academy & Threat Research Lab',
+    keywords: 'cybersecurity, ids, soc, accreditation, certificate, ce-soc, coou',
+    creator: 'EncDec IDS Unified Security Operations Platform'
   });
 
   const pageWidth = doc.internal.pageSize.getWidth(); // 297mm
@@ -86,7 +116,9 @@ export function generateCertificatePdf(data: CertificateData): void {
 
   // 5. Recipient Name Highlight
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(24);
+  const nameLength = (data.recipientName || '').length;
+  const nameFontSize = nameLength > 36 ? 18 : nameLength > 26 ? 20 : 24;
+  doc.setFontSize(nameFontSize);
   doc.setTextColor(6, 182, 212);
   doc.text(data.recipientName || 'Security Operations Analyst', pageWidth / 2, 67, { align: 'center' });
 
@@ -158,6 +190,61 @@ export function generateCertificatePdf(data: CertificateData): void {
   doc.text('VERIFIED SOC', sealCenterX, sealCenterY + 1.5, { align: 'center' });
   doc.text('ACCREDITATION', sealCenterX, sealCenterY + 5.5, { align: 'center' });
 
+  // 8B. Verified Credential Accreditation Box (Left)
+  const badgeX = margin + 18;
+  const badgeY = 120;
+  const badgeWidth = 42;
+  const badgeHeight = 31;
+  doc.setFillColor(15, 23, 42);
+  doc.setDrawColor(...cyanGlow);
+  doc.setLineWidth(0.5);
+  doc.roundedRect(badgeX, badgeY, badgeWidth, badgeHeight, 2, 2, 'FD');
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(6.5);
+  doc.setTextColor(...cyanGlow);
+  doc.text('ACCREDITATION MATRIX', badgeX + badgeWidth / 2, badgeY + 6, { align: 'center' });
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(5.5);
+  doc.setTextColor(203, 213, 225);
+  doc.text('TIER-III AUTONOMOUS DEFENSE', badgeX + badgeWidth / 2, badgeY + 12, { align: 'center' });
+  doc.text('SOC OPERATIONS SPECIALIST', badgeX + badgeWidth / 2, badgeY + 17, { align: 'center' });
+  doc.text('COOU THREAT RESEARCH LAB', badgeX + badgeWidth / 2, badgeY + 22, { align: 'center' });
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(...goldAccent);
+  doc.text('★ CRYPTOGRAPHICALLY VERIFIED ★', badgeX + badgeWidth / 2, badgeY + 27, { align: 'center' });
+
+  // 8C. QR Code for Employer Validation (Right)
+  if (data.qrCodeDataUrl) {
+    const qrSize = 25;
+    const qrBoxWidth = 36;
+    const qrBoxHeight = 31;
+    const qrBoxX = pageWidth - margin - 18 - qrBoxWidth;
+    const qrBoxY = 120;
+
+    doc.setFillColor(15, 23, 42);
+    doc.setDrawColor(...goldAccent);
+    doc.setLineWidth(0.5);
+    doc.roundedRect(qrBoxX, qrBoxY, qrBoxWidth, qrBoxHeight, 2, 2, 'FD');
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(6);
+    doc.setTextColor(...goldAccent);
+    doc.text('SCAN TO VERIFY', qrBoxX + qrBoxWidth / 2, qrBoxY + 5.5, { align: 'center' });
+
+    try {
+      doc.addImage(data.qrCodeDataUrl, 'PNG', qrBoxX + (qrBoxWidth - qrSize) / 2, qrBoxY + 7, qrSize, qrSize);
+    } catch (err) {
+      console.warn('QR code could not be embedded into PDF:', err);
+    }
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(4.5);
+    doc.setTextColor(148, 163, 184);
+    doc.text('Online Employer Verification', qrBoxX + qrBoxWidth / 2, qrBoxY + qrBoxHeight + 3, { align: 'center' });
+  }
+
   // 9. Signatures Block
   const sigY = 172;
 
@@ -203,6 +290,39 @@ export function generateCertificatePdf(data: CertificateData): void {
   doc.setTextColor(...goldAccent);
   doc.text(`SECURE HASH: ${data.verificationCode}`, pageWidth - margin - 8, pageHeight - margin - 7, { align: 'right' });
 
-  // Save/Download
-  doc.save(`EncDec_Certificate_${data.certificateId}.pdf`);
+  return doc;
+}
+
+/**
+ * Generates and downloads an official, high-resolution landscape certificate PDF.
+ */
+export function generateCertificatePdf(data: CertificateData): void {
+  const doc = createCertificatePdfDoc(data);
+  const cleanName = (data.recipientName || 'Analyst').replace(/[^a-zA-Z0-9_-]/g, '_');
+  const filename = `EncDec_CE-SOC_Certificate_${cleanName}_${data.certificateId}.pdf`;
+  doc.save(filename);
+}
+
+/**
+ * Ensures QR code is generated before compiling and downloading PDF.
+ */
+export async function generateCertificatePdfWithQr(data: CertificateData): Promise<void> {
+  if (!data.qrCodeDataUrl) {
+    const origin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000';
+    const url = data.verificationUrl || `${origin}/verify/${encodeURIComponent(data.certificateId)}`;
+    try {
+      data.qrCodeDataUrl = await generateQrCodeDataUrl(url);
+    } catch (e) {
+      console.warn('QR code generation error:', e);
+    }
+  }
+  generateCertificatePdf(data);
+}
+
+/**
+ * Returns a data URI URL for previewing the certificate in an iframe or viewer.
+ */
+export function getCertificatePdfDataUri(data: CertificateData): string {
+  const doc = createCertificatePdfDoc(data);
+  return doc.output('datauristring');
 }

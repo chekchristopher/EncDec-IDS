@@ -5,9 +5,10 @@
 
 import { Router, Request, Response, NextFunction } from 'express';
 import fs from 'fs';
+import QRCode from 'qrcode';
 import { GoogleGenAI, Type } from '@google/genai';
 import { 
-  Host, Rule, Alert, Threat, APIKey, QuarantineItem, SecurityReport, DualDatabaseStatus, MssqlConfig, EmailLog 
+  Host, Rule, Alert, Threat, APIKey, QuarantineItem, SecurityReport, DualDatabaseStatus, MssqlConfig, EmailLog, StoredCertificate
 } from '../../src/types.js';
 import { DbSchema } from '../db/schema.js';
 import { firestoreSyncService } from '../db/firestore.js';
@@ -1202,6 +1203,154 @@ Respond with a JSON object conforming to this schema:
     res.json({
       success: true,
       progress: record
+    });
+  });
+
+  // --- CERTIFICATE REGISTRATION & QR CODE VERIFICATION ---
+  // POST /api/certificates/register (Saves certificate in database and generates high-res verification QR code)
+  router.post('/certificates/register', async (req: any, res: Response) => {
+    try {
+      const {
+        certificateId,
+        firstName,
+        middleName,
+        lastName,
+        fullName,
+        recipientEmail,
+        courseTitle,
+        accreditationLevel,
+        quizScore,
+        quizPassed,
+        issueDate,
+        verificationCode
+      } = req.body;
+
+      if (!certificateId) {
+        return res.status(400).json({ error: 'Certificate ID is required' });
+      }
+
+      const safeFirstName = (firstName || 'Security').trim();
+      const safeMiddleName = (middleName || '').trim();
+      const safeLastName = (lastName || 'Analyst').trim();
+      const safeFullName = (fullName || [safeFirstName, safeMiddleName, safeLastName].filter(Boolean).join(' ')).trim();
+
+      // Resolve base URL for verification QR code
+      const proto = req.get('x-forwarded-proto') || req.protocol || 'http';
+      const host = req.get('host') || 'localhost:3000';
+      const baseUrl = process.env.APP_URL || `${proto}://${host}`;
+      const verificationUrl = `${baseUrl}/verify/${encodeURIComponent(certificateId)}`;
+
+      // Generate crisp QR code data URL (High error correction for reliable phone scanning)
+      const qrCodeDataUrl = await QRCode.toDataURL(verificationUrl, {
+        errorCorrectionLevel: 'H',
+        margin: 1,
+        width: 320,
+        color: {
+          dark: '#081224',
+          light: '#ffffff'
+        }
+      });
+
+      const uniqueAttestation = "This analyst is a certified EncDec Autonomous SOC Defense Analyst (CE-SOC), verified in real-time by the EncDec Threat Research Lab and Chukwuemeka Odumegwu Ojukwu University (COOU). This candidate has successfully demonstrated certified operational mastery across Deep Packet Inspection (DPI), File Integrity Monitoring (FIM), TopoJSON Geodesic Incursion Telemetry, and Autonomous Incident Containment.";
+
+      const certDoc: StoredCertificate = {
+        certificateId,
+        userId: req.user?.id || 'usr_candidate',
+        firstName: safeFirstName,
+        middleName: safeMiddleName || undefined,
+        lastName: safeLastName,
+        fullName: safeFullName,
+        recipientEmail: (recipientEmail || req.user?.email || 'operator@coou.edu.ng').trim(),
+        courseTitle: courseTitle || 'Certified EncDec IDS SOC Specialist (CE-SOC)',
+        accreditationLevel: accreditationLevel || 'Tier-III Cyber Operations • Comprehensive Defense Mastery',
+        quizScore: typeof quizScore === 'number' ? quizScore : 100,
+        quizPassed: quizPassed !== undefined ? !!quizPassed : true,
+        issueDate: issueDate || new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }),
+        verificationCode: verificationCode || `SHA256: ${Math.random().toString(36).substring(2, 10)}${Math.random().toString(36).substring(2, 10)}${Math.random().toString(36).substring(2, 10)}`.toUpperCase(),
+        verifiedAt: new Date().toISOString(),
+        verificationUrl,
+        qrCodeDataUrl,
+        status: 'active',
+        attestationStatement: uniqueAttestation
+      };
+
+      if (!dbState.certificates) {
+        dbState.certificates = [];
+      }
+
+      const existingIdx = dbState.certificates.findIndex(c => c.certificateId === certificateId);
+      if (existingIdx >= 0) {
+        dbState.certificates[existingIdx] = certDoc;
+      } else {
+        dbState.certificates.push(certDoc);
+      }
+
+      saveDb();
+
+      addAuditLog(
+        req.user?.id || 'usr_candidate',
+        certDoc.recipientEmail,
+        'Certificate Credential Registered & QR Generated',
+        `Credential ID: ${certificateId}`,
+        req.ip || '127.0.0.1',
+        'success',
+        req.user?.role || 'analyst'
+      );
+
+      res.json({
+        success: true,
+        certificate: certDoc,
+        verificationUrl,
+        qrCodeDataUrl
+      });
+    } catch (err: any) {
+      console.error('[Certificate Registration Error]:', err);
+      res.status(500).json({ error: err.message || 'Failed to register certificate' });
+    }
+  });
+
+  // GET /api/certificates/verify/:id (Public validation endpoint for employers scanning QR code)
+  router.get('/certificates/verify/:id', (req: any, res: Response) => {
+    const certId = (req.params.id || '').trim();
+    if (!certId) {
+      return res.status(400).json({ success: false, error: 'Certificate ID is required' });
+    }
+
+    const certificates = dbState.certificates || [];
+    let cert = certificates.find(c => c.certificateId.toLowerCase() === certId.toLowerCase());
+
+    // If sample requested or not yet saved, provide sample candidate validation record
+    if (!cert && (certId.includes('SAMPLE') || certId.includes('TEST'))) {
+      cert = {
+        certificateId: certId,
+        firstName: 'Alexandra',
+        middleName: 'Claire',
+        lastName: 'Vance',
+        fullName: 'Alexandra Claire Vance',
+        recipientEmail: 'alex.vance@enterprise.sec',
+        courseTitle: 'Certified EncDec IDS SOC Specialist (CE-SOC)',
+        accreditationLevel: 'Tier-III Cyber Operations • Comprehensive Defense Mastery',
+        quizScore: 100,
+        quizPassed: true,
+        issueDate: 'October 1, 2026',
+        verificationCode: 'SHA256: 7F83B1657FF1FC53B92DC18148A1D65DFC2D4B1FA3D677284ADDD200126D9069',
+        verifiedAt: new Date().toISOString(),
+        verificationUrl: `${req.protocol}://${req.get('host')}/verify/${certId}`,
+        status: 'active',
+        attestationStatement: 'This analyst is a certified EncDec Autonomous SOC Defense Analyst (CE-SOC), verified in real-time by the EncDec Threat Research Lab and Chukwuemeka Odumegwu Ojukwu University (COOU). This candidate has successfully demonstrated certified operational mastery across Deep Packet Inspection (DPI), File Integrity Monitoring (FIM), TopoJSON Geodesic Incursion Telemetry, and Autonomous Incident Containment.'
+      };
+    }
+
+    if (!cert) {
+      return res.status(404).json({
+        success: false,
+        error: `Certificate ID "${certId}" was not found in the official EncDec IDS Registry.`
+      });
+    }
+
+    res.json({
+      success: true,
+      certificate: cert
     });
   });
 

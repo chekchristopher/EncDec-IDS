@@ -6,7 +6,8 @@
 import { 
   User, Host, Rule, Alert, Threat, APIKey, 
   AuditLog, LiveActivity, ThreatIntelFeed, MLModel, QuarantineItem, EmailLog,
-  Incident, RawSecurityEvent, ActiveResponseAction, SensorStatus, WorkbookProgress
+  Incident, RawSecurityEvent, ActiveResponseAction, SensorStatus, WorkbookProgress,
+  StoredCertificate
 } from '../../src/types.js';
 
 export interface DbSchema {
@@ -27,4 +28,5 @@ export interface DbSchema {
   activeResponses: ActiveResponseAction[];
   sensors: SensorStatus[];
   workbookProgress?: WorkbookProgress[];
+  certificates?: StoredCertificate[];
 }
