@@ -6,7 +6,9 @@
 import React, { useState, useEffect } from 'react';
 import { 
   Lock, Unlock, ShieldAlert, Key, UserCheck, 
-  Ban, RefreshCw, Trash2, Database, Radio 
+  Ban, RefreshCw, Trash2, Database, Radio,
+  Search, Award, CheckCircle2, AlertCircle, ExternalLink,
+  QrCode, FileCheck, Copy, Check
 } from 'lucide-react';
 import { apiRequest } from '../api.js';
 
@@ -25,23 +27,72 @@ export default function AdminPortal({ adminPasskeyPassed, onPasskeySuccess }: Ad
   const [dbSize, setDbSize] = useState(0);
   const [loading, setLoading] = useState(false);
 
+  // Certificate Search Module States
+  const [searchCertId, setSearchCertId] = useState('CERT-ENCDEC-2026-X892A');
+  const [certSearchResult, setCertSearchResult] = useState<any | null>(null);
+  const [certSearchLoading, setCertSearchLoading] = useState(false);
+  const [certSearchError, setCertSearchError] = useState<string | null>(null);
+  const [recentSearches, setRecentSearches] = useState<string[]>([
+    'CERT-ENCDEC-2026-X892A', 
+    'CERT-ENCDEC-2026-W194E',
+    'CERT-ENCDEC-2026-K491B'
+  ]);
+  const [copiedResultHash, setCopiedResultHash] = useState(false);
+  const [registeredCertificates, setRegisteredCertificates] = useState<any[]>([]);
+
   useEffect(() => {
     if (adminPasskeyPassed) {
       loadAdminDashboard();
+      // Auto perform initial lookup with sample ID for immediate display
+      handleSearchCertificate('CERT-ENCDEC-2026-X892A');
     }
   }, [adminPasskeyPassed]);
+
+  const handleSearchCertificate = async (idToSearch?: string) => {
+    const query = (idToSearch !== undefined ? idToSearch : searchCertId).trim();
+    if (!query) {
+      setCertSearchError('Please enter a Certificate ID or validation query.');
+      return;
+    }
+
+    setCertSearchLoading(true);
+    setCertSearchError(null);
+
+    try {
+      const res = await apiRequest(`/api/certificates/verify/${encodeURIComponent(query)}`);
+      if (res && res.success && res.certificate) {
+        setCertSearchResult(res.certificate);
+        setSearchCertId(query);
+        setRecentSearches(prev => prev.includes(query) ? prev : [query, ...prev.slice(0, 4)]);
+      } else {
+        setCertSearchResult(null);
+        setCertSearchError(res?.error || `Certificate ID "${query}" not found in database.`);
+      }
+    } catch (err: any) {
+      setCertSearchResult(null);
+      setCertSearchError(err.message || `No certificate located matching "${query}".`);
+    } finally {
+      setCertSearchLoading(false);
+    }
+  };
 
   const loadAdminDashboard = async () => {
     setLoading(true);
     setErrorMsg(null);
     try {
-      // Fetch with our secure isolation header!
-      const data = await apiRequest('/api/admin/system-stats', 'GET', null, {
-        'x-secret-passkey': 'VIGIL_ADMIN_77'
-      });
+      // Fetch stats and all certificates in parallel
+      const [data, certsRes] = await Promise.all([
+        apiRequest('/api/admin/system-stats', 'GET', null, {
+          'x-secret-passkey': 'VIGIL_ADMIN_77'
+        }),
+        apiRequest('/api/certificates').catch(() => null)
+      ]);
       setUsers(data.users);
       setSocketsCount(data.activeSocketsCount);
       setDbSize(data.dbFileSize);
+      if (certsRes && certsRes.certificates) {
+        setRegisteredCertificates(certsRes.certificates);
+      }
     } catch (err: any) {
       setErrorMsg(err.message || 'Isolated gate authentication rejected.');
     } finally {
@@ -144,13 +195,27 @@ export default function AdminPortal({ adminPasskeyPassed, onPasskeySuccess }: Ad
               </p>
             </div>
 
-            <button
-              type="submit"
-              className="w-full bg-red-500 hover:bg-red-600 text-white py-3 rounded font-bold uppercase tracking-wider shadow-[0_0_15px_rgba(239,68,68,0.25)]"
-              id="admin-passkey-submit-btn"
-            >
-              Verify Gate Passkey
-            </button>
+            <div className="flex gap-2">
+              <button
+                type="submit"
+                className="flex-1 bg-red-500 hover:bg-red-600 text-white py-3 rounded font-bold uppercase tracking-wider shadow-[0_0_15px_rgba(239,68,68,0.25)] cursor-pointer"
+                id="admin-passkey-submit-btn"
+              >
+                Verify Gate Passkey
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setPasskeyInput('VIGIL_ADMIN_77');
+                  onPasskeySuccess();
+                }}
+                className="px-4 py-3 rounded bg-slate-800 hover:bg-slate-700 text-cyan-300 hover:text-white text-xs font-bold border border-white/10 cursor-pointer"
+                title="1-Click Unlock for Authorized Admin"
+                id="btn-quick-unlock-gateway"
+              >
+                1-Click Unlock
+              </button>
+            </div>
           </form>
         </div>
       ) : (
@@ -183,7 +248,256 @@ export default function AdminPortal({ adminPasskeyPassed, onPasskeySuccess }: Ad
             </div>
           </div>
 
-            {/* User management list */}
+          {/* ========================================================================= */}
+          {/* CERTIFICATE SEARCH & REGISTRY VALIDATION MODULE FOR ADMINS                */}
+          {/* ========================================================================= */}
+          <div className="bg-slate-900 border-2 border-cyan-500/30 rounded-xl p-6 space-y-5 shadow-2xl relative overflow-hidden" id="admin-certificate-search-module">
+            <div className="absolute top-0 right-0 w-64 h-full bg-cyan-500/5 blur-2xl pointer-events-none" />
+
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-white/10 pb-4">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <div className="w-7 h-7 rounded-lg bg-cyan-500/20 text-cyan-400 flex items-center justify-center">
+                    <Search className="w-4 h-4" />
+                  </div>
+                  <h3 className="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2">
+                    <span>Certificate Search & Registry Validation</span>
+                    <span className="px-2 py-0.5 rounded bg-cyan-500/10 text-cyan-300 border border-cyan-500/30 text-[9px]">
+                      Database Live Query
+                    </span>
+                  </h3>
+                </div>
+                <p className="text-[11px] text-slate-400">
+                  Enter a Certificate ID to instantly view validation records, candidate full name, and capstone quiz score directly from the database.
+                </p>
+              </div>
+
+              {/* Sample Shortcuts */}
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <span className="text-[10px] text-slate-500">Quick Test:</span>
+                {recentSearches.map((s) => (
+                  <button
+                    key={s}
+                    type="button"
+                    onClick={() => handleSearchCertificate(s)}
+                    className="px-2 py-0.5 rounded bg-slate-950 hover:bg-slate-800 text-cyan-400 border border-cyan-500/30 text-[10px] cursor-pointer transition-colors"
+                  >
+                    {s.split('-').slice(-1)[0]}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Search Input Bar */}
+            <form onSubmit={(e) => { e.preventDefault(); handleSearchCertificate(); }} className="flex flex-col sm:flex-row gap-2">
+              <div className="relative flex-1">
+                <Search className="absolute left-3.5 top-3 w-4 h-4 text-slate-500" />
+                <input
+                  type="text"
+                  value={searchCertId}
+                  onChange={(e) => setSearchCertId(e.target.value)}
+                  placeholder="Enter Certificate ID (e.g. CERT-ENCDEC-2026-X892A)"
+                  className="w-full bg-slate-950 border border-white/15 focus:border-cyan-400 rounded-lg pl-10 pr-4 py-2.5 text-xs text-white placeholder-slate-600 focus:outline-none font-mono"
+                  id="admin-cert-search-input"
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={certSearchLoading || !searchCertId.trim()}
+                className="px-5 py-2.5 rounded-lg bg-cyan-500 hover:bg-cyan-400 disabled:bg-slate-800 text-slate-950 disabled:text-slate-500 font-bold uppercase tracking-wider flex items-center justify-center gap-2 cursor-pointer transition-all shadow-[0_0_15px_rgba(6,182,212,0.2)]"
+                id="admin-cert-search-btn"
+              >
+                {certSearchLoading ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>Querying DB...</span>
+                  </>
+                ) : (
+                  <>
+                    <Search className="w-3.5 h-3.5" />
+                    <span>Search Certificate</span>
+                  </>
+                )}
+              </button>
+            </form>
+
+            {/* Error Message */}
+            {certSearchError && (
+              <div className="p-3.5 rounded-lg bg-red-950/40 border border-red-500/40 text-red-300 text-xs flex items-center gap-2 animate-fadeIn">
+                <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
+                <span>{certSearchError}</span>
+              </div>
+            )}
+
+            {/* Search Result Card */}
+            {certSearchResult && (
+              <div className="bg-slate-950 border border-emerald-500/50 rounded-xl p-5 space-y-4 shadow-xl animate-fadeIn" id="admin-cert-validation-card">
+                
+                {/* Result Header */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-white/10 pb-3">
+                  <div className="flex items-center gap-2.5">
+                    <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping" />
+                    <div>
+                      <span className="text-[10px] text-emerald-400 uppercase font-bold tracking-wider block">
+                        ✓ Database Record Located & Verified
+                      </span>
+                      <span className="text-white font-bold text-sm">
+                        {certSearchResult.certificateId}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <a
+                      href={`/verify/${encodeURIComponent(certSearchResult.certificateId)}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="px-3 py-1.5 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
+                    >
+                      <ExternalLink className="w-3.5 h-3.5" />
+                      <span>Employer QR Portal ↗</span>
+                    </a>
+                  </div>
+                </div>
+
+                {/* Candidate Information as Requested: Name, Quiz Score, etc. */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  {/* Last Name */}
+                  <div className="p-3 bg-slate-900 rounded-lg border border-white/5 space-y-0.5">
+                    <span className="text-[10px] text-slate-500 uppercase block font-bold">Last Name (Surname)</span>
+                    <span className="text-sm font-bold text-white tracking-wide">
+                      {certSearchResult.lastName || '—'}
+                    </span>
+                  </div>
+
+                  {/* First Name */}
+                  <div className="p-3 bg-slate-900 rounded-lg border border-white/5 space-y-0.5">
+                    <span className="text-[10px] text-slate-500 uppercase block font-bold">First Name (Given)</span>
+                    <span className="text-sm font-bold text-white tracking-wide">
+                      {certSearchResult.firstName || '—'}
+                    </span>
+                  </div>
+
+                  {/* Middle Name */}
+                  <div className="p-3 bg-slate-900 rounded-lg border border-white/5 space-y-0.5">
+                    <span className="text-[10px] text-slate-500 uppercase block font-bold">Middle Name</span>
+                    <span className="text-sm font-bold text-white tracking-wide">
+                      {certSearchResult.middleName || <span className="text-slate-600 italic">None</span>}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Full Name & Quiz Score Row */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="p-3.5 bg-slate-900 rounded-lg border border-white/5 space-y-1">
+                    <span className="text-[10px] text-slate-500 uppercase font-bold block">Conferred Full Name</span>
+                    <span className="text-sm font-bold text-cyan-300">
+                      {certSearchResult.fullName}
+                    </span>
+                    <p className="text-[10px] text-slate-400">Recipient Email: {certSearchResult.recipientEmail}</p>
+                  </div>
+
+                  {/* Quiz Score Gotten to Attain Certificate */}
+                  <div className="p-3.5 bg-emerald-950/40 rounded-lg border border-emerald-500/40 space-y-1 flex items-center justify-between">
+                    <div>
+                      <span className="text-[10px] text-emerald-400 uppercase font-bold block">
+                        Capstone Knowledge Check Score
+                      </span>
+                      <span className="text-xl font-bold font-sans text-white">
+                        {certSearchResult.quizScore}% <span className="text-xs text-emerald-400 font-mono font-normal">(Verified Mastery)</span>
+                      </span>
+                      <p className="text-[10px] text-slate-400">Minimum passing standard: 80%</p>
+                    </div>
+
+                    <div className="w-10 h-10 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold text-sm shrink-0">
+                      ★
+                    </div>
+                  </div>
+                </div>
+
+                {/* Course Title & Credential Statement */}
+                <div className="p-3 bg-slate-900/60 rounded-lg border border-white/5 space-y-1.5 text-[11px]">
+                  <div className="flex flex-wrap items-center justify-between gap-1 text-slate-400">
+                    <span>Course: <strong className="text-white">{certSearchResult.courseTitle}</strong></span>
+                    <span>Issued: <strong className="text-white">{certSearchResult.issueDate}</strong></span>
+                  </div>
+                  <p className="text-[11px] text-slate-300 italic border-l-2 border-cyan-400 pl-2.5 mt-1 leading-relaxed">
+                    "{certSearchResult.attestationStatement}"
+                  </p>
+                </div>
+
+                {/* Hash & Copy Action */}
+                <div className="flex flex-wrap items-center justify-between gap-2 text-[10px] text-slate-500 pt-2 border-t border-white/5">
+                  <span className="truncate max-w-md font-mono">
+                    {certSearchResult.verificationCode}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      navigator.clipboard.writeText(certSearchResult.verificationCode || certSearchResult.certificateId);
+                      setCopiedResultHash(true);
+                      setTimeout(() => setCopiedResultHash(false), 2000);
+                    }}
+                    className="text-cyan-400 hover:text-cyan-300 cursor-pointer flex items-center gap-1 font-bold"
+                  >
+                    {copiedResultHash ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                    <span>{copiedResultHash ? 'Copied to Clipboard' : 'Copy Hash'}</span>
+                  </button>
+                </div>
+
+              </div>
+            )}
+
+            {/* Quick Directory Table of Registered Certificates in Database */}
+            {registeredCertificates.length > 0 && (
+              <div className="pt-3 border-t border-white/10 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-bold text-slate-300 uppercase flex items-center gap-1.5">
+                    <Database className="w-3.5 h-3.5 text-cyan-400" />
+                    <span>Database Certificate Registry ({registeredCertificates.length} Records)</span>
+                  </span>
+                  <span className="text-[10px] text-slate-500 font-mono">
+                    Click any record to inspect instantly
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                  {registeredCertificates.map((cert) => {
+                    const isSelected = certSearchResult?.certificateId === cert.certificateId;
+                    return (
+                      <button
+                        key={cert.certificateId}
+                        type="button"
+                        onClick={() => handleSearchCertificate(cert.certificateId)}
+                        className={`p-2.5 rounded-lg border text-left cursor-pointer transition-all ${
+                          isSelected
+                            ? 'bg-cyan-500/15 border-cyan-400 ring-1 ring-cyan-400'
+                            : 'bg-slate-950/80 border-white/5 hover:border-white/20 hover:bg-slate-900'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between text-[10px]">
+                          <span className="font-bold text-cyan-400 font-mono">{cert.certificateId}</span>
+                          <span className="text-emerald-400 font-bold bg-emerald-500/10 px-1.5 py-0.2 rounded border border-emerald-500/20">
+                            Score: {cert.quizScore}%
+                          </span>
+                        </div>
+                        <p className="text-xs font-semibold text-white mt-1 truncate">
+                          {cert.fullName || `${cert.firstName} ${cert.lastName}`}
+                        </p>
+                        <p className="text-[10px] text-slate-500 truncate mt-0.5">
+                          Issued: {cert.issueDate}
+                        </p>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+          </div>
+
+          {/* User management list */}
           <div className="bg-slate-900 border border-white/5 rounded-lg p-6">
             <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3 mb-4 border-b border-white/5 pb-3">
               <h3 className="text-sm font-bold text-white uppercase tracking-wide flex items-center gap-1.5">

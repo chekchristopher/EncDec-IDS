@@ -52,7 +52,7 @@ export function createCertificatePdfDoc(data: CertificateData): jsPDF {
     title: `EncDec IDS CE-SOC Certificate - ${data.recipientName}`,
     subject: 'Certified EncDec IDS SOC Specialist (CE-SOC) Accreditation',
     author: 'EncDec Cybersecurity Academy & Threat Research Lab',
-    keywords: 'cybersecurity, ids, soc, accreditation, certificate, ce-soc, coou',
+    keywords: 'cybersecurity, ids, soc, accreditation, certificate, ce-soc',
     creator: 'EncDec IDS Unified Security Operations Platform'
   });
 
@@ -101,7 +101,7 @@ export function createCertificatePdfDoc(data: CertificateData): jsPDF {
 
   doc.setFontSize(8);
   doc.setTextColor(148, 163, 184);
-  doc.text('NATIONAL CYBERSECURITY WORKFORCE ALLIANCE • COOU INFRASTRUCTURE OPERATIONS', pageWidth / 2, 31, { align: 'center' });
+  doc.text('NATIONAL CYBERSECURITY WORKFORCE ALLIANCE • AUTONOMOUS SOC THREAT RESEARCH LAB', pageWidth / 2, 31, { align: 'center' });
 
   // 4. Main Certificate Header
   doc.setFont('helvetica', 'bold');

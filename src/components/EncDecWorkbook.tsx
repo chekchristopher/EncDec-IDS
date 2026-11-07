@@ -11,12 +11,14 @@ import {
   CheckCircle2, Eye, RotateCcw, X, Share2, Printer, Star,
   Bookmark, Cloud, MapPin, Check, AlertCircle, HelpCircle as QuizIcon,
   RefreshCw, CheckSquare, Copy, FileCheck, ShieldAlert, Award as CertIcon,
-  User, CheckCheck, SlidersHorizontal
+  User, CheckCheck, SlidersHorizontal, QrCode
 } from 'lucide-react';
 import { apiRequest } from '../api.js';
 import { WORKBOOK_DATA, generateWorkbookPdf } from '../services/workbookPdf.js';
 import { 
   generateCertificatePdf, 
+  generateCertificatePdfWithQr,
+  generateQrCodeDataUrl,
   createCertificatePdfDoc, 
   CertificateData 
 } from '../services/certificatePdf.js';
@@ -187,6 +189,14 @@ export default function EncDecWorkbook({ currentUser }: EncDecWorkbookProps) {
   const [showEarnedCertModal, setShowEarnedCertModal] = useState(false);
   const [recipientEmail, setRecipientEmail] = useState(currentUser?.email || 'chekchris85@gmail.com');
   const [copiedHash, setCopiedHash] = useState(false);
+
+  // Official Certificate QR Code & Verification States
+  const [activeCertId, setActiveCertId] = useState<string>(() => {
+    return `CERT-ENCDEC-${new Date().getFullYear()}-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+  });
+  const [certQrCodeUrl, setCertQrCodeUrl] = useState<string | null>(null);
+  const [certVerificationUrl, setCertVerificationUrl] = useState<string | null>(null);
+  const [isRegisteringCert, setIsRegisteringCert] = useState(false);
 
   // Sync recipient details if currentUser changes
   useEffect(() => {
@@ -438,11 +448,65 @@ export default function EncDecWorkbook({ currentUser }: EncDecWorkbookProps) {
 
   const currentArrangedFullName = getArrangedFullName();
 
+  // Ensures the certificate is cryptographically registered in the database and QR code is ready
+  const ensureCertificateRegistered = async (forcedId?: string): Promise<{ qrDataUrl: string; vUrl: string }> => {
+    const targetId = forcedId || activeCertId;
+    const origin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000';
+    const vUrl = `${origin}/verify/${encodeURIComponent(targetId)}`;
+    setCertVerificationUrl(vUrl);
+
+    try {
+      setIsRegisteringCert(true);
+      const res = await apiRequest('/api/certificates/register', 'POST', {
+        certificateId: targetId,
+        firstName: candidateFirstName.trim() || 'Chris',
+        middleName: candidateMiddleName.trim() || '',
+        lastName: candidateLastName.trim() || 'Analyst',
+        fullName: currentArrangedFullName,
+        recipientEmail: (recipientEmail || 'operator@coou.edu.ng').trim(),
+        courseTitle: 'Certified EncDec IDS SOC Specialist (CE-SOC)',
+        accreditationLevel: 'Tier-III Cyber Operations • Comprehensive Defense Mastery',
+        quizScore: quizScore || 100,
+        quizPassed: quizPassed,
+        issueDate: new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
+      });
+
+      if (res && res.qrCodeDataUrl) {
+        setCertQrCodeUrl(res.qrCodeDataUrl);
+        if (res.verificationUrl) setCertVerificationUrl(res.verificationUrl);
+        return { qrDataUrl: res.qrCodeDataUrl, vUrl: res.verificationUrl || vUrl };
+      } else {
+        const fallbackQr = await generateQrCodeDataUrl(vUrl);
+        setCertQrCodeUrl(fallbackQr);
+        return { qrDataUrl: fallbackQr, vUrl };
+      }
+    } catch (err) {
+      console.warn('Certificate backend registry sync fallback to client QR generator:', err);
+      const fallbackQr = await generateQrCodeDataUrl(vUrl);
+      setCertQrCodeUrl(fallbackQr);
+      return { qrDataUrl: fallbackQr, vUrl };
+    } finally {
+      setIsRegisteringCert(false);
+    }
+  };
+
+  // Pre-generate QR code when opening the certificate download view
+  useEffect(() => {
+    if (activeView === 'certificate_download' && !certQrCodeUrl) {
+      ensureCertificateRegistered();
+    }
+  }, [activeView, candidateFirstName, candidateLastName, candidateMiddleName, nameArrangementFormat]);
+
   // Certificate Data Factory
-  const generateCertData = (isSample = false): CertificateData => {
+  const generateCertData = (isSample = false, customQrUrl?: string): CertificateData => {
     const certNumber = isSample 
       ? 'CERT-ENCDEC-SAMPLE-2026' 
-      : `CERT-ENCDEC-${new Date().getFullYear()}-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+      : activeCertId;
+
+    const origin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000';
+    const vUrl = isSample 
+      ? `${origin}/verify/CERT-ENCDEC-SAMPLE-2026` 
+      : (certVerificationUrl || `${origin}/verify/${encodeURIComponent(certNumber)}`);
 
     return {
       recipientName: isSample ? 'Alexandra Vance (Sample Candidate)' : (currentArrangedFullName || 'Security Operations Specialist'),
@@ -454,16 +518,26 @@ export default function EncDecWorkbook({ currentUser }: EncDecWorkbookProps) {
       verificationCode: isSample 
         ? 'SHA256: 7f83b1657ff1fc53b92dc18148a1d65dfc2d4b1fa3d677284addd200126d9069' 
         : `SHA256: ${Math.random().toString(36).substring(2, 10)}${Math.random().toString(36).substring(2, 10)}${Math.random().toString(36).substring(2, 10)}`.toUpperCase(),
-      quizScore: isSample ? 100 : (quizScore || 100)
+      quizScore: isSample ? 100 : (quizScore || 100),
+      qrCodeDataUrl: isSample ? undefined : (customQrUrl || certQrCodeUrl || undefined),
+      verificationUrl: vUrl,
+      firstName: isSample ? 'Alexandra' : candidateFirstName,
+      middleName: isSample ? 'Claire' : candidateMiddleName,
+      lastName: isSample ? 'Vance' : candidateLastName
     };
   };
 
-  // Certificate Download Action
-  const handleDownloadCertificate = (isSample = false) => {
+  // Certificate Download Action with QR Code
+  const handleDownloadCertificate = async (isSample = false) => {
     setDownloadingCert(true);
     try {
-      const certData = generateCertData(isSample);
-      generateCertificatePdf(certData);
+      let qrUrl = certQrCodeUrl;
+      if (!isSample && !qrUrl) {
+        const registered = await ensureCertificateRegistered();
+        qrUrl = registered.qrDataUrl;
+      }
+      const certData = generateCertData(isSample, qrUrl || undefined);
+      await generateCertificatePdfWithQr(certData);
     } catch (err) {
       console.error('Failed to export certificate PDF:', err);
     } finally {
@@ -472,9 +546,14 @@ export default function EncDecWorkbook({ currentUser }: EncDecWorkbookProps) {
   };
 
   // Direct Browser Print Certificate Action (using hidden iframe)
-  const handlePrintCertificate = () => {
+  const handlePrintCertificate = async () => {
     try {
-      const certData = generateCertData(false);
+      let qrUrl = certQrCodeUrl;
+      if (!qrUrl) {
+        const registered = await ensureCertificateRegistered();
+        qrUrl = registered.qrDataUrl;
+      }
+      const certData = generateCertData(false, qrUrl || undefined);
       const pdfDoc = createCertificatePdfDoc(certData);
       const blob = pdfDoc.output('blob');
       const blobUrl = URL.createObjectURL(blob);
@@ -1273,7 +1352,7 @@ export default function EncDecWorkbook({ currentUser }: EncDecWorkbookProps) {
                       ENCDEC CYBERSECURITY ACADEMY & THREAT RESEARCH LAB
                     </p>
                     <p className="text-[8px] text-slate-400">
-                      NATIONAL CYBER DEFENSE ALLIANCE • CHUKWUEMEKA ODUMEGWU OJUKWU UNIVERSITY
+                      NATIONAL CYBER DEFENSE ALLIANCE • AUTONOMOUS SOC THREAT RESEARCH LAB
                     </p>
                   </div>
 
@@ -1298,15 +1377,17 @@ export default function EncDecWorkbook({ currentUser }: EncDecWorkbookProps) {
                     ★ Capstone Knowledge Check Score: {quizScore || 100}% (Verified Mastery)
                   </p>
 
-                  {/* Signatures & Seal Row */}
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-6 pt-6 border-t border-white/10 items-center text-xs">
+                  {/* Signatures, Seal & Official QR Code Row */}
+                  <div className="grid grid-cols-1 md:grid-cols-4 gap-4 pt-6 border-t border-white/10 items-center text-xs">
+                    {/* Signature 1 */}
                     <div>
-                      <div className="border-b border-slate-600 pb-1 font-bold text-white">
+                      <div className="border-b border-slate-600 pb-1 font-bold text-white text-[11px]">
                         Dr. Chidubem Eze (CISSP, CISM)
                       </div>
                       <span className="text-[9px] text-slate-400">Chief Information Security Officer</span>
                     </div>
 
+                    {/* Official Seal */}
                     <div className="flex flex-col items-center">
                       <div className="w-16 h-16 rounded-full border-2 border-amber-400/80 flex flex-col items-center justify-center bg-amber-500/10 text-amber-300 text-[8px] font-bold">
                         <span>OFFICIAL</span>
@@ -1315,8 +1396,39 @@ export default function EncDecWorkbook({ currentUser }: EncDecWorkbookProps) {
                       </div>
                     </div>
 
+                    {/* Official Employer QR Code Validation Box */}
+                    <div className="flex flex-col items-center justify-center bg-slate-900/90 border border-cyan-500/40 p-2.5 rounded-lg shadow-sm">
+                      <span className="text-[8px] font-bold uppercase text-amber-400 mb-1 flex items-center gap-1">
+                        <QrCode className="w-2.5 h-2.5" />
+                        <span>Employer QR Validation</span>
+                      </span>
+
+                      {certQrCodeUrl ? (
+                        <img 
+                          src={certQrCodeUrl} 
+                          alt="Verification QR Code" 
+                          className="w-16 h-16 bg-white p-0.5 rounded border border-white/20 object-contain shadow"
+                        />
+                      ) : (
+                        <div className="w-16 h-16 bg-slate-950 border border-white/10 rounded flex items-center justify-center text-[8px] text-slate-400">
+                          {isRegisteringCert ? 'Generating...' : 'QR Ready'}
+                        </div>
+                      )}
+
+                      <a
+                        href={certVerificationUrl || `/verify/${encodeURIComponent(activeCertId)}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="mt-1 text-[8px] text-cyan-400 hover:text-cyan-300 underline font-bold"
+                        title="Click to preview employer verification URL"
+                      >
+                        Test Employer URL ↗
+                      </a>
+                    </div>
+
+                    {/* Signature 2 */}
                     <div>
-                      <div className="border-b border-slate-600 pb-1 font-bold text-white">
+                      <div className="border-b border-slate-600 pb-1 font-bold text-white text-[11px]">
                         Prof. K. C. Okafor (IEEE Senior)
                       </div>
                       <span className="text-[9px] text-slate-400">Director of SOC Operations</span>
@@ -1325,14 +1437,14 @@ export default function EncDecWorkbook({ currentUser }: EncDecWorkbookProps) {
 
                   {/* Footer Metadata */}
                   <div className="pt-4 text-[9px] text-slate-500 flex flex-wrap items-center justify-between gap-2 border-t border-white/5 mt-4">
-                    <span>REGISTRY ID: CERT-ENCDEC-2026-X892A</span>
-                    <div className="flex items-center gap-1.5">
-                      <span>SHA256: 7f83b165...126d9069</span>
+                    <span className="text-cyan-400 font-bold">REGISTRY ID: {activeCertId}</span>
+                    <div className="flex items-center gap-2">
+                      <span className="hidden sm:inline">SHA256: 7f83b165...126d9069</span>
                       <button
-                        onClick={() => handleCopyVerificationHash('SHA256: 7f83b1657ff1fc53b92dc18148a1d65dfc2d4b1fa3d677284addd200126d9069')}
+                        onClick={() => handleCopyVerificationHash(activeCertId)}
                         className="text-cyan-400 hover:text-cyan-300 cursor-pointer text-[8px] underline"
                       >
-                        {copiedHash ? '✓ Copied' : 'Copy Hash'}
+                        {copiedHash ? '✓ Copied ID' : 'Copy Cert ID'}
                       </button>
                     </div>
                   </div>

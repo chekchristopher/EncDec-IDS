@@ -35,13 +35,25 @@ function loadDb() {
       dbState.incidents = (parsed.incidents && parsed.incidents.length > 0) ? parsed.incidents : DEFAULT_DB.incidents;
       dbState.securityEvents = (parsed.securityEvents && parsed.securityEvents.length > 0) ? parsed.securityEvents : DEFAULT_DB.securityEvents;
       dbState.activeResponses = (parsed.activeResponses && parsed.activeResponses.length > 0) ? parsed.activeResponses : DEFAULT_DB.activeResponses;
-      dbState.sensors = (parsed.sensors && parsed.sensors.length > 0) ? parsed.sensors : DEFAULT_DB.sensors;
+      dbState.certificates = (parsed.certificates && parsed.certificates.length > 0) ? parsed.certificates : (DEFAULT_DB.certificates || []);
+      if (dbState.certificates && Array.isArray(dbState.certificates)) {
+        dbState.certificates = dbState.certificates.map(cert => ({
+          ...cert,
+          attestationStatement: (cert.attestationStatement || '').replace(/ and Chukwuemeka Odumegwu Ojukwu University \(COOU\)/gi, '')
+        }));
+      }
     } else {
       saveDb();
     }
     // Asynchronously synchronize with Firestore
     firestoreSyncService.syncFromFirestore(dbState, () => {
-      saveDbToFileOnly();
+      if (dbState.certificates && Array.isArray(dbState.certificates)) {
+        dbState.certificates = dbState.certificates.map(cert => ({
+          ...cert,
+          attestationStatement: (cert.attestationStatement || '').replace(/ and Chukwuemeka Odumegwu Ojukwu University \(COOU\)/gi, '')
+        }));
+      }
+      saveDb();
     }).catch(err => {
       console.error('[Persistence] Failed initial sync from Firestore:', err);
     });
@@ -267,7 +279,7 @@ app.get(['/verify', '/verify/:certId'], (req, res, next) => {
       verifiedAt: new Date().toISOString(),
       verificationUrl: `${req.protocol}://${req.get('host')}/verify/${certId}`,
       status: 'active',
-      attestationStatement: 'This analyst is a certified EncDec Autonomous SOC Defense Analyst (CE-SOC), verified in real-time by the EncDec Threat Research Lab and Chukwuemeka Odumegwu Ojukwu University (COOU). This candidate has successfully demonstrated certified operational mastery across Deep Packet Inspection (DPI), File Integrity Monitoring (FIM), TopoJSON Geodesic Incursion Telemetry, and Autonomous Incident Containment.'
+      attestationStatement: 'This analyst is a certified EncDec Autonomous SOC Defense Analyst (CE-SOC), verified in real-time by the EncDec Threat Research Lab. This candidate has successfully demonstrated certified operational mastery across Deep Packet Inspection (DPI), File Integrity Monitoring (FIM), TopoJSON Geodesic Incursion Telemetry, and Autonomous Incident Containment.'
     };
   }
 
@@ -322,7 +334,7 @@ app.get(['/verify', '/verify/:certId'], (req, res, next) => {
             EncDec IDS Accreditation Registry
           </h1>
           <p class="text-[11px] text-gray-400">
-            EncDec Cybersecurity Academy • Chukwuemeka Odumegwu Ojukwu University (COOU)
+            EncDec Cybersecurity Academy • Autonomous SOC Threat Operations
           </p>
         </div>
 
@@ -418,7 +430,7 @@ app.get(['/verify', '/verify/:certId'], (req, res, next) => {
 async function startServer() {
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: { middlewareMode: true, hmr: false },
       appType: 'spa',
     });
     app.use(vite.middlewares);
@@ -429,6 +441,14 @@ async function startServer() {
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }
+
+  httpServer.on('error', (err: any) => {
+    if (err.code === 'EADDRINUSE') {
+      console.error(`[EncDec IDS Gateway] Port ${PORT} is already in use.`);
+    } else {
+      console.error('[EncDec IDS Gateway] Server error:', err);
+    }
+  });
 
   httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(`[EncDec IDS Gateway] Running on http://localhost:${PORT}`);

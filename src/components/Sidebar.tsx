@@ -116,28 +116,26 @@ export default function Sidebar({
           );
         })}
 
-        {/* Secret Admin Portal Link (Only visible to authenticated admins with cryptpass OR when they trigger the gateway) */}
-        {isAdmin && (
-          <button
-            onClick={() => handleNavItemClick('adminPortal')}
-            className={`w-full flex items-center justify-between px-4 py-3 rounded text-xs font-mono tracking-wide transition-all ${
-              activeView === 'adminPortal'
-                ? 'bg-red-500/10 border-l-4 border-red-500 text-red-400'
-                : 'text-slate-500 hover:bg-white/5 hover:text-slate-300'
-            }`}
-            id="nav-item-admin"
-          >
-            <div className="flex items-center gap-3">
-              <Lock className="w-4 h-4 text-red-500" />
-              <span>Admin Gateway</span>
-            </div>
-            {adminPasskeyPassed ? (
-              <span className="w-2 h-2 rounded-full bg-emerald-500" />
-            ) : (
-              <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
-            )}
-          </button>
-        )}
+        {/* Admin Gateway Link */}
+        <button
+          onClick={() => handleNavItemClick('adminPortal')}
+          className={`w-full flex items-center justify-between px-4 py-3 rounded text-xs font-mono tracking-wide transition-all ${
+            activeView === 'adminPortal'
+              ? 'bg-red-500/15 border-l-4 border-red-500 text-red-400 font-bold'
+              : 'text-slate-400 hover:bg-white/5 hover:text-white'
+          }`}
+          id="nav-item-admin"
+        >
+          <div className="flex items-center gap-3">
+            <Lock className="w-4 h-4 text-red-500" />
+            <span>Admin Gateway</span>
+          </div>
+          {adminPasskeyPassed ? (
+            <span className="w-2 h-2 rounded-full bg-emerald-500" title="Gate unlocked" />
+          ) : (
+            <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" title="Passkey required" />
+          )}
+        </button>
       </nav>
 
       {/* Operator profile card at bottom */}

@@ -3,12 +3,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   ShieldCheck, AlertTriangle, Cpu, HardDrive, Cpu as MemoryIcon,
-  Bell, ChevronRight, Activity, ShieldAlert, ArrowUpRight, Mail 
+  Bell, ChevronRight, Activity, ShieldAlert, ArrowUpRight, Mail,
+  Award, GraduationCap, CheckCircle2, Users
 } from 'lucide-react';
 import { Alert, Host, Threat } from '../types.js';
+import { apiRequest } from '../api.js';
 import RealTimeMap from './RealTimeMap.jsx';
 
 interface OverviewProps {
@@ -43,6 +45,17 @@ export default function Overview({
   onNavigateToIncidents,
   packetCount
 }: OverviewProps) {
+  const [totalCertifiedAnalysts, setTotalCertifiedAnalysts] = useState<number>(6);
+
+  useEffect(() => {
+    apiRequest('/api/certificates/stats')
+      .then((res) => {
+        if (res && typeof res.totalCertified === 'number') {
+          setTotalCertifiedAnalysts(res.totalCertified);
+        }
+      })
+      .catch(() => {});
+  }, []);
   
   // Severity classes mapping
   const severityColors = {
@@ -86,6 +99,101 @@ export default function Overview({
         <div className="flex items-center gap-2 text-xs font-mono text-slate-400 relative z-10 shrink-0">
           <span className="text-[10px] uppercase text-slate-500">Sensor Fabric:</span>
           <span className="text-emerald-400 font-bold">SURICATA + ZEEK + AGENT</span>
+        </div>
+      </div>
+
+      {/* Primary SOC & Certified Workforce Operational Metrics Row */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4" id="overview-metrics-grid">
+        {/* Metric 1: Total Amount of Certified Analysts using EncDec */}
+        <div className="p-4 bg-slate-900 border-2 border-emerald-500/40 rounded-xl flex items-center justify-between gap-3 shadow-lg relative overflow-hidden group hover:border-emerald-400 transition-all">
+          <div className="space-y-1">
+            <span className="text-[10px] font-mono font-bold uppercase text-slate-400 block tracking-wider">
+              Total Certified Analysts
+            </span>
+            <div className="flex items-baseline gap-2">
+              <span className="text-2xl font-bold font-sans text-white group-hover:text-emerald-400 transition-colors">
+                {totalCertifiedAnalysts}
+              </span>
+              <span className="text-[10px] font-mono text-emerald-400 font-bold bg-emerald-500/10 px-1.5 py-0.5 rounded border border-emerald-500/30">
+                Using EncDec
+              </span>
+            </div>
+            <p className="text-[10px] font-mono text-slate-400">
+              CE-SOC Credentialed • COOU Lab
+            </p>
+          </div>
+          <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-emerald-500/20 to-teal-500/20 border border-emerald-500/40 flex items-center justify-center text-amber-400 shrink-0 shadow-[0_0_15px_rgba(16,185,129,0.2)]">
+            <Award className="w-6 h-6 animate-pulse" />
+          </div>
+        </div>
+
+        {/* Metric 2: Hosts Online / Monitored */}
+        <div className="p-4 bg-slate-900 border border-white/10 rounded-xl flex items-center justify-between gap-3 shadow">
+          <div className="space-y-1">
+            <span className="text-[10px] font-mono font-bold uppercase text-slate-400 block tracking-wider">
+              Protected Endpoints
+            </span>
+            <div className="flex items-baseline gap-2">
+              <span className="text-2xl font-bold font-sans text-white">
+                {metrics.hostsOnline} <span className="text-xs text-slate-500 font-mono font-normal">/ {metrics.hostsTotal}</span>
+              </span>
+              <span className="text-[10px] font-mono text-emerald-400 font-bold">100% UP</span>
+            </div>
+            <p className="text-[10px] font-mono text-slate-400 truncate">
+              portal.coou.edu.ng Active
+            </p>
+          </div>
+          <div className="w-11 h-11 rounded-xl bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center text-cyan-400 shrink-0">
+            <Cpu className="w-6 h-6" />
+          </div>
+        </div>
+
+        {/* Metric 3: Global Threat Level */}
+        <div className="p-4 bg-slate-900 border border-white/10 rounded-xl flex items-center justify-between gap-3 shadow">
+          <div className="space-y-1">
+            <span className="text-[10px] font-mono font-bold uppercase text-slate-400 block tracking-wider">
+              Global Threat Score
+            </span>
+            <div className="flex items-baseline gap-2">
+              <span className={`text-2xl font-bold font-sans ${metrics.globalThreatScore > 75 ? 'text-red-400' : 'text-cyan-400'}`}>
+                {metrics.globalThreatScore}
+              </span>
+              <span className={`text-[10px] font-mono font-bold px-1.5 py-0.5 rounded border ${
+                metrics.globalThreatScore > 75 ? 'bg-red-500/20 border-red-500/40 text-red-300' : 'bg-cyan-500/10 border-cyan-500/30 text-cyan-400'
+              }`}>
+                {activeThreatLevel.text}
+              </span>
+            </div>
+            <p className="text-[10px] font-mono text-slate-400">
+              MITRE ATT&CK Matrix Correlation
+            </p>
+          </div>
+          <div className="w-11 h-11 rounded-xl bg-orange-500/10 border border-orange-500/30 flex items-center justify-center text-orange-400 shrink-0">
+            <ShieldAlert className="w-6 h-6" />
+          </div>
+        </div>
+
+        {/* Metric 4: Real-time Ingress Rate */}
+        <div className="p-4 bg-slate-900 border border-white/10 rounded-xl flex items-center justify-between gap-3 shadow">
+          <div className="space-y-1">
+            <span className="text-[10px] font-mono font-bold uppercase text-slate-400 block tracking-wider">
+              Packet Ingress Rate
+            </span>
+            <div className="flex items-baseline gap-2">
+              <span className="text-2xl font-bold font-sans text-white">
+                {metrics.totalPacketsSec}
+              </span>
+              <span className="text-[10px] font-mono text-cyan-400 font-bold bg-cyan-500/10 px-1.5 py-0.5 rounded border border-cyan-500/30">
+                pkt/s
+              </span>
+            </div>
+            <p className="text-[10px] font-mono text-slate-400">
+              {(packetCount).toLocaleString()} total analyzed
+            </p>
+          </div>
+          <div className="w-11 h-11 rounded-xl bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center text-cyan-400 shrink-0">
+            <Activity className="w-6 h-6 animate-pulse" />
+          </div>
         </div>
       </div>
 

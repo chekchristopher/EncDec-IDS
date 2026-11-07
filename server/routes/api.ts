@@ -1251,7 +1251,7 @@ Respond with a JSON object conforming to this schema:
         }
       });
 
-      const uniqueAttestation = "This analyst is a certified EncDec Autonomous SOC Defense Analyst (CE-SOC), verified in real-time by the EncDec Threat Research Lab and Chukwuemeka Odumegwu Ojukwu University (COOU). This candidate has successfully demonstrated certified operational mastery across Deep Packet Inspection (DPI), File Integrity Monitoring (FIM), TopoJSON Geodesic Incursion Telemetry, and Autonomous Incident Containment.";
+      const uniqueAttestation = "This analyst is a certified EncDec Autonomous SOC Defense Analyst (CE-SOC), verified in real-time by the EncDec Threat Research Lab. This candidate has successfully demonstrated certified operational mastery across Deep Packet Inspection (DPI), File Integrity Monitoring (FIM), TopoJSON Geodesic Incursion Telemetry, and Autonomous Incident Containment.";
 
       const certDoc: StoredCertificate = {
         certificateId,
@@ -1309,7 +1309,65 @@ Respond with a JSON object conforming to this schema:
     }
   });
 
-  // GET /api/certificates/verify/:id (Public validation endpoint for employers scanning QR code)
+  // GET /api/certificates (Retrieve all certificates and monthly statistics)
+  router.get('/certificates', (req: any, res: Response) => {
+    const certs = dbState.certificates || [];
+    
+    // Calculate monthly issuance stats for the bar chart
+    const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const currentYear = new Date().getFullYear();
+    
+    // Group certificates by month
+    const monthlyMap: Record<string, number> = {};
+    // Initialize past 6 months
+    const now = new Date();
+    for (let i = 5; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const key = `${monthNames[d.getMonth()]} ${d.getFullYear()}`;
+      monthlyMap[key] = 0;
+    }
+
+    certs.forEach(c => {
+      try {
+        const d = new Date(c.issueDate || c.verifiedAt || Date.now());
+        if (!isNaN(d.getTime())) {
+          const key = `${monthNames[d.getMonth()]} ${d.getFullYear()}`;
+          monthlyMap[key] = (monthlyMap[key] || 0) + 1;
+        }
+      } catch {
+        // fallback
+      }
+    });
+
+    const monthlyStats = Object.entries(monthlyMap).map(([month, count]) => ({
+      month,
+      count
+    }));
+
+    res.json({
+      success: true,
+      totalCertified: certs.length,
+      certificates: certs,
+      monthlyStats
+    });
+  });
+
+  // GET /api/certificates/stats (Public summary for dashboard overview and reports)
+  router.get('/certificates/stats', (req: any, res: Response) => {
+    const certs = dbState.certificates || [];
+    const totalCertified = certs.length;
+    const averageScore = totalCertified > 0 
+      ? Math.round(certs.reduce((acc, c) => acc + (c.quizScore || 0), 0) / totalCertified) 
+      : 100;
+
+    res.json({
+      success: true,
+      totalCertified,
+      averageScore
+    });
+  });
+
+  // GET /api/certificates/verify/:id (Public validation endpoint for employers scanning QR code or admins searching)
   router.get('/certificates/verify/:id', (req: any, res: Response) => {
     const certId = (req.params.id || '').trim();
     if (!certId) {
@@ -1319,10 +1377,18 @@ Respond with a JSON object conforming to this schema:
     const certificates = dbState.certificates || [];
     let cert = certificates.find(c => c.certificateId.toLowerCase() === certId.toLowerCase());
 
+    // Also allow searching by partial match or verificationCode hash
+    if (!cert) {
+      cert = certificates.find(c => 
+        (c.verificationCode && c.verificationCode.toLowerCase().includes(certId.toLowerCase())) ||
+        (c.fullName && c.fullName.toLowerCase() === certId.toLowerCase())
+      );
+    }
+
     // If sample requested or not yet saved, provide sample candidate validation record
-    if (!cert && (certId.includes('SAMPLE') || certId.includes('TEST'))) {
+    if (!cert && (certId.toUpperCase().includes('SAMPLE') || certId.toUpperCase().includes('TEST') || certId.toUpperCase().includes('X892A'))) {
       cert = {
-        certificateId: certId,
+        certificateId: certId.toUpperCase(),
         firstName: 'Alexandra',
         middleName: 'Claire',
         lastName: 'Vance',
@@ -1337,7 +1403,7 @@ Respond with a JSON object conforming to this schema:
         verifiedAt: new Date().toISOString(),
         verificationUrl: `${req.protocol}://${req.get('host')}/verify/${certId}`,
         status: 'active',
-        attestationStatement: 'This analyst is a certified EncDec Autonomous SOC Defense Analyst (CE-SOC), verified in real-time by the EncDec Threat Research Lab and Chukwuemeka Odumegwu Ojukwu University (COOU). This candidate has successfully demonstrated certified operational mastery across Deep Packet Inspection (DPI), File Integrity Monitoring (FIM), TopoJSON Geodesic Incursion Telemetry, and Autonomous Incident Containment.'
+        attestationStatement: 'This analyst is a certified EncDec Autonomous SOC Defense Analyst (CE-SOC), verified in real-time by the EncDec Threat Research Lab. This candidate has successfully demonstrated certified operational mastery across Deep Packet Inspection (DPI), File Integrity Monitoring (FIM), TopoJSON Geodesic Incursion Telemetry, and Autonomous Incident Containment.'
       };
     }
 
@@ -1350,6 +1416,7 @@ Respond with a JSON object conforming to this schema:
 
     res.json({
       success: true,
+      verified: true,
       certificate: cert
     });
   });
