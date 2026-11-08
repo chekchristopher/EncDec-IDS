@@ -32,6 +32,16 @@ export function getInitialDatabaseState(): DbSchema {
         status: 'active',
         mfaEnabled: false,
         createdAt: new Date().toISOString()
+      },
+      {
+        id: 'usr_3',
+        email: 'analyst@coou.edu.ng',
+        passwordHash: bcryptjs.hashSync('analyst123', 10),
+        name: 'COOU Security Analyst',
+        role: 'analyst',
+        status: 'active',
+        mfaEnabled: false,
+        createdAt: new Date().toISOString()
       }
     ],
     hosts: [

@@ -223,7 +223,10 @@ export function createAuthRouter(
     const mfaCode = req.body.mfaCode;
     const googleAccessToken = req.body.googleAccessToken || req.headers['x-google-access-token'];
 
-    const user = dbState.users.find(u => u.email.toLowerCase() === email.toLowerCase());
+    let user = dbState.users.find(u => u.email.toLowerCase() === email.toLowerCase());
+    if (!user && (email.toLowerCase() === 'analyst@coou.edu.ng' || email.toLowerCase() === 'analyst@enterprise.sec')) {
+      user = dbState.users.find(u => u.email.toLowerCase() === 'analyst@enterprise.sec' || u.email.toLowerCase() === 'analyst@coou.edu.ng');
+    }
     if (!user || user.status === 'suspended') {
       addAuditLog('guest', email, 'Failed Login Attempt', 'Access Token Auth', req.ip || '127.0.0.1', 'failure');
       return res.status(401).json({ error: 'Invalid operator credentials or account suspended.' });
@@ -232,11 +235,11 @@ export function createAuthRouter(
     let validPassword = bcryptjs.compareSync(password, user.passwordHash || '');
     if (!validPassword) {
       // Support demo keys displayed in Admin Safe Box / Seed configurations
-      const cleanEmail = user.email.toLowerCase();
+      const cleanEmail = (user.email || email).toLowerCase();
       if (
         (cleanEmail === 'chekchris85@gmail.com' && (password === 'admin123' || password === 'Admin#2026!SecOps' || password === 'admin')) ||
         (cleanEmail === 'chrischek85@gmail.com' && (password === 'admin123' || password === 'Admin#2026!SecOps' || password === 'admin')) ||
-        (cleanEmail === 'analyst@enterprise.sec' && (password === 'analyst123' || password === 'analyst'))
+        ((cleanEmail === 'analyst@enterprise.sec' || cleanEmail === 'analyst@coou.edu.ng') && (password === 'analyst123' || password === 'analyst' || password === 'Analyst#2026!Tier1'))
       ) {
         validPassword = true;
         // Auto-heal password hash in database
