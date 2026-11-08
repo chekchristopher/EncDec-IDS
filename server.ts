@@ -20,7 +20,9 @@ import { CorrelationEngine } from './server/services/correlationEngine.js';
 import { createIngestRouter } from './server/services/agentIngestion.js';
 import { Packet, LiveActivity, AuditLog } from './src/types.js';
 
-const PORT = 3000;
+const PORT = process.env.CONTROL_PLANE_PORT 
+  ? 3000 
+  : (Number(process.env.PORT) || 3000);
 const DB_FILE = path.join(process.cwd(), 'db.json');
 
 // --- DATABASE STORE & LOCAL PERSISTENCE ---
