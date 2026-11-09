@@ -8,9 +8,10 @@ import * as d3 from 'd3';
 import * as topojson from 'topojson-client';
 import { 
   Globe, Shield, ShieldAlert, Crosshair, 
-  Play, Pause, RefreshCw, Zap, ExternalLink, MapPin
+  Play, Pause, RefreshCw, Zap, ExternalLink, MapPin, Camera, Layers
 } from 'lucide-react';
 import { Alert } from '../types.js';
+import TacticalReconModal, { ThreatTargetData } from './TacticalReconModal.js';
 
 // Target Headquarters & Server Location (COOU Portal / West Africa Edge)
 const TARGET_NODE = {
@@ -140,6 +141,27 @@ export default function RealTimeMap({ alerts = [], onSelectThreat }: RealTimeMap
   const [selectedThreat, setSelectedThreat] = useState<ThreatMarker | null>(null);
   const [topoData, setTopoData] = useState<any>(null);
   const [incursionCounter, setIncursionCounter] = useState(14820);
+
+  // Deep Seek / Google Maps Tactical Recon Modal State
+  const [showReconModal, setShowReconModal] = useState(false);
+  const [reconTarget, setReconTarget] = useState<ThreatTargetData | null>(null);
+
+  const launchRecon = (threat: ThreatMarker) => {
+    // D3 coords are [lng, lat], convert to { lat: coords[1], lng: coords[0] }
+    const targetData: ThreatTargetData = {
+      id: threat.id,
+      sourceIp: threat.sourceIp,
+      country: threat.country,
+      city: threat.city,
+      coords: { lat: threat.sourceCoords[1], lng: threat.sourceCoords[0] },
+      vector: threat.vector,
+      severity: threat.severity,
+      timestamp: threat.timestamp,
+      targetAsset: threat.targetName
+    };
+    setReconTarget(targetData);
+    setShowReconModal(true);
+  };
 
   // 1. Load TopoJSON data (Fetch remote with instant local fallback)
   useEffect(() => {
@@ -549,6 +571,19 @@ export default function RealTimeMap({ alerts = [], onSelectThreat }: RealTimeMap
           </div>
 
           <button
+            onClick={() => {
+              const targetToRecon = selectedThreat || activeThreatMarkers[0];
+              if (targetToRecon) launchRecon(targetToRecon);
+            }}
+            className="px-3 py-1.5 rounded-lg bg-cyan-500/10 border border-cyan-500/30 text-cyan-400 hover:bg-cyan-500/20 font-bold flex items-center gap-1.5 transition-colors cursor-pointer text-xs"
+            title="Launch Google Maps Satellite & 360° Street View Reconnaissance"
+            id="deep-seek-active-threat-btn"
+          >
+            <Crosshair className="w-3.5 h-3.5 text-cyan-400 animate-pulse" />
+            <span>DEEP SEEK TARGET</span>
+          </button>
+
+          <button
             onClick={() => setIsLive(!isLive)}
             className={`px-3 py-1.5 rounded-lg border transition-colors cursor-pointer flex items-center gap-1.5 text-xs font-semibold ${
               isLive 
@@ -575,7 +610,7 @@ export default function RealTimeMap({ alerts = [], onSelectThreat }: RealTimeMap
 
         {/* Interactive Threat HUD Tooltip */}
         {(hoveredThreat || selectedThreat) && (
-          <div className="absolute top-4 left-4 bg-slate-950/95 border border-cyan-500/40 p-3.5 rounded-xl shadow-2xl backdrop-blur-md max-w-xs font-mono text-xs z-20 pointer-events-none">
+          <div className="absolute top-4 left-4 bg-slate-950/95 border border-cyan-500/40 p-3.5 rounded-xl shadow-2xl backdrop-blur-md max-w-xs font-mono text-xs z-20">
             {(() => {
               const item = hoveredThreat || selectedThreat;
               if (!item) return null;
@@ -594,12 +629,19 @@ export default function RealTimeMap({ alerts = [], onSelectThreat }: RealTimeMap
                   </div>
                   <div className="text-white font-bold text-sm mb-1">{item.sourceIp}</div>
                   <div className="text-slate-400 text-[11px] mb-2">{item.vector}</div>
-                  <div className="pt-2 border-t border-white/10 flex items-center justify-between text-[10px] text-slate-500">
+                  <div className="pt-2 border-t border-white/10 flex items-center justify-between text-[10px] text-slate-500 mb-2">
                     <span>Target: {item.targetName}</span>
                     <span className={item.blocked ? 'text-emerald-400 font-bold' : 'text-red-400 font-bold'}>
                       {item.blocked ? 'CONTAINED' : 'UNHANDLED'}
                     </span>
                   </div>
+                  <button
+                    onClick={() => launchRecon(item)}
+                    className="w-full py-1.5 px-2 rounded bg-cyan-500 hover:bg-cyan-400 text-slate-950 text-[11px] font-bold flex items-center justify-center gap-1.5 transition-colors cursor-pointer shadow"
+                  >
+                    <Crosshair className="w-3.5 h-3.5" />
+                    <span>Deep Seek Street & Satellite</span>
+                  </button>
                 </div>
               );
             })()}
@@ -620,7 +662,7 @@ export default function RealTimeMap({ alerts = [], onSelectThreat }: RealTimeMap
             <Zap className="w-3.5 h-3.5 text-amber-400" />
             Live Incursion Feed ({activeThreatMarkers.length} Active Nodes)
           </span>
-          <span className="text-[11px] text-slate-500">Click any threat node to inspect</span>
+          <span className="text-[11px] text-slate-500">Click any threat node for ground recon</span>
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
@@ -652,16 +694,37 @@ export default function RealTimeMap({ alerts = [], onSelectThreat }: RealTimeMap
                 </div>
               </div>
 
-              <div className="flex items-center justify-between text-[10px] pt-1.5 border-t border-white/5">
-                <span className="text-slate-500">{new Date(threat.timestamp).toLocaleTimeString()}</span>
-                <span className={threat.blocked ? 'text-emerald-400 font-semibold' : 'text-red-400 font-semibold'}>
-                  {threat.blocked ? 'CONTAINED' : 'EVALUATING'}
-                </span>
+              <div>
+                <div className="flex items-center justify-between text-[10px] pt-1.5 border-t border-white/5">
+                  <span className="text-slate-500">{new Date(threat.timestamp).toLocaleTimeString()}</span>
+                  <span className={threat.blocked ? 'text-emerald-400 font-semibold' : 'text-red-400 font-semibold'}>
+                    {threat.blocked ? 'CONTAINED' : 'EVALUATING'}
+                  </span>
+                </div>
+
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    launchRecon(threat);
+                  }}
+                  className="mt-2 w-full py-1 px-2 rounded bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/30 text-cyan-300 hover:text-cyan-200 text-[10px] font-bold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                  title="Deep Seek Physical Origin with Satellite & 360° Street View"
+                >
+                  <Crosshair className="w-3 h-3 text-cyan-400" />
+                  <span>Deep Seek Recon</span>
+                </button>
               </div>
             </div>
           ))}
         </div>
       </div>
+
+      {/* Tactical Reconnaissance & Deep Seek Modal */}
+      <TacticalReconModal
+        isOpen={showReconModal}
+        onClose={() => setShowReconModal(false)}
+        target={reconTarget}
+      />
 
     </div>
   );

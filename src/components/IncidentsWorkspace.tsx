@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { Incident, ActiveResponseAction, RawSecurityEvent, SensorStatus } from '../types.js';
 import { apiRequest } from '../api.js';
+import TacticalReconModal, { ThreatTargetData } from './TacticalReconModal.js';
 
 interface IncidentsWorkspaceProps {
   currentUser: any;
@@ -36,6 +37,25 @@ export default function IncidentsWorkspace({
   const [simulatingAttack, setSimulatingAttack] = useState(false);
   const [actionProcessing, setActionProcessing] = useState<string | null>(null);
   const [analystNoteInput, setAnalystNoteInput] = useState('');
+  const [showReconModal, setShowReconModal] = useState(false);
+  const [reconTarget, setReconTarget] = useState<ThreatTargetData | null>(null);
+
+  const launchIncidentRecon = (inc: Incident) => {
+    const targetData: ThreatTargetData = {
+      id: inc.id,
+      sourceIp: inc.attackerIp || '185.220.101.42',
+      country: inc.attackerGeo?.country || 'Germany',
+      city: inc.attackerGeo?.city || 'Frankfurt',
+      coords: { lat: 50.1109, lng: 8.6821 },
+      vector: inc.title,
+      severity: inc.severity,
+      timestamp: inc.firstSeen,
+      targetAsset: inc.targetHostName || inc.targetIp,
+      asn: inc.attackerGeo?.asn
+    };
+    setReconTarget(targetData);
+    setShowReconModal(true);
+  };
 
   // Keep selected incident synced
   useEffect(() => {
@@ -374,15 +394,25 @@ export default function IncidentsWorkspace({
 
               {/* Attacker Context & Threat Intel Card */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-slate-950/70 p-3.5 rounded-lg border border-white/5 font-mono text-xs">
-                <div>
-                  <div className="text-[10px] text-slate-400 uppercase">Adversary Source</div>
-                  <div className="text-white font-bold">{selectedIncident.attackerIp}</div>
-                  <div className="text-slate-400 text-[11px] mt-0.5">
-                    {selectedIncident.attackerGeo?.city}, {selectedIncident.attackerGeo?.country}
+                <div className="flex items-start justify-between">
+                  <div>
+                    <div className="text-[10px] text-slate-400 uppercase">Adversary Source</div>
+                    <div className="text-white font-bold">{selectedIncident.attackerIp}</div>
+                    <div className="text-slate-400 text-[11px] mt-0.5">
+                      {selectedIncident.attackerGeo?.city}, {selectedIncident.attackerGeo?.country}
+                    </div>
+                    <div className="text-slate-500 text-[10px]">
+                      {selectedIncident.attackerGeo?.asn}
+                    </div>
                   </div>
-                  <div className="text-slate-500 text-[10px]">
-                    {selectedIncident.attackerGeo?.asn}
-                  </div>
+                  <button
+                    onClick={() => launchIncidentRecon(selectedIncident)}
+                    className="px-2.5 py-1 rounded bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/30 text-cyan-300 text-[10px] font-bold flex items-center gap-1 transition-colors cursor-pointer"
+                    title="Inspect physical street address and building via Google Maps Satellite & Street View"
+                  >
+                    <Crosshair className="w-3 h-3 text-cyan-400" />
+                    <span>Deep Seek</span>
+                  </button>
                 </div>
 
                 <div>
@@ -598,6 +628,13 @@ export default function IncidentsWorkspace({
           </table>
         </div>
       </div>
+
+      {/* Tactical Reconnaissance & Deep Seek Modal */}
+      <TacticalReconModal
+        isOpen={showReconModal}
+        onClose={() => setShowReconModal(false)}
+        target={reconTarget}
+      />
 
     </div>
   );

@@ -80,6 +80,17 @@ export default function App() {
   // Administrative Passkey Verification gate state
   const [adminPasskeyPassed, setAdminPasskeyPassed] = useState(false);
 
+  // Google Maps Platform Quota Exceeded State
+  const [gmpQuotaExceeded, setGmpQuotaExceeded] = useState(false);
+
+  useEffect(() => {
+    const handleQuota = () => {
+      setGmpQuotaExceeded(true);
+    };
+    window.addEventListener('gmp-quota-exceeded', handleQuota);
+    return () => window.removeEventListener('gmp-quota-exceeded', handleQuota);
+  }, []);
+
   // Notifications Queue
   const [liveNotification, setLiveNotification] = useState<string | null>(null);
 
@@ -407,6 +418,10 @@ export default function App() {
               ← Back to Homepage
             </button>
           </div>
+          {/* Light / Dark Mode Toggle on Login Screen */}
+          <div className="absolute top-6 right-6 z-50">
+            <ThemeToggle variant="icon" />
+          </div>
           <LoginScreen onLoginSuccess={(usr) => {
             setSavedProfile(usr);
             setCurrentUser(usr);
@@ -449,6 +464,24 @@ export default function App() {
       {/* Primary content hub */}
       <main className="flex-1 min-h-screen w-full max-w-full lg:pl-64 pl-0 flex flex-col relative overflow-x-hidden">
         
+        {/* Sticky Quota Warning Banner (Google Maps Platform Case A) */}
+        {gmpQuotaExceeded && (
+          <div className="bg-amber-50 border-b border-amber-200 text-amber-900 px-4 py-2.5 text-xs md:text-sm text-center sticky top-0 z-50 shadow-sm">
+            <span>
+              Google Maps Platform quota reached. If you are the app owner, visit{' '}
+              <a
+                href="https://developers.google.com/maps/ai/ai-studio?utm_campaign=gmp_mcp_codeassist_v1_aistudio#quota_exceeded_errors"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="underline font-semibold text-amber-950 hover:text-amber-800"
+              >
+                maps developer site
+              </a>{' '}
+              for instructions to update your account.
+            </span>
+          </div>
+        )}
+
         {/* Real-time Toast warnings floating banner */}
         {liveNotification && (
           <div className="fixed top-6 right-6 z-50 p-4 bg-red-500 text-white rounded border border-red-600 shadow-xl flex items-center gap-3 animate-slideIn max-w-sm font-mono text-xs" id="threat-alert-toast">
