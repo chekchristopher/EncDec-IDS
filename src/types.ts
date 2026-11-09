@@ -15,6 +15,8 @@ export interface User {
   mfaSecret?: string;
   avatarUrl?: string;
   lastNameChangeDate?: string;
+  customMapsApiKey?: string;
+  customMapsApiKeyAddedAt?: string;
   createdAt: string;
 }
 

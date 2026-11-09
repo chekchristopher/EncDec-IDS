@@ -204,7 +204,9 @@ export function createAuthRouter(
         role: newUser.role,
         mfaEnabled: newUser.mfaEnabled,
         avatarUrl: newUser.avatarUrl,
-        lastNameChangeDate: newUser.lastNameChangeDate
+        lastNameChangeDate: newUser.lastNameChangeDate,
+        customMapsApiKey: newUser.customMapsApiKey,
+        customMapsApiKeyAddedAt: newUser.customMapsApiKeyAddedAt
       }
     });
   });
@@ -273,7 +275,9 @@ export function createAuthRouter(
         role: user.role,
         mfaEnabled: user.mfaEnabled,
         avatarUrl: user.avatarUrl,
-        lastNameChangeDate: user.lastNameChangeDate
+        lastNameChangeDate: user.lastNameChangeDate,
+        customMapsApiKey: user.customMapsApiKey,
+        customMapsApiKeyAddedAt: user.customMapsApiKeyAddedAt
       }
     });
   });
@@ -327,7 +331,9 @@ export function createAuthRouter(
         role: user.role,
         mfaEnabled: user.mfaEnabled,
         avatarUrl: user.avatarUrl,
-        lastNameChangeDate: user.lastNameChangeDate
+        lastNameChangeDate: user.lastNameChangeDate,
+        customMapsApiKey: user.customMapsApiKey,
+        customMapsApiKeyAddedAt: user.customMapsApiKeyAddedAt
       }
     });
   });
@@ -517,7 +523,9 @@ export function createAuthRouter(
         role: user.role,
         mfaEnabled: user.mfaEnabled,
         avatarUrl: user.avatarUrl,
-        lastNameChangeDate: user.lastNameChangeDate
+        lastNameChangeDate: user.lastNameChangeDate,
+        customMapsApiKey: user.customMapsApiKey,
+        customMapsApiKeyAddedAt: user.customMapsApiKeyAddedAt
       },
       message: 'Password successfully updated! Logging you in...' 
     });
@@ -535,6 +543,8 @@ export function createAuthRouter(
       mfaEnabled: user.mfaEnabled,
       avatarUrl: user.avatarUrl,
       lastNameChangeDate: user.lastNameChangeDate,
+      customMapsApiKey: user.customMapsApiKey,
+      customMapsApiKeyAddedAt: user.customMapsApiKeyAddedAt,
       createdAt: user.createdAt
     });
   });
@@ -583,6 +593,8 @@ export function createAuthRouter(
       mfaEnabled: user.mfaEnabled,
       avatarUrl: user.avatarUrl,
       lastNameChangeDate: user.lastNameChangeDate,
+      customMapsApiKey: user.customMapsApiKey,
+      customMapsApiKeyAddedAt: user.customMapsApiKeyAddedAt,
       createdAt: user.createdAt
     });
   });
@@ -601,6 +613,130 @@ export function createAuthRouter(
     
     addAuditLog(user.id, user.email, `MFA configuration altered: ${mfaEnabled ? 'ENABLED' : 'DISABLED'}`, 'MFA Token Manager', req.ip || '127.0.0.1', 'success');
     res.json({ mfaEnabled: user.mfaEnabled });
+  });
+
+  // BYOK: Save personal Google Maps Platform API key
+  router.post('/profile/maps-key', authenticateToken, (req: any, res: Response) => {
+    const user = dbState.users.find(u => u.id === req.user.id);
+    if (!user) return res.status(404).json({ error: 'Operator identity not found.' });
+
+    const rawKey = req.body?.apiKey;
+    if (typeof rawKey !== 'string' || !rawKey.trim()) {
+      delete user.customMapsApiKey;
+      delete user.customMapsApiKeyAddedAt;
+      saveDb();
+      addAuditLog(user.id, user.email, 'Unlinked Personal Google Maps API Key', 'Google Maps BYOK', req.ip || '127.0.0.1', 'success');
+      return res.json({ 
+        status: 'ok', 
+        success: true, 
+        message: 'Personal Google Maps API key unlinked. Falling back to system shared tier.' 
+      });
+    }
+
+    const trimmedKey = rawKey.trim();
+    if (trimmedKey.length < 20 || !trimmedKey.startsWith('AIzaSy')) {
+      return res.status(400).json({ 
+        error: 'Invalid Google Maps API key format. Google Cloud API keys typically start with "AIzaSy" and are at least 39 characters long.' 
+      });
+    }
+
+    user.customMapsApiKey = trimmedKey;
+    user.customMapsApiKeyAddedAt = new Date().toISOString();
+    saveDb();
+
+    addAuditLog(user.id, user.email, 'Linked Personal Google Maps API Key (BYOK)', 'Google Maps BYOK', req.ip || '127.0.0.1', 'success');
+    res.json({
+      status: 'ok',
+      success: true,
+      customMapsApiKey: user.customMapsApiKey,
+      customMapsApiKeyAddedAt: user.customMapsApiKeyAddedAt,
+      message: 'Personal Google Maps API key successfully linked! Physical deep seek reconnaissance queries will now be billed to your own Google Cloud account.'
+    });
+  });
+
+  // BYOK: Unlink personal Google Maps API key
+  router.delete('/profile/maps-key', authenticateToken, (req: any, res: Response) => {
+    const user = dbState.users.find(u => u.id === req.user.id);
+    if (!user) return res.status(404).json({ error: 'Operator identity not found.' });
+
+    delete user.customMapsApiKey;
+    delete user.customMapsApiKeyAddedAt;
+    saveDb();
+
+    addAuditLog(user.id, user.email, 'Revoked Personal Google Maps API Key', 'Google Maps BYOK', req.ip || '127.0.0.1', 'success');
+    res.json({
+      status: 'ok',
+      success: true,
+      message: 'Personal Google Maps API key successfully unlinked. Reset to system tier.'
+    });
+  });
+
+  // BYOK: Test handshake with Google Maps Platform
+  router.post('/profile/maps-key/test', authenticateToken, async (req: any, res: Response) => {
+    const user = dbState.users.find(u => u.id === req.user.id);
+    const candidateKey = req.body?.apiKey || user?.customMapsApiKey;
+
+    if (!candidateKey || typeof candidateKey !== 'string') {
+      return res.status(400).json({ 
+        valid: false, 
+        error: 'No Google Maps API key provided to test.' 
+      });
+    }
+
+    const trimmedKey = candidateKey.trim();
+    if (trimmedKey.length < 20) {
+      return res.status(400).json({ 
+        valid: false, 
+        error: 'Key string is too short to be a valid Google Maps Platform credential.' 
+      });
+    }
+
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 6000);
+
+      const testUrl = `https://maps.googleapis.com/maps/api/geocode/json?address=Frankfurt&key=${encodeURIComponent(trimmedKey)}`;
+      const googleRes = await fetch(testUrl, { signal: controller.signal });
+      clearTimeout(timeoutId);
+
+      const data = await googleRes.json().catch(() => null);
+
+      if (!data) {
+        return res.status(502).json({ 
+          valid: false, 
+          error: 'Could not parse response from Google Maps Platform endpoint.' 
+        });
+      }
+
+      if (data.status === 'OK' || data.status === 'ZERO_RESULTS') {
+        return res.json({
+          valid: true,
+          status: 'ok',
+          message: 'Handshake verified! Google Maps Platform accepted your personal key. Your account has $200 monthly free credit active.'
+        });
+      } else if (data.status === 'REQUEST_DENIED') {
+        return res.status(400).json({
+          valid: false,
+          error: data.error_message || 'Google Maps Platform rejected the API key (REQUEST_DENIED). Please ensure "Geocoding API", "Maps JavaScript API", and "Street View Static API" are enabled on your Google Cloud Console project and billing is activated.'
+        });
+      } else {
+        return res.status(400).json({
+          valid: false,
+          error: `Google Maps Platform returned status "${data.status}": ${data.error_message || 'Please check API key restrictions in Google Cloud Console.'}`
+        });
+      }
+    } catch (err: any) {
+      if (err.name === 'AbortError') {
+        return res.status(504).json({ 
+          valid: false, 
+          error: 'Connection to Google Maps Platform timed out after 6 seconds.' 
+        });
+      }
+      return res.status(500).json({ 
+        valid: false, 
+        error: `Handshake verification failed: ${err.message || 'Network error'}` 
+      });
+    }
   });
 
   return { router, authenticateToken };

@@ -208,6 +208,22 @@ export default function DualDatabaseConsole({
     return JSON.stringify(row).toLowerCase().includes(tableSearch.toLowerCase());
   });
 
+  const handleResetStandby = async () => {
+    try {
+      const token = getToken();
+      const res = await fetch('/api/database/mssql/reset-standby', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (res.ok) {
+        if (onShowAlert) onShowAlert('SQL Server set to Standby mode. EncDec IDS active in pure cloud mode with Firestore.');
+        fetchStatus();
+      }
+    } catch (err: any) {
+      console.warn(err);
+    }
+  };
+
   return (
     <div className="space-y-6" id="dual-database-console">
       {/* Header Bar */}
@@ -244,14 +260,25 @@ export default function DualDatabaseConsole({
           </button>
 
           {currentUserRole === 'admin' && (
-            <button
-              onClick={() => setIsConfigOpen(true)}
-              className="flex items-center gap-2 px-4 py-2 bg-slate-800 hover:bg-slate-750 border border-white/10 text-white rounded-lg text-xs font-mono transition-colors cursor-pointer"
-              id="mssql-config-open-btn"
-            >
-              <Settings2 className="w-3.5 h-3.5 text-cyan-400" />
-              <span>Configure SQL Server</span>
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleResetStandby}
+                className="flex items-center gap-1.5 px-3 py-2 bg-slate-800 hover:bg-slate-750 border border-white/10 text-slate-300 rounded-lg text-xs font-mono transition-colors cursor-pointer"
+                title="Reset SQL Server to Standby and run in pure Cloud Firestore mode"
+                id="mssql-reset-standby-btn"
+              >
+                <span>Standby Cloud Mode</span>
+              </button>
+
+              <button
+                onClick={() => setIsConfigOpen(true)}
+                className="flex items-center gap-2 px-4 py-2 bg-slate-800 hover:bg-slate-750 border border-white/10 text-white rounded-lg text-xs font-mono transition-colors cursor-pointer"
+                id="mssql-config-open-btn"
+              >
+                <Settings2 className="w-3.5 h-3.5 text-cyan-400" />
+                <span>Configure SQL Server</span>
+              </button>
+            </div>
           )}
         </div>
       </div>
@@ -627,10 +654,18 @@ export default function DualDatabaseConsole({
                     type="text"
                     value={configForm.server}
                     onChange={(e) => setConfigForm(prev => ({ ...prev, server: e.target.value }))}
-                    placeholder="e.g. sqlserver.corp.local or 10.0.0.45"
+                    placeholder="e.g. 203.0.113.195 or sqlserver.yourdomain.com"
                     className="w-full bg-slate-950 border border-white/10 rounded-lg p-2.5 text-white focus:outline-none focus:border-cyan-400"
                     required
                   />
+                  {(configForm.server.toLowerCase().startsWith('desktop-') || configForm.server.toLowerCase().startsWith('laptop-') || configForm.server === 'localhost' || configForm.server === '127.0.0.1') && (
+                    <p className="text-[10px] text-amber-400 mt-1 flex items-start gap-1 leading-relaxed">
+                      <Info className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                      <span>
+                        Workstation names (e.g. <em>{configForm.server}</em>) exist only on your local Wi-Fi. In cloud environments, use a public IP, FQDN domain, or tunneling endpoint (Ngrok/Cloudflare), or toggle 'Enable Dual SQL Server Sync' OFF to run in pure cloud mode with Firestore.
+                      </span>
+                    </p>
+                  )}
                 </div>
                 <div>
                   <label className="block text-slate-400 mb-1">Port</label>

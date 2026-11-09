@@ -857,6 +857,17 @@ Respond with a JSON object conforming to this schema:
     res.json({ success: true, message: 'Successfully connected to Microsoft SQL Server' });
   });
 
+  router.post('/database/mssql/reset-standby', authenticateToken, requireRole(['admin']), async (req: any, res: Response) => {
+    mssqlSyncService.resetToStandby();
+    addAuditLog(req.user.id, req.user.email, 'Reset SQL Server to Standby / Pure Cloud Mode', 'MSSQL Engine', req.ip || '127.0.0.1', 'success');
+    res.json({
+      success: true,
+      connected: false,
+      error: null,
+      message: 'SQL Server returned to Standby mode. EncDec IDS is running with Cloud Firestore & local persistence.'
+    });
+  });
+
   router.post('/database/mssql/sync-now', authenticateToken, requireRole(['admin']), async (req: any, res: Response) => {
     try {
       firestoreSyncService.triggerSync(dbState);

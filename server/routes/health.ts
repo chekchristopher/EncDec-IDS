@@ -33,8 +33,8 @@ export function createHealthRouter(getWsCount: () => number) {
         mssql: {
           enabled: mssqlSyncService.config.enabled,
           connected: mssqlSyncService.isConnected,
+          status: mssqlSyncService.isConnected ? 'connected' : 'standby_local_mode',
           lastSynced: mssqlSyncService.getLastSynced,
-          lastError: mssqlSyncService.getLastError,
         },
         websocket: {
           activeClients: getWsCount(),

@@ -45,6 +45,16 @@ export class MssqlSyncService {
     return this.lastSynced;
   }
 
+  public resetToStandby() {
+    this.connected = false;
+    this.lastError = null;
+    this.config.enabled = false;
+    if (this.pool) {
+      try { this.pool.close(); } catch (_) {}
+      this.pool = null;
+    }
+  }
+
   private getConfigObject(cfg: MssqlConfig): sql.config {
     const configObj: any = {
       server: cfg.server,
@@ -67,12 +77,17 @@ export class MssqlSyncService {
     return configObj;
   }
 
+  private isLocalOrNetbiosHost(server: string): boolean {
+    const s = (server || '').trim().toLowerCase();
+    return s.startsWith('desktop-') || s.startsWith('laptop-') || s === 'localhost' || s === '127.0.0.1' || s.endsWith('.corp.local');
+  }
+
   private formatError(err: any, serverName: string) {
     const msg = err?.message || String(err || 'Failed to connect to Microsoft SQL Server');
     let hint = 'Verify server hostname/IP, port 1433, and authentication credentials.';
     
     if (msg.includes('getaddrinfo') || msg.includes('EAI_AGAIN') || msg.includes('ENOTFOUND')) {
-      hint = `Host '${serverName}' is a local computer or unresolvable hostname. Since this backend runs in cloud containers, use a publicly reachable IP address, FQDN domain, or tunneling endpoint.`;
+      hint = `Host '${serverName}' is a private local machine name. Cloud containers cannot resolve private LAN computer names directly. Use a public IP, FQDN domain, or tunneling endpoint.`;
     } else if (msg.includes('ETIMEDOUT') || msg.includes('timeout')) {
       hint = `Connection timed out reaching ${serverName}:1433. Ensure TCP Port 1433 is forwarded / allowed through firewall rules.`;
     } else if (msg.includes('Login failed') || msg.includes('ELOGIN')) {
@@ -88,11 +103,20 @@ export class MssqlSyncService {
 
     if (!this.config.enabled) {
       this.connected = false;
+      this.lastError = null;
       if (this.pool) {
         try { await this.pool.close(); } catch (_) {}
         this.pool = null;
       }
       return { success: true };
+    }
+
+    // Check if the server is a local workstation or private NetBIOS name unreachable from cloud
+    if (this.isLocalOrNetbiosHost(this.config.server)) {
+      this.connected = false;
+      this.lastError = `Host '${this.config.server}' is a local computer name on your private LAN. Since this backend runs in cloud containers, it cannot resolve private Windows workstation names. Use a publicly reachable IP address, FQDN domain, or tunneling endpoint (e.g. Cloudflare Tunnel, Ngrok).`;
+      console.info(`[MSSQL Standby] ${this.lastError} Running in resilient Firestore/local mode.`);
+      return { success: false, error: this.lastError };
     }
 
     try {
@@ -110,7 +134,7 @@ export class MssqlSyncService {
       this.connected = false;
       const { message, hint } = this.formatError(err, this.config.server);
       this.lastError = `${message} (Hint: ${hint})`;
-      console.warn(`[MSSQL NOTICE] SQL Server connection attempt: ${this.lastError}`);
+      console.info(`[MSSQL Standby] External SQL Server currently unreachable (${this.config.server}:1433): ${message}. Operating normally with local storage and Firestore.`);
       return { success: false, error: this.lastError };
     }
   }

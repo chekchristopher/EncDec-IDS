@@ -6,14 +6,25 @@
 import React, { useState, useEffect } from 'react';
 import { 
   Settings, Key, ShieldCheck, KeyRound, Eye, EyeOff, 
-  Trash2, Plus, RefreshCw, Clipboard, Check, UserPen 
+  Trash2, Plus, RefreshCw, Clipboard, Check, UserPen,
+  MapPin, CreditCard, ExternalLink, Globe, CheckCircle2,
+  AlertTriangle, Sparkles, Server
 } from 'lucide-react';
 import { apiRequest } from '../api.js';
 import { APIKey } from '../types.js';
 import ThemeToggle from './ThemeToggle.jsx';
 
 interface SettingsScreenProps {
-  currentUser: { id: string; email: string; name: string; mfaEnabled: boolean; avatarUrl?: string; lastNameChangeDate?: string } | null;
+  currentUser: { 
+    id: string; 
+    email: string; 
+    name: string; 
+    mfaEnabled: boolean; 
+    avatarUrl?: string; 
+    lastNameChangeDate?: string;
+    customMapsApiKey?: string;
+    customMapsApiKeyAddedAt?: string;
+  } | null;
   onProfileUpdate: () => void;
   onOpenProfileModal?: () => void;
 }
@@ -23,6 +34,20 @@ export default function SettingsScreen({ currentUser, onProfileUpdate, onOpenPro
   const [loadingMfa, setLoadingMfa] = useState(false);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  // BYOK Google Maps Platform Key State
+  const [mapsApiKeyInput, setMapsApiKeyInput] = useState(currentUser?.customMapsApiKey || '');
+  const [showMapsKey, setShowMapsKey] = useState(false);
+  const [isSavingMapsKey, setIsSavingMapsKey] = useState(false);
+  const [isTestingMapsKey, setIsTestingMapsKey] = useState(false);
+  const [mapsKeyTestResult, setMapsKeyTestResult] = useState<{ valid: boolean; message: string } | null>(null);
+
+  // Synchronize input when currentUser updates
+  useEffect(() => {
+    if (currentUser?.customMapsApiKey) {
+      setMapsApiKeyInput(currentUser.customMapsApiKey);
+    }
+  }, [currentUser?.customMapsApiKey]);
 
   // API Keys lists state
   const [apiKeys, setApiKeys] = useState<APIKey[]>([]);
