@@ -152,6 +152,71 @@ export default function SettingsScreen({ currentUser, onProfileUpdate, onOpenPro
     setTimeout(() => setCopying(false), 2000);
   };
 
+  const handleSaveMapsKey = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!mapsApiKeyInput.trim()) {
+      setErrorMsg('Please paste a valid Google Cloud API key (e.g. AIzaSy...) or click Remove.');
+      return;
+    }
+    setIsSavingMapsKey(true);
+    setErrorMsg(null);
+    setSuccessMsg(null);
+    setMapsKeyTestResult(null);
+
+    try {
+      const res = await apiRequest('/api/profile/maps-key', 'POST', { apiKey: mapsApiKeyInput.trim() });
+      setSuccessMsg(res.message || 'Personal Google Maps API key linked successfully!');
+      onProfileUpdate();
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Failed to link Google Maps API key.');
+    } finally {
+      setIsSavingMapsKey(false);
+    }
+  };
+
+  const handleTestMapsKey = async () => {
+    if (!mapsApiKeyInput.trim()) {
+      setErrorMsg('Enter an API key first to test the Google Maps Platform handshake.');
+      return;
+    }
+    setIsTestingMapsKey(true);
+    setMapsKeyTestResult(null);
+    setErrorMsg(null);
+
+    try {
+      const res = await apiRequest('/api/profile/maps-key/test', 'POST', { apiKey: mapsApiKeyInput.trim() });
+      setMapsKeyTestResult({
+        valid: true,
+        message: res.message || 'Handshake successful! Google Maps Platform verified.'
+      });
+    } catch (err: any) {
+      setMapsKeyTestResult({
+        valid: false,
+        message: err.message || 'Handshake failed. Check your API key restrictions and billing in Google Cloud Console.'
+      });
+    } finally {
+      setIsTestingMapsKey(false);
+    }
+  };
+
+  const handleUnlinkMapsKey = async () => {
+    setIsSavingMapsKey(true);
+    setErrorMsg(null);
+    setSuccessMsg(null);
+    setMapsKeyTestResult(null);
+
+    try {
+      const res = await apiRequest('/api/profile/maps-key', 'DELETE');
+      setMapsApiKeyInput('');
+      setSuccessMsg(res.message || 'Personal Google Maps key unlinked. Reverted to system shared tier.');
+      onProfileUpdate();
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Failed to unlink Google Maps API key.');
+    } finally {
+      setIsSavingMapsKey(false);
+    }
+  };
+
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 font-mono text-xs" id="settings-container">
       
@@ -302,6 +367,179 @@ export default function SettingsScreen({ currentUser, onProfileUpdate, onOpenPro
             ℹ️ {successMsg}
           </div>
         )}
+
+        {/* Google Maps Platform Bring Your Own Key (BYOK) Card */}
+        <div className="bg-slate-900 border border-white/5 rounded-lg p-6 space-y-5" id="byok-maps-card">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-white/5 pb-4">
+            <div>
+              <div className="flex items-center gap-2">
+                <MapPin className="w-4 h-4 text-cyan-400" />
+                <h3 className="text-sm font-bold text-white uppercase tracking-wide">
+                  Google Maps Platform & Tactical Recon (BYOK)
+                </h3>
+              </div>
+              <p className="text-[11px] text-slate-400 mt-1">
+                Link your personal Google Cloud API key to bill deep-seek reconnaissance to your own account
+              </p>
+            </div>
+
+            {/* Active Billing Tier Badge */}
+            <div className="shrink-0">
+              {currentUser?.customMapsApiKey ? (
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-[11px] font-bold">
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                  BYOK Active ($200/mo Free Tier)
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-500/10 border border-amber-500/30 text-amber-400 text-[11px] font-bold">
+                  <span className="w-2 h-2 rounded-full bg-amber-400"></span>
+                  System Shared Tier (Demo Key)
+                </span>
+              )}
+            </div>
+          </div>
+
+          {/* Educational / Setup Guide */}
+          <div className="p-4 bg-slate-950/80 rounded border border-white/5 space-y-3">
+            <div className="flex items-start gap-2.5">
+              <Sparkles className="w-4 h-4 text-cyan-400 shrink-0 mt-0.5" />
+              <div className="space-y-1">
+                <p className="text-xs font-bold text-white">How Bring Your Own Key (BYOK) Works</p>
+                <p className="text-[11px] text-slate-400 leading-relaxed">
+                  Google gives every Google Cloud account a recurring <strong className="text-cyan-300">$200.00 free credit every month</strong> (~28,000 dynamic satellite & 360° Street View requests). By linking your personal key, your physical threat recon queries are billed directly against your personal free credit with zero cost, ensuring unlimited dedicated quota for your investigations.
+                </p>
+              </div>
+            </div>
+
+            {/* 3 Step Instruction Accordion / Cards */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-2 border-t border-white/5">
+              <div className="p-2.5 bg-slate-900/60 rounded border border-white/5 space-y-1">
+                <span className="text-[10px] font-bold text-cyan-400">STEP 1</span>
+                <p className="text-[11px] font-semibold text-slate-200">Open GCP Console</p>
+                <p className="text-[10px] text-slate-400">Click the button below to navigate to your Google Cloud credentials.</p>
+              </div>
+              <div className="p-2.5 bg-slate-900/60 rounded border border-white/5 space-y-1">
+                <span className="text-[10px] font-bold text-cyan-400">STEP 2</span>
+                <p className="text-[11px] font-semibold text-slate-200">Generate Key</p>
+                <p className="text-[10px] text-slate-400">Click <strong>+ Create Credentials</strong> ➔ <strong>API key</strong>.</p>
+              </div>
+              <div className="p-2.5 bg-slate-900/60 rounded border border-white/5 space-y-1">
+                <span className="text-[10px] font-bold text-cyan-400">STEP 3</span>
+                <p className="text-[11px] font-semibold text-slate-200">Enable APIs & Paste</p>
+                <p className="text-[10px] text-slate-400">Enable Maps JS & Street View APIs, then paste your <code className="text-cyan-300">AIzaSy...</code> key.</p>
+              </div>
+            </div>
+
+            <div className="pt-2 flex flex-wrap items-center justify-between gap-2">
+              <a
+                href="https://console.cloud.google.com/google/maps-apis/credentials?utm_campaign=gmp_mcp_codeassist_v1_aistudio"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-400 border border-cyan-500/30 text-xs font-bold transition-all cursor-pointer"
+                id="open-gcp-console-link"
+              >
+                <ExternalLink className="w-3.5 h-3.5" />
+                <span>Open Google Cloud Credentials Console</span>
+              </a>
+
+              <span className="text-[10px] text-slate-500">
+                Encrypted in DB • Masked in client
+              </span>
+            </div>
+          </div>
+
+          {/* Key Input & Actions Form */}
+          <form onSubmit={handleSaveMapsKey} className="space-y-3">
+            <label className="block text-[11px] font-bold text-slate-300 uppercase tracking-wider">
+              Your Personal Google Maps Platform API Key
+            </label>
+            <div className="flex items-center gap-2">
+              <div className="relative flex-1">
+                <input
+                  type={showMapsKey ? 'text' : 'password'}
+                  placeholder="AIzaSy..."
+                  value={mapsApiKeyInput}
+                  onChange={(e) => setMapsApiKeyInput(e.target.value)}
+                  className="w-full bg-slate-950 border border-white/10 rounded px-3 py-2.5 text-white font-mono text-xs focus:outline-none focus:border-cyan-500 pr-10"
+                  id="byok-maps-api-key-input"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowMapsKey(!showMapsKey)}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white transition-colors"
+                  title={showMapsKey ? 'Hide key string' : 'Reveal key string'}
+                >
+                  {showMapsKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
+
+              <button
+                type="button"
+                onClick={handleTestMapsKey}
+                disabled={isTestingMapsKey || !mapsApiKeyInput.trim()}
+                className="px-3.5 py-2.5 bg-slate-950 hover:bg-slate-800 disabled:opacity-50 text-slate-300 border border-white/10 rounded font-bold uppercase flex items-center gap-1.5 transition-all cursor-pointer shrink-0"
+                id="byok-test-handshake-btn"
+                title="Verify key with Google Maps Geocoding handshake"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isTestingMapsKey ? 'animate-spin text-cyan-400' : ''}`} />
+                <span>{isTestingMapsKey ? 'Testing...' : 'Test Handshake'}</span>
+              </button>
+
+              <button
+                type="submit"
+                disabled={isSavingMapsKey || !mapsApiKeyInput.trim()}
+                className="px-4 py-2.5 bg-cyan-500 hover:bg-cyan-400 disabled:opacity-50 text-slate-950 font-bold uppercase rounded flex items-center gap-1.5 transition-all cursor-pointer shrink-0"
+                id="byok-save-key-btn"
+              >
+                <Check className="w-4 h-4" />
+                <span>{isSavingMapsKey ? 'Saving...' : 'Save & Link Key'}</span>
+              </button>
+
+              {currentUser?.customMapsApiKey && (
+                <button
+                  type="button"
+                  onClick={handleUnlinkMapsKey}
+                  disabled={isSavingMapsKey}
+                  className="p-2.5 bg-slate-950 hover:bg-red-500/10 text-slate-400 hover:text-red-400 border border-white/10 hover:border-red-500/20 rounded transition-all cursor-pointer shrink-0"
+                  title="Unlink key and revert to system demo tier"
+                  id="byok-remove-key-btn"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              )}
+            </div>
+
+            {/* Test result status banner */}
+            {mapsKeyTestResult && (
+              <div 
+                className={`p-3 rounded border text-xs flex items-start gap-2 animate-fadeIn ${
+                  mapsKeyTestResult.valid 
+                    ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300' 
+                    : 'bg-red-500/10 border-red-500/30 text-red-300'
+                }`}
+                id="byok-test-result-banner"
+              >
+                {mapsKeyTestResult.valid ? (
+                  <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                ) : (
+                  <AlertTriangle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
+                )}
+                <div className="space-y-0.5">
+                  <p className="font-bold">
+                    {mapsKeyTestResult.valid ? 'Google Maps Handshake Verified' : 'Google Maps Verification Failed'}
+                  </p>
+                  <p className="text-[11px] leading-relaxed opacity-90">{mapsKeyTestResult.message}</p>
+                </div>
+              </div>
+            )}
+
+            {currentUser?.customMapsApiKeyAddedAt && (
+              <p className="text-[10px] text-slate-500 pt-1">
+                Active key linked on: {new Date(currentUser.customMapsApiKeyAddedAt).toLocaleString()}
+              </p>
+            )}
+          </form>
+        </div>
 
         <div className="bg-slate-900 border border-white/5 rounded-lg p-6 space-y-6">
           <div className="flex justify-between items-center border-b border-white/5 pb-3">

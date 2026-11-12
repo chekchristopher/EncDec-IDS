@@ -356,10 +356,12 @@ export default function ReportsGenerator({ onOpenWorkbook }: ReportsGeneratorPro
           <div className="p-3.5 rounded-xl bg-slate-950/80 border border-white/5 space-y-1">
             <span className="text-[10px] text-slate-400 uppercase flex items-center gap-1.5 font-bold">
               <TrendingUp className="w-3.5 h-3.5 text-emerald-400" />
-              <span>Month-over-Month Growth</span>
+              <span>Current Month Issuance</span>
             </span>
-            <p className="text-lg font-bold text-emerald-400">+28.5%</p>
-            <span className="text-[9px] text-slate-400 font-semibold">Steady training adoption</span>
+            <p className="text-lg font-bold text-emerald-400">
+              {monthlyStats.length > 0 ? monthlyStats[monthlyStats.length - 1]?.count || 0 : 0} Issued
+            </p>
+            <span className="text-[9px] text-slate-400 font-semibold">Active accredited cohort</span>
           </div>
 
           <div className="p-3.5 rounded-xl bg-slate-950/80 border border-white/5 space-y-1">
@@ -370,7 +372,7 @@ export default function ReportsGenerator({ onOpenWorkbook }: ReportsGeneratorPro
             <p className="text-lg font-bold text-amber-300">
               {certificates.length > 0
                 ? Math.round(certificates.reduce((acc, c) => acc + (c.quizScore || 0), 0) / certificates.length)
-                : 96}%
+                : 100}%
             </p>
             <span className="text-[9px] text-slate-400 font-semibold">Passing criteria ≥ 80%</span>
           </div>
@@ -380,7 +382,7 @@ export default function ReportsGenerator({ onOpenWorkbook }: ReportsGeneratorPro
               <ShieldCheck className="w-3.5 h-3.5 text-cyan-400" />
               <span>Issuing Authority</span>
             </span>
-            <p className="text-sm font-bold text-cyan-300 truncate">COOU Threat Lab</p>
+            <p className="text-sm font-bold text-cyan-300 truncate">EncDec Threat Lab</p>
             <span className="text-[9px] text-slate-400 font-semibold">Dual DB Cryptographic Hash</span>
           </div>
         </div>

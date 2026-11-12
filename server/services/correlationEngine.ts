@@ -21,7 +21,7 @@ export function enrichIp(ip: string, dbState: DbSchema): {
   // Check against internal Threat Intel Feeds
   const feedMatch = dbState.threatIntel.find(f => f.type === 'ip' && f.value === ip);
   
-  // Deterministic geo & ASN lookup based on IP range / mock enrichment
+  // Deterministic geo & ASN lookup based on IP range / threat intelligence enrichment
   let country = 'Unknown';
   let city = 'External Subnet';
   let asn = 'AS-Transit Gateway';

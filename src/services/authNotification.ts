@@ -57,7 +57,7 @@ export async function sendDirectAuthEmailToGmail(options: AuthNotificationOption
         </div>
 
         <hr style="border: none; border-top: 1px solid #334155; margin: 20px 0;" />
-        <p style="color: #64748b; font-size: 11px; margin: 0;">Chukwuemeka Odumegwu Ojukwu University (COOU) • EncDec Cybersecurity Platform</p>
+        <p style="color: #64748b; font-size: 11px; margin: 0;">EncDec Autonomous Hybrid IDS • Enterprise Cyber Defense Platform</p>
       </div>
     `;
   } else {

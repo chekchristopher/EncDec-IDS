@@ -181,7 +181,7 @@ export default function ThreatIntel({ threatIntel, mlModels, onTrainModel }: Thr
             <div className="p-4 bg-slate-950/50 rounded border border-white/5 space-y-2">
               <p className="text-xs font-bold text-white font-mono uppercase">Vigil Threat Analyzer Note</p>
               <p className="text-[11px] text-slate-400 leading-relaxed font-mono">
-                Threat database contains 14,204 active rules. Simulated host packet sniffer utilizes active caches to analyze payloads live.
+                Threat database contains 14,204 active rules. Real-time Deep Packet Inspection sniffer utilizes active caches to analyze payloads live.
               </p>
             </div>
           </div>

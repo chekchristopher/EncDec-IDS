@@ -34,7 +34,6 @@ export default function IncidentsWorkspace({
   const [huntingQuery, setHuntingQuery] = useState('');
   const [huntingEvents, setHuntingEvents] = useState<RawSecurityEvent[]>([]);
   const [huntingLoading, setHuntingLoading] = useState(false);
-  const [simulatingAttack, setSimulatingAttack] = useState(false);
   const [actionProcessing, setActionProcessing] = useState<string | null>(null);
   const [analystNoteInput, setAnalystNoteInput] = useState('');
   const [showReconModal, setShowReconModal] = useState(false);
@@ -125,22 +124,24 @@ export default function IncidentsWorkspace({
     }
   };
 
-  // Trigger MITRE Attack Scenario in Evaluation Lab
-  const triggerAttackScenario = async () => {
-    setSimulatingAttack(true);
+  // Dispatch an actual real HTTP attack probe across the wire to test the real DPI engine
+  const [probingAttack, setProbingAttack] = useState(false);
+
+  const triggerLiveAttackProbe = async () => {
+    setProbingAttack(true);
     try {
-      const res = await apiRequest('/api/ingest/simulate-scenario', 'POST', { scenario: 'web_compromise' });
+      const res = await apiRequest('/api/probe/live-attack', 'POST', { vector: 'sqli' });
       if (onShowAlert) {
-        onShowAlert(`[Evaluation Lab] Attack pattern injected: ${res.message}`);
+        onShowAlert(`[Real Ingress Intercepted] ${res.vector} from IP ${res.attackerOriginIp} logged by DPI!`);
       }
       setTimeout(() => {
         if (onRefreshData) onRefreshData();
         runThreatHunt('');
-      }, 800);
+      }, 700);
     } catch (err: any) {
-      if (onShowAlert) onShowAlert(`Simulation failed: ${err.message}`);
+      if (onShowAlert) onShowAlert(`Probe failed: ${err.message}`);
     } finally {
-      setSimulatingAttack(false);
+      setProbingAttack(false);
     }
   };
 
@@ -169,19 +170,19 @@ export default function IncidentsWorkspace({
               Incidents & Threat Hunting Workspace
             </h2>
             <p className="text-xs text-slate-400 mt-1 max-w-2xl leading-relaxed">
-              Automated multi-stage attack synthesis. Correlates Suricata NIDS alerts, Zeek transaction telemetry, and EncDec Host Agent events across sliding temporal windows into prioritized, actionable kill chains.
+              Real-time multi-stage attack detection. Correlates Suricata NIDS alerts, Zeek transaction telemetry, and EncDec Host Agent events across sliding temporal windows into prioritized, actionable kill chains.
             </p>
           </div>
 
           <div className="flex flex-wrap items-center gap-2.5">
             <button
-              onClick={triggerAttackScenario}
-              disabled={simulatingAttack}
+              onClick={triggerLiveAttackProbe}
+              disabled={probingAttack}
               className="flex items-center gap-2 px-3.5 py-2 rounded-lg bg-amber-500/10 border border-amber-500/30 hover:bg-amber-500/20 text-amber-300 font-mono text-xs font-semibold transition-all cursor-pointer shadow-lg disabled:opacity-50"
-              title="Inject reproducible 3-stage MITRE attack into the ingestion pipeline for live evaluation"
+              title="Dispatches an actual live HTTP SQL Injection exploit payload across the network port to verify Deep Packet Inspection interception"
             >
-              <Play className={`w-3.5 h-3.5 ${simulatingAttack ? 'animate-spin' : ''}`} />
-              {simulatingAttack ? 'Injecting Telemetry...' : 'Evaluation Lab: Inject Attack Scenario'}
+              <Play className={`w-3.5 h-3.5 ${probingAttack ? 'animate-spin' : ''}`} />
+              {probingAttack ? 'Dispatching Real HTTP Exploit...' : 'Execute Live Ingress Exploit Probe'}
             </button>
 
             <a
@@ -634,6 +635,7 @@ export default function IncidentsWorkspace({
         isOpen={showReconModal}
         onClose={() => setShowReconModal(false)}
         target={reconTarget}
+        customApiKey={currentUser?.customMapsApiKey}
       />
 
     </div>

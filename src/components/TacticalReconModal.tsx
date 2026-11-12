@@ -236,9 +236,10 @@ interface TacticalReconModalProps {
   isOpen: boolean;
   onClose: () => void;
   target: ThreatTargetData | null;
+  customApiKey?: string;
 }
 
-export default function TacticalReconModal({ isOpen, onClose, target }: TacticalReconModalProps) {
+export default function TacticalReconModal({ isOpen, onClose, target, customApiKey }: TacticalReconModalProps) {
   const [activeTab, setActiveTab] = useState<'satellite' | 'streetview' | 'dossier'>('satellite');
   const [zoomLevel, setZoomLevel] = useState(19);
   const [mapType, setMapType] = useState<'hybrid' | 'satellite'>('hybrid');
@@ -258,8 +259,8 @@ export default function TacticalReconModal({ isOpen, onClose, target }: Tactical
   const facilityType = civicData?.facility || 'Commercial Internet Gateway / ISP Hosting Subnet';
   const asnNumber = civicData?.asn || target?.asn || 'AS-BGP Transit Tier-1';
 
-  // Google Maps API Key from environment
-  const apiKey = (import.meta as any).env.VITE_GOOGLE_MAPS_API_KEY || '';
+  // Google Maps API Key: prioritizes personal BYOK key, falls back to environment demo key
+  const apiKey = customApiKey || (import.meta as any).env.VITE_GOOGLE_MAPS_API_KEY || '';
 
   // Initialize or update Street View when switching to 'streetview' tab
   useEffect(() => {
@@ -361,7 +362,7 @@ POSTAL CODE:           ${civicData?.postalCode || 'N/A'}
 JURISDICTION:          ${target.country.toUpperCase()}
 
 [DEFENSE & TARGET ASSET ENGAGED]
-TARGETED ENTERPRISE:   ${target.targetAsset || 'portal.coou.edu.ng (Edge Infrastructure)'}
+TARGETED ENTERPRISE:   ${target.targetAsset || 'Enrolled Infrastructure Node'}
 ACTION ENFORCED:       Threat telemetry streamed to SOC. Autonomous quarantine logged.
 
 [WARRANT / LAW ENFORCEMENT NOTICE]
@@ -393,11 +394,21 @@ Prepared by EncDec Autonomous IDS Reconnaissance Engine
         {/* Tactical HUD Header */}
         <div className="px-5 py-4 bg-slate-950 border-b border-white/10 flex flex-col md:flex-row md:items-center justify-between gap-3">
           <div>
-            <div className="flex items-center gap-2 mb-1">
+            <div className="flex items-center gap-2 mb-1 flex-wrap">
               <span className="flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold bg-cyan-500/10 text-cyan-400 border border-cyan-500/30">
                 <span className="w-2 h-2 rounded-full bg-cyan-400 animate-ping" />
                 DEEP SEEK TACTICAL RECONNAISSANCE
               </span>
+              {customApiKey ? (
+                <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30" title="Billed to operator's linked Google Cloud account ($200/mo Free Tier)">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                  BYOK Active (Personal GCP Tier)
+                </span>
+              ) : (
+                <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-mono text-amber-400/90 bg-amber-500/10 border border-amber-500/20" title="Using shared system tier. Link your personal key in Settings for dedicated $200 free quota.">
+                  System Shared Tier
+                </span>
+              )}
               <span className="text-[11px] font-mono text-slate-400">
                 High-Resolution Ground & Satellite Intelligence
               </span>
@@ -712,7 +723,7 @@ Prepared by EncDec Autonomous IDS Reconnaissance Engine
                     <div className="grid grid-cols-2 gap-2">
                       <div>
                         <span className="text-slate-500 block text-[10px] uppercase">Targeted Enterprise Node</span>
-                        <span className="text-cyan-400 font-semibold">{target.targetAsset || 'portal.coou.edu.ng'}</span>
+                        <span className="text-cyan-400 font-semibold">{target.targetAsset || 'Enrolled Node'}</span>
                       </div>
                       <div>
                         <span className="text-slate-500 block text-[10px] uppercase">Severity Level</span>

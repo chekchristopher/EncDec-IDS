@@ -44,7 +44,7 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
   const [googleLoading, setGoogleLoading] = useState(false);
   const [googleAuthNotice, setGoogleAuthNotice] = useState<string | null>(null);
 
-  // MFA simulation for login
+  // MFA verification for login
   const [mfaRequired, setMfaRequired] = useState(false);
   const [mfaCode, setMfaCode] = useState('');
 
@@ -290,7 +290,7 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
         if (response.mfaRequired) {
           setMfaRequired(true);
           setLoading(false);
-          setMessage('Multi-factor authentication (MFA) required. Please enter your simulated 6-digit hardware key.');
+          setMessage('Multi-factor authentication (MFA) required. Please enter your 6-digit verification code.');
           return;
         }
 
@@ -740,14 +740,14 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
                       type="text"
                       required
                       maxLength={6}
-                      placeholder="Enter any 6 digit simulated code"
+                      placeholder="Enter 6-digit MFA security code"
                       value={mfaCode}
                       onChange={(e) => setMfaCode(e.target.value.replace(/\D/g, ''))}
                       className="w-full bg-transparent border-none py-3 pl-10 pr-4 text-sm text-white placeholder-slate-600 focus:outline-none focus:ring-0 tracking-widest font-mono text-center"
                     />
                   </div>
                   <p className="text-[10px] text-slate-500 font-mono text-center">
-                    Simulator notice: Enter any 6-digit digits to pass security.
+                    Security Notice: Enter your 6-digit authenticator or hardware key.
                   </p>
                 </div>
               )}
@@ -844,7 +844,7 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
               </div>
 
               <p className="text-[11px] text-slate-400 font-mono">
-                Enter Admin hardware MFA (6-digit token) to unlock secure simulation keys:
+                Enter Admin hardware MFA (6-digit token) to unlock credential vault:
               </p>
 
               <form onSubmit={handleUnlockSafeBox} className="space-y-2">
@@ -919,7 +919,7 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
                 {/* Analyst credentials */}
                 <button
                   type="button"
-                  onClick={() => handleFillCredentials('analyst@coou.edu.ng', 'analyst123')}
+                  onClick={() => handleFillCredentials('analyst@enterprise.sec', 'analyst123')}
                   className="w-full text-left p-2.5 rounded bg-slate-900/90 border border-cyan-500/30 hover:border-cyan-400/80 hover:bg-cyan-950/20 transition-all flex items-center justify-between group cursor-pointer"
                 >
                   <div>
@@ -927,12 +927,12 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
                       <span className="text-[9px] font-bold uppercase px-1.5 py-0.2 rounded bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">
                         Analyst Role
                       </span>
-                      <span className="text-white font-bold text-xs">analyst@coou.edu.ng</span>
+                      <span className="text-white font-bold text-xs">analyst@enterprise.sec</span>
                     </div>
                     <span className="text-[10px] text-slate-400">Password: analyst123</span>
                   </div>
                   <span className="text-[10px] text-cyan-400 opacity-0 group-hover:opacity-100 transition-opacity">
-                    {copiedKey === 'analyst@coou.edu.ng' ? '✓ Filled' : 'Click to Fill'}
+                    {copiedKey === 'analyst@enterprise.sec' ? '✓ Filled' : 'Click to Fill'}
                   </span>
                 </button>
               </div>

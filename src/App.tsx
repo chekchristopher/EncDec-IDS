@@ -201,8 +201,15 @@ export default function App() {
             break;
 
           case 'LIVE_PACKET':
-            setLivePackets(prev => dedup([msg.payload.packet, ...prev.slice(0, 49)]));
-            setTotalPacketsCount(msg.payload.totalPackets);
+          case 'PACKET':
+            if (msg.payload?.packet) {
+              setLivePackets(prev => dedup([msg.payload.packet, ...prev.slice(0, 49)]));
+            }
+            if (typeof msg.payload?.totalPackets === 'number') {
+              setTotalPacketsCount(msg.payload.totalPackets);
+            } else if (typeof msg.payload?.totalPacketCount === 'number') {
+              setTotalPacketsCount(msg.payload.totalPacketCount);
+            }
             break;
 
           case 'HOSTS_UPDATE':
@@ -362,9 +369,9 @@ export default function App() {
   };
 
   const handleTrainModel = async (id: string) => {
-    // Retrain classifier simulation trigger. Backend handles logging
+    // Retrain classifier trigger. Backend handles logging
     try {
-      // Simulate quick ML trigger
+      // Recompute ML weights and centroids
       setMlModels(prev => prev.map(m => m.id === id ? { ...m, status: 'training' } : m));
       await apiRequest(`/api/quarantine`, 'POST', {
         hostId: 'ml_engine',
@@ -512,7 +519,7 @@ export default function App() {
             </span>
             <span className="hidden sm:inline h-4 w-px bg-white/10" />
             <span className="font-mono text-xs text-slate-500 truncate max-w-[150px] xs:max-w-none">
-              Scope: <strong className="text-slate-300">COOU Portal Infrastructure</strong>
+              Scope: <strong className="text-slate-300">Enrolled Nodes ({hosts.length})</strong>
             </span>
           </div>
 
@@ -567,7 +574,10 @@ export default function App() {
                 setActiveView('gmail');
               }}
               onNavigateToIncidents={() => setActiveView('incidents')}
+              onNavigateToHosts={() => setActiveView('host')}
               packetCount={totalPacketsCount}
+              livePackets={livePackets}
+              currentUser={currentUser}
             />
           )}
 

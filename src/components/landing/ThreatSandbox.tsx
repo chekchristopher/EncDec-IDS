@@ -39,10 +39,10 @@ export default function ThreatSandbox({
         <div>
           <div className="flex items-center gap-2 mb-1">
             <Terminal className="w-5 h-5 text-cyan-400" />
-            <h3 className="text-lg font-semibold text-white">Live Threat Simulation & Anomaly Sandbox</h3>
+            <h3 className="text-lg font-semibold text-white">Live Threat Verification & Defense Matrix</h3>
           </div>
           <p className="text-xs text-slate-400">
-            Inject realistic cyber attacks into the Deep Packet Inspection (DPI) & Heuristic classifier to evaluate real-time response.
+            Transmit actual cyber attack signatures into the Deep Packet Inspection (DPI) & Heuristic classifier to evaluate real-time response.
           </p>
         </div>
 
@@ -70,7 +70,7 @@ export default function ThreatSandbox({
               }`}
             >
               <Play className={`w-3.5 h-3.5 ${sandboxRunning ? 'animate-spin' : ''}`} />
-              {sandboxRunning ? 'Simulating Vector...' : 'Execute Vector'}
+              {sandboxRunning ? 'Analyzing Exploit Payload...' : 'Execute Vector'}
             </button>
 
             <button

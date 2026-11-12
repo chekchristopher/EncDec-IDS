@@ -35,9 +35,9 @@ export function getInitialDatabaseState(): DbSchema {
       },
       {
         id: 'usr_3',
-        email: 'analyst@coou.edu.ng',
+        email: 'analyst@enterprise.sec',
         passwordHash: bcryptjs.hashSync('analyst123', 10),
-        name: 'COOU Security Analyst',
+        name: 'Enterprise Security Analyst',
         role: 'analyst',
         status: 'active',
         mfaEnabled: false,
@@ -52,7 +52,7 @@ export function getInitialDatabaseState(): DbSchema {
         ipAddress: '104.24.12.83',
         status: 'online',
         lastSeen: new Date().toISOString(),
-        agentVersion: 'v4.1.2-coou-agent',
+        agentVersion: 'v4.1.2-hids-agent',
         cpuUsage: 24,
         memoryUsage: 45,
         diskUsage: 68,
@@ -97,46 +97,8 @@ export function getInitialDatabaseState(): DbSchema {
         createdBy: 'System'
       }
     ],
-    alerts: [
-      {
-        id: 'alt_1',
-        timestamp: new Date(Date.now() - 120000).toISOString(),
-        severity: 'critical',
-        title: 'Portal Brute Force Login Attack Detected',
-        description: 'External IP 105.112.42.18 attempted 28 failed logins on portal.coou.edu.ng student gateway within 10 seconds.',
-        category: 'Brute Force',
-        source: '105.112.42.18',
-        target: 'portal.coou.edu.ng',
-        status: 'unhandled',
-        ruleId: 'rul_1',
-        mitreMapping: 'T1110'
-      },
-      {
-        id: 'alt_2',
-        timestamp: new Date(Date.now() - 600000).toISOString(),
-        severity: 'high',
-        title: 'Suspicious HTTP GET Flood on Portal Subdirectory',
-        description: 'Rapid anomalous HTTPS GET requests targeting portal.coou.edu.ng/student/results payload structure.',
-        category: 'DDoS / Web Flood',
-        source: '197.210.64.12',
-        target: 'portal.coou.edu.ng (104.24.12.83)',
-        status: 'escalated',
-        ruleId: 'rul_2',
-        mitreMapping: 'T1498'
-      }
-    ],
-    threats: [
-      {
-        id: 'thr_1',
-        timestamp: new Date().toISOString(),
-        score: 87,
-        actor: 'External Cyber Threat Actor Group',
-        vector: 'Credential Stuffing & Web Scrape targeting portal.coou.edu.ng',
-        status: 'under_investigation',
-        associatedAlerts: ['alt_1', 'alt_2'],
-        mitreMapping: 'T1110'
-      }
-    ],
+    alerts: [],
+    threats: [],
     apiKeys: [
       {
         id: 'key_1',
@@ -454,122 +416,7 @@ export function getInitialDatabaseState(): DbSchema {
       }
     ],
     workbookProgress: [],
-    certificates: [
-      {
-        certificateId: 'CERT-ENCDEC-2026-X892A',
-        userId: 'usr_seed_1',
-        firstName: 'Alexandra',
-        middleName: 'Claire',
-        lastName: 'Vance',
-        fullName: 'Alexandra Claire Vance',
-        recipientEmail: 'alex.vance@enterprise.sec',
-        courseTitle: 'Certified EncDec IDS SOC Specialist (CE-SOC)',
-        accreditationLevel: 'Tier-III Cyber Operations • Comprehensive Defense Mastery',
-        quizScore: 100,
-        quizPassed: true,
-        issueDate: 'June 14, 2026',
-        verificationCode: 'SHA256: 7F83B1657FF1FC53B92DC18148A1D65DFC2D4B1FA3D677284ADDD200126D9069',
-        verifiedAt: '2026-06-14T10:15:00.000Z',
-        verificationUrl: '/verify/CERT-ENCDEC-2026-X892A',
-        status: 'active',
-        attestationStatement: 'This analyst is a certified EncDec Autonomous SOC Defense Analyst (CE-SOC), verified in real-time by the EncDec Threat Research Lab. This candidate has successfully demonstrated certified operational mastery across Deep Packet Inspection (DPI), File Integrity Monitoring (FIM), TopoJSON Geodesic Incursion Telemetry, and Autonomous Incident Containment.'
-      },
-      {
-        certificateId: 'CERT-ENCDEC-2026-K491B',
-        userId: 'usr_seed_2',
-        firstName: 'Chinedu',
-        middleName: 'Emeka',
-        lastName: 'Okon',
-        fullName: 'Chinedu Emeka Okon',
-        recipientEmail: 'chinedu.okon@coou.edu.ng',
-        courseTitle: 'Certified EncDec IDS SOC Specialist (CE-SOC)',
-        accreditationLevel: 'Tier-III Cyber Operations • Comprehensive Defense Mastery',
-        quizScore: 92,
-        quizPassed: true,
-        issueDate: 'July 18, 2026',
-        verificationCode: 'SHA256: 3D9F8A12B890EC54316F7D6519E8203B4C8110D20512FF761405DE0129BFA81C',
-        verifiedAt: '2026-07-18T14:22:00.000Z',
-        verificationUrl: '/verify/CERT-ENCDEC-2026-K491B',
-        status: 'active',
-        attestationStatement: 'This analyst is a certified EncDec Autonomous SOC Defense Analyst (CE-SOC), verified in real-time by the EncDec Threat Research Lab.'
-      },
-      {
-        certificateId: 'CERT-ENCDEC-2026-M723C',
-        userId: 'usr_seed_3',
-        firstName: 'Aisha',
-        middleName: 'Fatima',
-        lastName: 'Bello',
-        fullName: 'Aisha Fatima Bello',
-        recipientEmail: 'aisha.bello@defence.gov.ng',
-        courseTitle: 'Certified EncDec IDS SOC Specialist (CE-SOC)',
-        accreditationLevel: 'Tier-III Cyber Operations • Comprehensive Defense Mastery',
-        quizScore: 96,
-        quizPassed: true,
-        issueDate: 'August 24, 2026',
-        verificationCode: 'SHA256: 9B02E8A1D3941F48467A00B7583D9481C03810248DF888124976BEF00248A962',
-        verifiedAt: '2026-08-24T09:40:00.000Z',
-        verificationUrl: '/verify/CERT-ENCDEC-2026-M723C',
-        status: 'active',
-        attestationStatement: 'This analyst is a certified EncDec Autonomous SOC Defense Analyst (CE-SOC), verified in real-time by the EncDec Threat Research Lab.'
-      },
-      {
-        certificateId: 'CERT-ENCDEC-2026-R831D',
-        userId: 'usr_seed_4',
-        firstName: 'David',
-        middleName: 'Oluwaseun',
-        lastName: 'Adeleke',
-        fullName: 'David Oluwaseun Adeleke',
-        recipientEmail: 'david.adeleke@fintechsec.io',
-        courseTitle: 'Certified EncDec IDS SOC Specialist (CE-SOC)',
-        accreditationLevel: 'Tier-III Cyber Operations • Comprehensive Defense Mastery',
-        quizScore: 88,
-        quizPassed: true,
-        issueDate: 'September 12, 2026',
-        verificationCode: 'SHA256: 4C78D9E3B462719AF6819034E170C81F78292850381D9237B47C5E9812A5013F',
-        verifiedAt: '2026-09-12T16:05:00.000Z',
-        verificationUrl: '/verify/CERT-ENCDEC-2026-R831D',
-        status: 'active',
-        attestationStatement: 'This analyst is a certified EncDec Autonomous SOC Defense Analyst (CE-SOC), verified in real-time by the EncDec Threat Research Lab.'
-      },
-      {
-        certificateId: 'CERT-ENCDEC-2026-W194E',
-        userId: 'usr_seed_5',
-        firstName: 'Somtochukwu',
-        middleName: 'Brian',
-        lastName: 'Eze',
-        fullName: 'Somtochukwu Brian Eze',
-        recipientEmail: 'somto.eze@cyberlab.ng',
-        courseTitle: 'Certified EncDec IDS SOC Specialist (CE-SOC)',
-        accreditationLevel: 'Tier-III Cyber Operations • Comprehensive Defense Mastery',
-        quizScore: 100,
-        quizPassed: true,
-        issueDate: 'October 19, 2026',
-        verificationCode: 'SHA256: 629A1054E89F03B81C928374E5102837B5C7D912E384910294875C8120398F41',
-        verifiedAt: '2026-10-19T11:30:00.000Z',
-        verificationUrl: '/verify/CERT-ENCDEC-2026-W194E',
-        status: 'active',
-        attestationStatement: 'This analyst is a certified EncDec Autonomous SOC Defense Analyst (CE-SOC), verified in real-time by the EncDec Threat Research Lab.'
-      },
-      {
-        certificateId: 'CERT-ENCDEC-2026-T502F',
-        userId: 'usr_seed_6',
-        firstName: 'Ngozi',
-        middleName: 'Grace',
-        lastName: 'Obi',
-        fullName: 'Ngozi Grace Obi',
-        recipientEmail: 'ngozi.obi@coou.edu.ng',
-        courseTitle: 'Certified EncDec IDS SOC Specialist (CE-SOC)',
-        accreditationLevel: 'Tier-III Cyber Operations • Comprehensive Defense Mastery',
-        quizScore: 95,
-        quizPassed: true,
-        issueDate: 'November 03, 2026',
-        verificationCode: 'SHA256: 8A105C94E231904728510C8394E1029485C7D91028475638102948571C948271',
-        verifiedAt: '2026-11-03T08:50:00.000Z',
-        verificationUrl: '/verify/CERT-ENCDEC-2026-T502F',
-        status: 'active',
-        attestationStatement: 'This analyst is a certified EncDec Autonomous SOC Defense Analyst (CE-SOC), verified in real-time by the EncDec Threat Research Lab.'
-      }
-    ]
+    certificates: []
   };
 }
 

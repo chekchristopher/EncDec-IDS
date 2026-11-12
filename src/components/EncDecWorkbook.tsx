@@ -463,7 +463,7 @@ export default function EncDecWorkbook({ currentUser }: EncDecWorkbookProps) {
         middleName: candidateMiddleName.trim() || '',
         lastName: candidateLastName.trim() || 'Analyst',
         fullName: currentArrangedFullName,
-        recipientEmail: (recipientEmail || 'operator@coou.edu.ng').trim(),
+        recipientEmail: (recipientEmail || 'operator@enterprise.sec').trim(),
         courseTitle: 'Certified EncDec IDS SOC Specialist (CE-SOC)',
         accreditationLevel: 'Tier-III Cyber Operations • Comprehensive Defense Mastery',
         quizScore: quizScore || 100,
@@ -510,7 +510,7 @@ export default function EncDecWorkbook({ currentUser }: EncDecWorkbookProps) {
 
     return {
       recipientName: isSample ? 'Alexandra Vance (Sample Candidate)' : (currentArrangedFullName || 'Security Operations Specialist'),
-      recipientEmail: isSample ? 'alex.vance@enterprise.sec' : (recipientEmail.trim() || 'operator@coou.edu.ng'),
+      recipientEmail: isSample ? 'alex.vance@enterprise.sec' : (recipientEmail.trim() || 'operator@enterprise.sec'),
       certificateId: certNumber,
       issueDate: new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }),
       courseTitle: 'Certified EncDec IDS SOC Specialist (CE-SOC)',
@@ -1108,7 +1108,7 @@ export default function EncDecWorkbook({ currentUser }: EncDecWorkbookProps) {
                 </h2>
 
                 <p className="text-xs text-slate-300 leading-relaxed bg-slate-950/80 p-3.5 rounded-xl border border-white/5">
-                  Before printing or downloading your certificate, verify candidate <strong>First Name, Middle Name, and Last Name</strong> below so that the full name is arranged properly in the certificate. Conferred by the EncDec Cybersecurity Academy & Threat Research Lab with institutional endorsement from COOU.
+                  Before printing or downloading your certificate, verify candidate <strong>First Name, Middle Name, and Last Name</strong> below so that the full name is arranged properly in the certificate. Conferred by the EncDec Cybersecurity Academy & Threat Research Lab.
                 </p>
               </div>
 
@@ -2145,7 +2145,7 @@ export default function EncDecWorkbook({ currentUser }: EncDecWorkbookProps) {
                     ENCDEC CYBERSECURITY ACADEMY & THREAT RESEARCH LAB
                   </p>
                   <p className="text-[8px] text-slate-400">
-                    NATIONAL CYBER DEFENSE ALLIANCE • COOU INFRASTRUCTURE OPERATIONS
+                    NATIONAL CYBER DEFENSE ALLIANCE • ENTERPRISE INFRASTRUCTURE OPERATIONS
                   </p>
                 </div>
 

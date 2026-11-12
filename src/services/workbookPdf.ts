@@ -69,22 +69,22 @@ export const WORKBOOK_DATA: WorkbookSection[] = [
   {
     chapter: "Chapter 3",
     title: "Network IDS (NIDS) Operations & Packet Sniffer",
-    summary: "Operating the live Deep Packet Inspection (DPI) sniffer, rule engine, and packet simulation matrix.",
+    summary: "Operating the live Deep Packet Inspection (DPI) sniffer, rule engine, and real-time packet matrix.",
     content: [
       "The Network IDS module intercepts, parses, and analyzes packets passing through monitored interfaces (e.g., eth0, wlan0, virtual bridge adapters).",
       "1. Deep Packet Inspection (DPI): The sniffer reconstructs protocols across layers: Ethernet (L2), IPv4/IPv6 (L3), TCP/UDP/ICMP (L4), and Application protocols such as HTTP, DNS, SSH, and TLS (L7).",
       "2. Signature Detection Engine: Employs Snort/Suricata-compatible rule sets (SIDs 100001 - 100008). Incoming payloads are pattern-matched against known malicious strings, shellcode signatures, and SQL injection vectors.",
       "3. Live Sniffer Controls: Analysts can Start/Stop packet capture, toggle Deep Inspection mode, and filter streams by Protocol (ALL, TCP, UDP, ICMP, DNS, HTTP) or Threat Level.",
-      "4. Attack Simulation Suite: For training and validation, the console includes built-in realistic traffic generators:",
-      "   - SYN Flood: Simulates rapid half-open TCP handshakes targeting port 80/443 to test DoS mitigation.",
-      "   - TCP Port Scan: Simulates sequential reconnaissance scans (e.g., Nmap SYN stealth scans) across ports 21-8080.",
-      "   - HTTP Layer-7 Flood: Generates high-frequency GET/POST traffic targeting backend web portals.",
-      "   - DNS Cache Poisoning: Emulates spoofed DNS response packets with invalid transaction IDs."
+      "4. Exploit Verification Suite: For operational testing and penetration verification, the console includes live attack probe evaluators:",
+      "   - SYN Flood: Intercepts rapid half-open TCP handshakes targeting port 80/443 to test DoS mitigation.",
+      "   - TCP Port Scan: Intercepts sequential reconnaissance scans (e.g., Nmap SYN stealth scans) across ports 21-8080.",
+      "   - HTTP Layer-7 Flood: Intercepts high-frequency GET/POST traffic targeting backend web portals.",
+      "   - DNS Cache Poisoning: Detects spoofed DNS response packets with invalid transaction IDs."
     ],
     keyTakeaways: [
       "Deep Packet Inspection unpacks raw hex payloads to detect hidden shellcode and evasion techniques.",
       "Signature rules can be customized, enabled, or disabled on the fly without restarting the service.",
-      "Simulation tools allow SOC teams to verify alert pipelines under controlled conditions."
+      "Exploit verification tools allow SOC teams to confirm active firewall and DPI pipeline defenses under live conditions."
     ],
     tables: {
       headers: ["Rule SID", "Rule Name", "Target Protocol", "Default Action", "Severity"],
@@ -139,7 +139,7 @@ export const WORKBOOK_DATA: WorkbookSection[] = [
     content: [
       "The newly upgraded software introduces a dedicated TopoJSON and D3.js Geographic Projection Engine (`RealTimeMap.tsx`) providing interactive worldwide visibility into active incursion vectors targeting the protected infrastructure.",
       "1. Geographic Projection & Topology Rendering: Utilizes `topojson-client` to decode world continents and country boundaries into mathematical geometries rendered through `d3.geoNaturalEarth1()` and `d3.geoPath()`. Includes bundled offline topologies for zero-dependency rendering in isolated SOC environments.",
-      "2. Dynamic Incursion Projectiles: Attack trajectories are calculated using Quadratic Bézier curves (`M sx sy Q mx my tx ty`). Smooth D3 transition loops animate glowing projectile particles along the geodesic path from source IPs directly to the destination portal (`portal.coou.edu.ng`).",
+      "2. Dynamic Incursion Projectiles: Attack trajectories are calculated using Quadratic Bézier curves (`M sx sy Q mx my tx ty`). Smooth D3 transition loops animate glowing projectile particles along the geodesic path from source IPs directly to the destination infrastructure (e.g., enrolled user nodes).",
       "3. Origin Concentric Radar Rings: Pulsing SVG markers signal origin threat hotspots across the globe (e.g., Frankfurt, Ashburn, Moscow, Beijing, London, São Paulo). Rings expand and fade rhythmically based on attack severity.",
       "4. Target Node Shielding & Radar Sweep: The defended infrastructure node is anchored with an animated rotating radar sweep ring, cyber glow filter, and destination ripple shockwave triggered whenever an incursion projectile arrives.",
       "5. Dynamic Alerts Prop Synchronization: The map component accepts the live `alerts` array. Whenever new Suricata, Zeek, or Host anomalies are ingested, origin coordinates are resolved immediately and animated onto the map."
@@ -298,7 +298,7 @@ export function generateWorkbookPdf(): void {
   doc.setFontSize(8.5);
   doc.setTextColor(226, 232, 240);
   doc.text('• System Version: EncDec IDS v4.2.0 Enterprise Hybrid Engine', margin + 6, 142);
-  doc.text('• Monitored Scope: Chukwuemeka Odumegwu Ojukwu University (COOU) Infrastructure', margin + 6, 149);
+  doc.text('• Monitored Scope: Enrolled Multi-Node Infrastructure Fabric', margin + 6, 149);
   doc.text('• Certification Award: Certified EncDec IDS SOC Specialist (CE-SOC) (Earned upon system completion)', margin + 6, 156);
 
   // Table of Contents Section

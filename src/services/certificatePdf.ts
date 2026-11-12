@@ -210,7 +210,7 @@ export function createCertificatePdfDoc(data: CertificateData): jsPDF {
   doc.setTextColor(203, 213, 225);
   doc.text('TIER-III AUTONOMOUS DEFENSE', badgeX + badgeWidth / 2, badgeY + 12, { align: 'center' });
   doc.text('SOC OPERATIONS SPECIALIST', badgeX + badgeWidth / 2, badgeY + 17, { align: 'center' });
-  doc.text('COOU THREAT RESEARCH LAB', badgeX + badgeWidth / 2, badgeY + 22, { align: 'center' });
+  doc.text('ENCDEC AUTONOMOUS THREAT LAB', badgeX + badgeWidth / 2, badgeY + 22, { align: 'center' });
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(...goldAccent);
   doc.text('★ CRYPTOGRAPHICALLY VERIFIED ★', badgeX + badgeWidth / 2, badgeY + 27, { align: 'center' });

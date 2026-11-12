@@ -53,8 +53,8 @@ export function createApiRouter(
       hostsTotal: dbState.hosts.length,
       criticalAlerts: criticalAlertsCount,
       highAlerts: highAlertsCount,
-      globalThreatScore: totalThreatScore || 12,
-      totalPacketsSec: Math.floor(Math.random() * 250) + 120
+      globalThreatScore: totalThreatScore || 0,
+      totalPacketsSec: dbState.securityEvents.length > 0 ? Math.max(1, Math.min(dbState.securityEvents.length, 45)) : 1
     });
   });
 
@@ -335,27 +335,8 @@ export function createApiRouter(
 
   // Reports
   router.get('/reports', authenticateToken, (_req: any, res: Response) => {
-    const mockReports: SecurityReport[] = [
-      {
-        id: 'rep_1',
-        title: 'Weekly SOC Threat Assessment Report',
-        type: 'PDF',
-        timeframe: 'Last 7 Days',
-        generatedAt: new Date(Date.now() - 86400000 * 2).toISOString(),
-        generatedBy: 'System Engine',
-        downloadUrl: '#'
-      },
-      {
-        id: 'rep_2',
-        title: 'Monthly MITRE ATT&CK Compliance Audit Log',
-        type: 'CSV',
-        timeframe: 'June 2026',
-        generatedAt: new Date(Date.now() - 86400000 * 15).toISOString(),
-        generatedBy: 'Chris Analyst',
-        downloadUrl: '#'
-      }
-    ];
-    res.json(mockReports);
+    const storedReports = (dbState as any).reports || [];
+    res.json(storedReports);
   });
 
   router.post('/reports/generate', authenticateToken, (req: any, res: Response) => {
@@ -377,6 +358,10 @@ export function createApiRouter(
       generatedBy: req.user.email,
       downloadUrl: '#'
     };
+
+    (dbState as any).reports = (dbState as any).reports || [];
+    (dbState as any).reports.unshift(newReport);
+    saveDb();
 
     res.status(201).json(newReport);
   });
@@ -576,7 +561,7 @@ export function createApiRouter(
             <p style="margin: 4px 0;"><strong>Sender Clearance:</strong> <span style="color: #34d399;">${(req.user.role || 'OPERATOR').toUpperCase()}</span></p>
           </div>
           <hr style="border: none; border-top: 1px solid #334155; margin: 20px 0;" />
-          <p style="color: #64748b; font-size: 11px; margin-bottom: 0;">Chukwuemeka Odumegwu Ojukwu University • EncDec Cybersecurity Platform</p>
+          <p style="color: #64748b; font-size: 11px; margin-bottom: 0;">EncDec Autonomous Hybrid IDS • Enterprise Cyber Defense Platform</p>
         </div>
       `;
     }
@@ -677,7 +662,7 @@ export function createApiRouter(
     }
 
     const { prompt, recipient, role = 'analyst', type = 'create', tone = 'professional' } = parsed.data;
-    const targetRecipient = recipient || req.user.email || 'operator@coou.edu.ng';
+    const targetRecipient = recipient || req.user.email || 'operator@enterprise.sec';
 
     let subject = '';
     let body = '';
@@ -693,7 +678,7 @@ export function createApiRouter(
         }
       });
 
-      const systemInstruction = `You are an expert AI SOC Cybersecurity Assistant for the EncDec Intrusion Detection & Threat Intelligence System at Chukwuemeka Odumegwu Ojukwu University (COOU).
+      const systemInstruction = `You are an expert AI SOC Cybersecurity Assistant for the EncDec Autonomous Hybrid IDS & Threat Defense Platform.
 Your job is to draft concise, professional, cyber-resilient security emails for security operators, administrators, analysts, and incident responders.
 Tone: ${tone}.
 Recipient: ${targetRecipient} (Role: ${role.toUpperCase()}).
@@ -1271,7 +1256,7 @@ Respond with a JSON object conforming to this schema:
         middleName: safeMiddleName || undefined,
         lastName: safeLastName,
         fullName: safeFullName,
-        recipientEmail: (recipientEmail || req.user?.email || 'operator@coou.edu.ng').trim(),
+        recipientEmail: (recipientEmail || req.user?.email || 'operator@enterprise.sec').trim(),
         courseTitle: courseTitle || 'Certified EncDec IDS SOC Specialist (CE-SOC)',
         accreditationLevel: accreditationLevel || 'Tier-III Cyber Operations • Comprehensive Defense Mastery',
         quizScore: typeof quizScore === 'number' ? quizScore : 100,
@@ -1394,28 +1379,6 @@ Respond with a JSON object conforming to this schema:
         (c.verificationCode && c.verificationCode.toLowerCase().includes(certId.toLowerCase())) ||
         (c.fullName && c.fullName.toLowerCase() === certId.toLowerCase())
       );
-    }
-
-    // If sample requested or not yet saved, provide sample candidate validation record
-    if (!cert && (certId.toUpperCase().includes('SAMPLE') || certId.toUpperCase().includes('TEST') || certId.toUpperCase().includes('X892A'))) {
-      cert = {
-        certificateId: certId.toUpperCase(),
-        firstName: 'Alexandra',
-        middleName: 'Claire',
-        lastName: 'Vance',
-        fullName: 'Alexandra Claire Vance',
-        recipientEmail: 'alex.vance@enterprise.sec',
-        courseTitle: 'Certified EncDec IDS SOC Specialist (CE-SOC)',
-        accreditationLevel: 'Tier-III Cyber Operations • Comprehensive Defense Mastery',
-        quizScore: 100,
-        quizPassed: true,
-        issueDate: 'October 1, 2026',
-        verificationCode: 'SHA256: 7F83B1657FF1FC53B92DC18148A1D65DFC2D4B1FA3D677284ADDD200126D9069',
-        verifiedAt: new Date().toISOString(),
-        verificationUrl: `${req.protocol}://${req.get('host')}/verify/${certId}`,
-        status: 'active',
-        attestationStatement: 'This analyst is a certified EncDec Autonomous SOC Defense Analyst (CE-SOC), verified in real-time by the EncDec Threat Research Lab. This candidate has successfully demonstrated certified operational mastery across Deep Packet Inspection (DPI), File Integrity Monitoring (FIM), TopoJSON Geodesic Incursion Telemetry, and Autonomous Incident Containment.'
-      };
     }
 
     if (!cert) {

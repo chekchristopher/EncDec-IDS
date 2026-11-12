@@ -13,9 +13,9 @@ import {
 import { Alert } from '../types.js';
 import TacticalReconModal, { ThreatTargetData } from './TacticalReconModal.js';
 
-// Target Headquarters & Server Location (COOU Portal / West Africa Edge)
-const TARGET_NODE = {
-  name: 'portal.coou.edu.ng (Edge SOC)',
+// Default Target Server Location (Enrolled Edge Node / Primary Infrastructure)
+const DEFAULT_TARGET_NODE = {
+  name: 'Primary Gateway',
   ip: '104.24.12.83',
   coords: [6.87, 5.86] as [number, number] // [Longitude, Latitude]
 };
@@ -128,9 +128,18 @@ function resolveIpToLocation(ip: string): { country: string; city: string; coord
 interface RealTimeMapProps {
   alerts?: Alert[];
   onSelectThreat?: (threat: ThreatMarker) => void;
+  customApiKey?: string;
+  targetNode?: {
+    name: string;
+    ip: string;
+    coords?: [number, number];
+  };
 }
 
-export default function RealTimeMap({ alerts = [], onSelectThreat }: RealTimeMapProps) {
+export default function RealTimeMap({ alerts = [], onSelectThreat, customApiKey, targetNode }: RealTimeMapProps) {
+  const activeTargetNode = targetNode || DEFAULT_TARGET_NODE;
+  const targetCoords = activeTargetNode.coords || DEFAULT_TARGET_NODE.coords;
+
   const containerRef = useRef<HTMLDivElement | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
   
@@ -140,7 +149,7 @@ export default function RealTimeMap({ alerts = [], onSelectThreat }: RealTimeMap
   const [hoveredThreat, setHoveredThreat] = useState<ThreatMarker | null>(null);
   const [selectedThreat, setSelectedThreat] = useState<ThreatMarker | null>(null);
   const [topoData, setTopoData] = useState<any>(null);
-  const [incursionCounter, setIncursionCounter] = useState(14820);
+  const [incursionCounter, setIncursionCounter] = useState(alerts?.length || 0);
 
   // Deep Seek / Google Maps Tactical Recon Modal State
   const [showReconModal, setShowReconModal] = useState(false);
@@ -212,10 +221,13 @@ export default function RealTimeMap({ alerts = [], onSelectThreat }: RealTimeMap
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
-  // 3. Dynamically update markers whenever the `alerts` prop updates
+  // 3. Dynamically update markers exclusively from live incoming real alerts
   useEffect(() => {
-    if (alerts && alerts.length > 0) {
-      const mappedFromAlerts: ThreatMarker[] = alerts.slice(0, 10).map((alert, idx) => {
+    // Only map real active unhandled alerts intercepted by the DPI sniffer
+    const activeRealAlerts = (alerts || []).filter(a => a && a.status !== 'resolved' && a.id && a.id.startsWith('alt_real_'));
+
+    if (activeRealAlerts.length > 0) {
+      const mappedFromAlerts: ThreatMarker[] = activeRealAlerts.slice(0, 10).map((alert, idx) => {
         const sourceIp = alert.source || '185.220.101.42';
         const geo = resolveIpToLocation(sourceIp);
 
@@ -225,81 +237,23 @@ export default function RealTimeMap({ alerts = [], onSelectThreat }: RealTimeMap
           country: geo.country,
           city: geo.city,
           sourceCoords: geo.coords,
-          targetCoords: TARGET_NODE.coords,
-          targetName: alert.target || TARGET_NODE.name,
+          targetCoords: targetCoords,
+          targetName: alert.target || activeTargetNode.name,
           vector: alert.title || alert.category || 'Intrusion Detection Alert',
           severity: (alert.severity as any) || 'high',
           timestamp: alert.timestamp || new Date().toISOString(),
-          blocked: alert.status === 'resolved'
+          blocked: false
         };
       });
 
       setActiveThreatMarkers(mappedFromAlerts);
+      setIncursionCounter(activeRealAlerts.length);
     } else {
-      // Seed default active threats if alerts array is empty
-      const defaultMarkers: ThreatMarker[] = THREAT_LOCATIONS_POOL.slice(0, 6).map((loc, idx) => ({
-        id: `marker_seed_${idx}`,
-        sourceIp: ['185.220.101.42', '198.51.100.42', '94.102.61.12', '95.173.136.24', '103.203.57.18', '51.89.145.22'][idx],
-        country: loc.country,
-        city: loc.city,
-        sourceCoords: loc.coords,
-        targetCoords: TARGET_NODE.coords,
-        targetName: TARGET_NODE.name,
-        vector: [
-          'CVE-2021-44228 Log4j Exploit',
-          'Cobalt Strike C2 Beaconing',
-          'Apache Struts RCE Payload',
-          'SSH Credential Stuffing',
-          'SYN Stealth Port Sweep',
-          'Nginx Path Traversal'
-        ][idx],
-        severity: idx === 0 ? 'critical' : idx < 3 ? 'high' : 'medium',
-        timestamp: new Date(Date.now() - idx * 7000).toISOString(),
-        blocked: idx % 2 === 0
-      }));
-
-      setActiveThreatMarkers(defaultMarkers);
+      // Nominal state when zero active incursions exist
+      setActiveThreatMarkers([]);
+      setIncursionCounter(0);
     }
-  }, [alerts]);
-
-  // 4. Live periodic simulation loop to inject continuous real-time threats when live mode is active
-  useEffect(() => {
-    if (!isLive) return;
-
-    const timer = setInterval(() => {
-      const loc = THREAT_LOCATIONS_POOL[Math.floor(Math.random() * THREAT_LOCATIONS_POOL.length)];
-      const sampleIps = ['185.220.101.99', '45.33.32.156', '185.156.73.55', '112.85.42.91', '177.105.12.84', '197.89.21.4'];
-      const randomIp = sampleIps[Math.floor(Math.random() * sampleIps.length)];
-      const vectors = [
-        'Log4j JNDI Lookup Attempt',
-        'WordPress wp-login Password Spray',
-        'Nginx Memory Corruption Probe',
-        'Outbound C2 Reverse Shell',
-        'Mirai Scanner Probe',
-        'SQLi UNION SELECT Probe'
-      ];
-      const severities: ThreatMarker['severity'][] = ['critical', 'high', 'medium'];
-
-      const newIncursion: ThreatMarker = {
-        id: `marker_live_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-        sourceIp: randomIp,
-        country: loc.country,
-        city: loc.city,
-        sourceCoords: loc.coords,
-        targetCoords: TARGET_NODE.coords,
-        targetName: TARGET_NODE.name,
-        vector: vectors[Math.floor(Math.random() * vectors.length)],
-        severity: severities[Math.floor(Math.random() * severities.length)],
-        timestamp: new Date().toISOString(),
-        blocked: Math.random() > 0.12
-      };
-
-      setIncursionCounter(prev => prev + 1);
-      setActiveThreatMarkers(prev => [newIncursion, ...prev.slice(0, 8)]);
-    }, 3200);
-
-    return () => clearInterval(timer);
-  }, [isLive]);
+  }, [alerts, activeTargetNode]);
 
   // 5. Render D3 Map with TopoJSON features and animated projectile markers
   useEffect(() => {
@@ -362,8 +316,8 @@ export default function RealTimeMap({ alerts = [], onSelectThreat }: RealTimeMap
         .attr('opacity', 0.95);
     }
 
-    // Monitored Target Asset Node (COOU Portal)
-    const targetXY = projection(TARGET_NODE.coords);
+    // Monitored Target Asset Node
+    const targetXY = projection(targetCoords);
     if (targetXY) {
       const [tx, ty] = targetXY;
       const targetGroup = svg.append('g').attr('class', 'target-node');
@@ -401,7 +355,7 @@ export default function RealTimeMap({ alerts = [], onSelectThreat }: RealTimeMap
         .attr('font-size', '10px')
         .attr('font-family', 'ui-monospace, monospace')
         .attr('font-weight', 'bold')
-        .text('PORTAL.COOU.EDU.NG');
+        .text((activeTargetNode.name || 'GATEWAY').toUpperCase().substring(0, 24));
     }
 
     // Render Animated Intrusion Markers & Arcs
@@ -651,7 +605,7 @@ export default function RealTimeMap({ alerts = [], onSelectThreat }: RealTimeMap
         {/* Target Asset Corner Badge */}
         <div className="absolute bottom-3 right-3 bg-slate-950/80 border border-white/10 px-3 py-2 rounded-lg text-xs font-mono text-slate-400 backdrop-blur-sm z-10 flex items-center gap-2">
           <div className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-ping" />
-          <span>Protected Node: <strong className="text-cyan-300">portal.coou.edu.ng</strong></span>
+          <span>Protected Node: <strong className="text-cyan-300">{activeTargetNode.name}</strong> • <span className="text-slate-400 font-mono text-[11px]">{activeTargetNode.ip}</span></span>
         </div>
       </div>
 
@@ -666,56 +620,73 @@ export default function RealTimeMap({ alerts = [], onSelectThreat }: RealTimeMap
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
-          {activeThreatMarkers.slice(0, 4).map((threat) => (
-            <div
-              key={threat.id}
-              onClick={() => {
-                setSelectedThreat(threat);
-                if (onSelectThreat) onSelectThreat(threat);
-              }}
-              className="p-2.5 rounded-lg bg-slate-950 border border-white/5 hover:border-cyan-500/40 cursor-pointer transition-colors font-mono text-xs flex flex-col justify-between"
-            >
-              <div>
-                <div className="flex items-center justify-between mb-1">
-                  <span className="text-cyan-400 font-semibold truncate max-w-[120px]">
-                    {threat.city}, {threat.country}
-                  </span>
-                  <span className={`text-[9px] uppercase px-1.5 py-0.2 rounded font-bold ${
-                    threat.severity === 'critical' ? 'bg-red-500/20 text-red-400' : 'bg-amber-500/20 text-amber-300'
-                  }`}>
-                    {threat.severity}
-                  </span>
-                </div>
-                <div className="text-white font-bold text-[11px] truncate mb-1">
-                  {threat.sourceIp}
-                </div>
-                <div className="text-slate-400 text-[10px] truncate mb-2">
-                  {threat.vector}
+          {activeThreatMarkers.length === 0 ? (
+            <div className="col-span-full p-4 rounded-lg bg-slate-950/80 border border-emerald-500/20 flex flex-col sm:flex-row items-center justify-between gap-3 font-mono text-xs">
+              <div className="flex items-center gap-3">
+                <div className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse shrink-0" />
+                <div>
+                  <p className="text-white font-bold">ALL PERIMETERS SECURE — ZERO ACTIVE INCURSIONS</p>
+                  <p className="text-[11px] text-slate-400 mt-0.5">
+                    Real Ingress DPI sniffer and Sensor Intake APIs active. Real incoming attacks and probes will be mapped here instantaneously.
+                  </p>
                 </div>
               </div>
-
-              <div>
-                <div className="flex items-center justify-between text-[10px] pt-1.5 border-t border-white/5">
-                  <span className="text-slate-500">{new Date(threat.timestamp).toLocaleTimeString()}</span>
-                  <span className={threat.blocked ? 'text-emerald-400 font-semibold' : 'text-red-400 font-semibold'}>
-                    {threat.blocked ? 'CONTAINED' : 'EVALUATING'}
-                  </span>
-                </div>
-
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    launchRecon(threat);
-                  }}
-                  className="mt-2 w-full py-1 px-2 rounded bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/30 text-cyan-300 hover:text-cyan-200 text-[10px] font-bold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
-                  title="Deep Seek Physical Origin with Satellite & 360° Street View"
-                >
-                  <Crosshair className="w-3 h-3 text-cyan-400" />
-                  <span>Deep Seek Recon</span>
-                </button>
-              </div>
+              <span className="px-2.5 py-1 rounded bg-emerald-500/10 text-emerald-400 text-[10px] font-bold border border-emerald-500/30 whitespace-nowrap">
+                PERIMETER NOMINAL
+              </span>
             </div>
-          ))}
+          ) : (
+            activeThreatMarkers.slice(0, 4).map((threat) => (
+              <div
+                key={threat.id}
+                onClick={() => {
+                  setSelectedThreat(threat);
+                  if (onSelectThreat) onSelectThreat(threat);
+                }}
+                className="p-2.5 rounded-lg bg-slate-950 border border-white/5 hover:border-cyan-500/40 cursor-pointer transition-colors font-mono text-xs flex flex-col justify-between"
+              >
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-cyan-400 font-semibold truncate max-w-[120px]">
+                      {threat.city}, {threat.country}
+                    </span>
+                    <span className={`text-[9px] uppercase px-1.5 py-0.2 rounded font-bold ${
+                      threat.severity === 'critical' ? 'bg-red-500/20 text-red-400' : 'bg-amber-500/20 text-amber-300'
+                    }`}>
+                      {threat.severity}
+                    </span>
+                  </div>
+                  <div className="text-white font-bold text-[11px] truncate mb-1">
+                    {threat.sourceIp}
+                  </div>
+                  <div className="text-slate-400 text-[10px] truncate mb-2">
+                    {threat.vector}
+                  </div>
+                </div>
+
+                <div>
+                  <div className="flex items-center justify-between text-[10px] pt-1.5 border-t border-white/5">
+                    <span className="text-slate-500">{new Date(threat.timestamp).toLocaleTimeString()}</span>
+                    <span className={threat.blocked ? 'text-emerald-400 font-semibold' : 'text-red-400 font-semibold'}>
+                      {threat.blocked ? 'CONTAINED' : 'EVALUATING'}
+                    </span>
+                  </div>
+
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      launchRecon(threat);
+                    }}
+                    className="mt-2 w-full py-1 px-2 rounded bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/30 text-cyan-300 hover:text-cyan-200 text-[10px] font-bold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                    title="Deep Seek Physical Origin with Satellite & 360° Street View"
+                  >
+                    <Crosshair className="w-3 h-3 text-cyan-400" />
+                    <span>Deep Seek Recon</span>
+                  </button>
+                </div>
+              </div>
+            ))
+          )}
         </div>
       </div>
 
@@ -724,6 +695,7 @@ export default function RealTimeMap({ alerts = [], onSelectThreat }: RealTimeMap
         isOpen={showReconModal}
         onClose={() => setShowReconModal(false)}
         target={reconTarget}
+        customApiKey={customApiKey}
       />
 
     </div>

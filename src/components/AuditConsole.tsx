@@ -202,7 +202,7 @@ export default function AuditConsole({ auditLogs: propAuditLogs, emailLogs: prop
     try {
       const res = await apiRequest('/api/email-logs/generate-ai', 'POST', {
         prompt: promptToUse.trim(),
-        recipient: emailRecipient.trim() || currentUser?.email || 'operator@coou.edu.ng',
+        recipient: emailRecipient.trim() || currentUser?.email || 'operator@enterprise.sec',
         role: emailRole,
         type: emailType,
         tone: aiTone
@@ -811,7 +811,7 @@ export default function AuditConsole({ auditLogs: propAuditLogs, emailLogs: prop
                       </div>
                       <div>
                         <span className="text-slate-500">Sender / Origin: </span>
-                        <strong className="text-slate-300 font-mono">{email.senderEmail || 'system@coou.edu.ng'}</strong>
+                        <strong className="text-slate-300 font-mono">{email.senderEmail || 'system@enterprise.sec'}</strong>
                       </div>
                       <div>
                         <span className="text-slate-500">Subject: </span>
@@ -1180,7 +1180,7 @@ export default function AuditConsole({ auditLogs: propAuditLogs, emailLogs: prop
                   <div className="p-2.5 bg-slate-950 rounded-lg border border-white/5 text-[11px] text-slate-400 flex items-center justify-between">
                     <div>
                       <span className="text-slate-500">Sender Identity:</span>{' '}
-                      <strong className="text-white">{currentUser?.email || 'operator@coou.edu.ng'}</strong>{' '}
+                      <strong className="text-white">{currentUser?.email || 'operator@enterprise.sec'}</strong>{' '}
                       <span className="text-[10px] text-emerald-400">({(currentUser?.role || 'operator').toUpperCase()})</span>
                     </div>
                     <button
@@ -1390,7 +1390,7 @@ export default function AuditConsole({ auditLogs: propAuditLogs, emailLogs: prop
                     {/* Footer */}
                     <hr className="border-t border-slate-700 m-0" />
                     <p className="text-[10px] text-slate-500 m-0 text-center">
-                      Chukwuemeka Odumegwu Ojukwu University • EncDec Cybersecurity Platform
+                      EncDec Autonomous Hybrid IDS • Enterprise Cyber Defense Platform
                     </p>
                   </div>
                 </div>

@@ -95,7 +95,7 @@ export function createAuthRouter(
           </div>
           <p style="color: #94a3b8; font-size: 13px;">Security Notice: Please configure Multi-Factor Authentication (MFA) in your Operator Profile settings immediately.</p>
           <hr style="border: none; border-top: 1px solid #334155; margin: 20px 0;" />
-          <p style="color: #64748b; font-size: 11px; margin-bottom: 0;">Chukwuemeka Odumegwu Ojukwu University • EncDec Cybersecurity Platform</p>
+          <p style="color: #64748b; font-size: 11px; margin-bottom: 0;">EncDec Autonomous Hybrid IDS • Enterprise Cyber Defense Platform</p>
         </div>
       `;
     } else {
@@ -389,7 +389,7 @@ export function createAuthRouter(
 
         <p style="color: #94a3b8; font-size: 12px;">If you did not request this password reset, please contact your SOC Administrator immediately.</p>
         <hr style="border: none; border-top: 1px solid #334155; margin: 20px 0;" />
-        <p style="color: #64748b; font-size: 11px; margin-bottom: 0;">Chukwuemeka Odumegwu Ojukwu University • EncDec Cybersecurity Platform</p>
+        <p style="color: #64748b; font-size: 11px; margin-bottom: 0;">EncDec Autonomous Hybrid IDS • Enterprise Cyber Defense Platform</p>
       </div>
     `;
 

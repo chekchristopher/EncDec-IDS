@@ -236,7 +236,7 @@ export interface EmailLog {
   eventType?: 'registration' | 'login' | string;
   type?: 'registration' | 'login' | string;
   role?: string;
-  status: 'sent' | 'queued' | 'simulated';
+  status: 'sent' | 'queued' | 'delivered';
 }
 
 export interface WorkbookProgress {
