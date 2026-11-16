@@ -7,10 +7,12 @@ import React, { useState, useEffect } from 'react';
 import { 
   ShieldCheck, AlertTriangle, Cpu, HardDrive, Cpu as MemoryIcon,
   Bell, ChevronRight, Activity, ShieldAlert, ArrowUpRight, Mail,
-  Award, GraduationCap, CheckCircle2, Users, Server, Plus, Filter, Monitor
+  Award, GraduationCap, CheckCircle2, Users, Server, Plus, Filter, Monitor,
+  Power, CreditCard, Lock, Unlock
 } from 'lucide-react';
-import { Alert, Host, Threat, Packet } from '../types.js';
+import { Alert, Host, Threat, Packet, BillingConfig, UserCertificationStatus } from '../types.js';
 import { apiRequest } from '../api.js';
+import { filterAlertsForUser } from '../utils/hostOwnership.js';
 import RealTimeMap from './RealTimeMap.jsx';
 
 interface OverviewProps {
@@ -31,9 +33,14 @@ interface OverviewProps {
   onEmailAlert?: (alert: Alert) => void;
   onNavigateToIncidents?: () => void;
   onNavigateToHosts?: () => void;
+  onNavigateToSettings?: () => void;
+  onNavigateToWorkbook?: () => void;
   packetCount: number;
   livePackets?: Packet[];
   currentUser?: any;
+  billingConfig?: BillingConfig | null;
+  certificationStatus?: UserCertificationStatus | null;
+  onBillingConfigUpdated?: (cfg: BillingConfig) => void;
 }
 
 export default function Overview({ 
@@ -47,14 +54,48 @@ export default function Overview({
   onEmailAlert,
   onNavigateToIncidents,
   onNavigateToHosts,
+  onNavigateToSettings,
+  onNavigateToWorkbook,
   packetCount,
   livePackets,
-  currentUser
+  currentUser,
+  billingConfig,
+  certificationStatus,
+  onBillingConfigUpdated
 }: OverviewProps) {
   const [totalCertifiedAnalysts, setTotalCertifiedAnalysts] = useState<number>(0);
+  const [subToggleBusy, setSubToggleBusy] = useState(false);
+  const [subToggleNotice, setSubToggleNotice] = useState<string | null>(null);
   const [packetThroughputHistory, setPacketThroughputHistory] = useState<number[]>([
     14, 20, 16, 25, 18, 30, 22, 28, 35, 24, 32, 26, 38, 30, 42, 28
   ]);
+
+  const isAdminUser = currentUser?.role === 'admin';
+  const isSubscriptionOn = billingConfig?.subscriptionRequired ?? true;
+
+  const handleAdminTelemetrySubscriptionToggle = async () => {
+    if (!isAdminUser || subToggleBusy) return;
+    const nextRequired = !isSubscriptionOn;
+    setSubToggleBusy(true);
+    setSubToggleNotice(null);
+    try {
+      const res = await apiRequest('/api/admin/telemetry/subscription', 'POST', {
+        subscriptionRequired: nextRequired,
+      });
+      if (res?.billingConfig && onBillingConfigUpdated) {
+        onBillingConfigUpdated(res.billingConfig);
+      }
+      setSubToggleNotice(
+        nextRequired
+          ? 'EncDec IDS Subscription turned ON — only licensed users ($500 / 3 mo) can use the software.'
+          : 'EncDec IDS Subscription turned OFF — all users can now use the platform for free.'
+      );
+    } catch (err: any) {
+      setSubToggleNotice(err?.message || 'Failed to update EncDec IDS subscription status.');
+    } finally {
+      setSubToggleBusy(false);
+    }
+  };
 
   useEffect(() => {
     const fetchCertStats = () => {
@@ -103,19 +144,151 @@ export default function Overview({
     ? hosts.find(h => h.id === selectedHostId) || null
     : null;
 
-  // Dynamic filter for active alerts when inspecting a specific user enrolled node
+  // Strict isolation: only display alerts belonging to the user's own enrolled nodes.
+  // If the user has 0 enrolled nodes, activeAlerts stays empty ([]) until they enroll one.
+  const userScopedAlerts = hosts.length > 0
+    ? filterAlertsForUser(alerts, hosts, currentUser?.id)
+    : [];
+
   const activeAlerts = selectedHost
-    ? alerts.filter(a => {
+    ? userScopedAlerts.filter(a => {
         const targetStr = (a.target || '').toLowerCase();
         const sourceStr = (a.source || '').toLowerCase();
         const hostName = selectedHost.name.toLowerCase();
         const hostIp = selectedHost.ipAddress.toLowerCase();
-        return targetStr.includes(hostName) || targetStr.includes(hostIp) || sourceStr.includes(hostIp);
+        return a.hostId === selectedHost.id || targetStr.includes(hostName) || targetStr.includes(hostIp) || sourceStr.includes(hostIp);
       })
-    : alerts;
+    : userScopedAlerts;
 
   return (
     <div className="space-y-6" id="dashboard-overview-container">
+
+      {/* Admin Telemetry: EncDec IDS Subscription Master ON / OFF Control */}
+      {isAdminUser && (
+        <div
+          className={`p-4 sm:p-5 rounded-xl border shadow-lg transition-colors ${
+            isSubscriptionOn
+              ? 'bg-slate-900/95 border-amber-500/35'
+              : 'bg-slate-900/95 border-emerald-500/35'
+          }`}
+          id="admin-telemetry-subscription-panel"
+        >
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div className="flex items-start gap-3">
+              <div
+                className={`w-10 h-10 rounded-lg border flex items-center justify-center shrink-0 ${
+                  isSubscriptionOn
+                    ? 'bg-amber-500/10 border-amber-500/30 text-amber-400'
+                    : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+                }`}
+              >
+                {isSubscriptionOn ? <Lock className="w-5 h-5" /> : <Unlock className="w-5 h-5" />}
+              </div>
+              <div className="space-y-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h2 className="text-sm font-bold font-mono text-white uppercase tracking-wider">
+                    Admin Telemetry • EncDec IDS Subscription
+                  </h2>
+                  <span
+                    className={`px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold uppercase border ${
+                      isSubscriptionOn
+                        ? 'bg-amber-500/15 text-amber-300 border-amber-500/40'
+                        : 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40'
+                    }`}
+                  >
+                    {isSubscriptionOn ? 'ON • Licensed Users Only' : 'OFF • Free For All Users'}
+                  </span>
+                </div>
+                <p className="text-xs text-slate-400">
+                  {isSubscriptionOn
+                    ? 'Subscription payment ($500 / 3 months) is ENFORCED. Only licensed users can access the software; non-licensed users stay locked on the Get Licensed screen.'
+                    : 'Subscription payment is DISABLED. All registered users can access EncDec IDS modules for free until you turn subscription back ON.'}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-3 shrink-0">
+              <button
+                type="button"
+                disabled={subToggleBusy}
+                onClick={handleAdminTelemetrySubscriptionToggle}
+                className={`px-4 py-2.5 rounded-lg font-mono font-bold text-xs uppercase tracking-wider flex items-center gap-2 border cursor-pointer transition-all ${
+                  isSubscriptionOn
+                    ? 'bg-emerald-500/15 hover:bg-emerald-500/25 border-emerald-500/40 text-emerald-300'
+                    : 'bg-amber-500/15 hover:bg-amber-500/25 border-amber-500/40 text-amber-300'
+                }`}
+                id="admin-telemetry-subscription-toggle"
+              >
+                <Power className="w-4 h-4" />
+                <span>
+                  {subToggleBusy
+                    ? 'Updating...'
+                    : isSubscriptionOn
+                    ? 'Turn Subscription OFF (Make Free)'
+                    : 'Turn Subscription ON (Licensed Only)'}
+                </span>
+              </button>
+            </div>
+          </div>
+
+          {subToggleNotice && (
+            <div className="mt-3 pt-3 border-t border-white/10 text-xs font-mono text-cyan-300 flex items-center gap-2">
+              <CreditCard className="w-3.5 h-3.5 shrink-0" />
+              <span>{subToggleNotice}</span>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Uncertified Analyst Notification Card */}
+      {certificationStatus && !certificationStatus.isCertified && (
+        <section
+          className="p-4 sm:p-5 rounded-xl border border-amber-500/35 bg-slate-900 flex flex-col md:flex-row md:items-center justify-between gap-4"
+          id="overview-uncertified-notice"
+        >
+          <div className="flex items-start gap-3.5 min-w-0 flex-1">
+            <div className="w-10 h-10 rounded-lg bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400 shrink-0">
+              <GraduationCap className="w-5 h-5" />
+            </div>
+            <div className="space-y-2 min-w-0 flex-1">
+              <div>
+                <h2 className="text-sm font-semibold text-white">
+                  Become a Certified EncDec Analyst (CE-SOC)
+                </h2>
+                <p className="text-xs text-slate-400 mt-0.5 leading-relaxed">
+                  You have not yet earned your CE-SOC credential. Scale through all {certificationStatus.totalChapters} chapters of the EncDec Workbook and pass the Capstone Knowledge Check (≥ 80%) to get certified.
+                </p>
+              </div>
+              <div className="space-y-1.5 max-w-xl">
+                <div className="flex items-center justify-between text-xs font-mono tabular-nums text-slate-300">
+                  <span>{certificationStatus.nextStepLabel}</span>
+                  <span className="text-amber-300 font-semibold shrink-0 ml-3">
+                    {certificationStatus.chaptersCompleted}/{certificationStatus.totalChapters} Chapters · {certificationStatus.progressPercent}%
+                  </span>
+                </div>
+                <div className="h-1.5 w-full rounded-full bg-slate-950 overflow-hidden">
+                  <div
+                    className="h-full bg-amber-400 transition-all duration-300"
+                    style={{ width: `${Math.max(4, certificationStatus.progressPercent)}%` }}
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {onNavigateToWorkbook && (
+            <button
+              type="button"
+              onClick={onNavigateToWorkbook}
+              className="px-4 py-2.5 rounded-lg bg-amber-400 hover:bg-amber-300 text-slate-950 font-semibold text-xs whitespace-nowrap shrink-0 flex items-center gap-1.5 cursor-pointer transition-colors"
+              id="overview-open-workbook-btn"
+            >
+              <span>Scale Through Workbook</span>
+              <ArrowUpRight className="w-4 h-4" />
+            </button>
+          )}
+        </section>
+      )}
       
       {/* Enrolled Infrastructure Fabric & Node Monitor Hub */}
       <div className="p-4 sm:p-5 bg-slate-900/95 border border-cyan-500/30 rounded-xl shadow-xl relative overflow-hidden space-y-4">
@@ -196,6 +369,24 @@ export default function Overview({
             </button>
 
             {/* Individual Enrolled Node Cards */}
+            {hosts.length === 0 && (
+              <div className="sm:col-span-1 md:col-span-2 lg:col-span-3 p-3 rounded-lg border border-dashed border-cyan-500/25 bg-slate-950/50 flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-xs font-mono font-bold text-slate-200">No Enrolled Nodes Yet</p>
+                  <p className="text-[10px] font-mono text-slate-400 mt-0.5">
+                    Nodes are private to your account. Enroll your own server, workstation, or domain to start monitoring.
+                  </p>
+                </div>
+                {onNavigateToHosts && (
+                  <button
+                    onClick={onNavigateToHosts}
+                    className="px-3 py-1.5 rounded bg-cyan-500/15 border border-cyan-500/40 hover:bg-cyan-500/25 text-cyan-300 font-mono text-[11px] font-bold shrink-0 cursor-pointer"
+                  >
+                    Enroll Node →
+                  </button>
+                )}
+              </div>
+            )}
             {hosts.map(host => {
               const isSelected = selectedHostId === host.id;
               const hostAlerts = alerts.filter(a => 
@@ -303,10 +494,12 @@ export default function Overview({
               <span className="text-2xl font-bold font-sans text-white">
                 {metrics.hostsOnline} <span className="text-xs text-slate-500 font-mono font-normal">/ {metrics.hostsTotal}</span>
               </span>
-              <span className="text-[10px] font-mono text-emerald-400 font-bold">100% UP</span>
+              <span className="text-[10px] font-mono text-emerald-400 font-bold">
+                {metrics.hostsTotal > 0 ? `${Math.round((metrics.hostsOnline / metrics.hostsTotal) * 100)}% UP` : '0 NODES'}
+              </span>
             </div>
             <p className="text-[10px] font-mono text-slate-400 truncate">
-              {selectedHost ? `${selectedHost.name} Active` : `${hosts.length} User Nodes Enrolled`}
+              {selectedHost ? `${selectedHost.name} Active` : hosts.length > 0 ? `${hosts.length} User Nodes Enrolled` : 'Enroll your own node to start'}
             </p>
           </div>
           <div className="w-11 h-11 rounded-xl bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center text-cyan-400 shrink-0">
@@ -363,8 +556,8 @@ export default function Overview({
         </div>
       </div>
 
-      {/* Correlated Multi-Stage Incident Quick Access Alert */}
-      {onNavigateToIncidents && (
+      {/* Correlated Multi-Stage Incident Quick Access Alert (only shown when user's enrolled nodes have active alerts) */}
+      {onNavigateToIncidents && hosts.length > 0 && activeAlerts.some(a => a.status === 'unhandled') && (
         <div 
           onClick={onNavigateToIncidents}
           className="p-4 bg-gradient-to-r from-red-950/40 via-slate-900 to-slate-900 border border-red-500/40 hover:border-red-500/70 rounded-lg flex flex-col md:flex-row items-start md:items-center justify-between gap-4 cursor-pointer transition-all shadow-xl group"
@@ -376,17 +569,14 @@ export default function Overview({
             <div>
               <div className="flex items-center gap-2">
                 <span className="px-2 py-0.5 rounded bg-red-500/20 border border-red-500/40 text-red-300 text-[10px] font-mono font-bold uppercase">
-                  INC-1042 CRITICAL
+                  ACTIVE INCIDENT RESPONSE
                 </span>
                 <span className="text-xs font-bold text-white group-hover:text-red-300 transition-colors">
-                  Multi-Stage Web Server Compromise Correlated
-                </span>
-                <span className="text-[10px] font-mono text-cyan-400 bg-cyan-950 px-1.5 py-0.2 rounded border border-cyan-500/30">
-                  96% Confidence
+                  Correlated Security Event Detected on Enrolled Node
                 </span>
               </div>
               <p className="text-[11px] text-slate-400 mt-0.5 line-clamp-1">
-                Recon (Zeek) ➔ CVE Exploit (Suricata) ➔ Shell Spawn (Agent) ➔ C2 Outbound ➔ Persistence
+                Review correlated kill-chain telemetry, host agent anomalies, and containment actions in Incidents Workspace.
               </p>
             </div>
           </div>
@@ -403,8 +593,8 @@ export default function Overview({
         <RealTimeMap 
           alerts={activeAlerts} 
           targetNode={{
-            name: selectedHost ? selectedHost.name : (hosts[0]?.name || 'Primary Gateway'),
-            ip: selectedHost ? selectedHost.ipAddress : (hosts[0]?.ipAddress || '104.24.12.83')
+            name: selectedHost ? selectedHost.name : (hosts[0]?.name || 'No Node Enrolled'),
+            ip: selectedHost ? selectedHost.ipAddress : (hosts[0]?.ipAddress || '0.0.0.0')
           }}
           onSelectThreat={onNavigateToIncidents ? () => onNavigateToIncidents() : undefined} 
           customApiKey={currentUser?.customMapsApiKey}
@@ -552,7 +742,7 @@ export default function Overview({
             <h3 className="text-sm font-bold text-white font-mono uppercase tracking-wide">Real-time Alert Triage Stream</h3>
           </div>
           <span className="text-xs text-slate-400 font-mono hidden sm:inline">
-            {activeAlerts.filter(a => a && a.status === 'unhandled' && a.id.startsWith('alt_real_')).length} unhandled real alerts {selectedHost ? `for ${selectedHost.name}` : 'pending triage'}
+            {activeAlerts.filter(a => a && a.status === 'unhandled' && (a.id.startsWith('alt_real_') || Boolean(a.hostId) || Boolean(a.ownerId))).length} unhandled alerts {selectedHost ? `for ${selectedHost.name}` : hosts.length === 0 ? '(enroll a node to monitor)' : 'pending triage'}
           </span>
         </div>
 
@@ -571,12 +761,14 @@ export default function Overview({
             </thead>
             <tbody className="divide-y divide-white/5 text-xs font-mono">
               {(() => {
-                const realAlerts = activeAlerts.filter(a => a && a.id && a.id.startsWith('alt_real_'));
+                const realAlerts = activeAlerts.filter(a => a && a.id && (a.id.startsWith('alt_real_') || Boolean(a.hostId) || Boolean(a.ownerId)));
                 if (realAlerts.length === 0) {
                   return (
                     <tr>
                       <td colSpan={6} className="py-8 text-center text-slate-500 font-mono">
-                        ✅ Perimeter secure. Zero active intrusion alerts detected by Real-Time Deep Packet Inspection.
+                        {hosts.length === 0
+                          ? '🛡️ No personal nodes enrolled yet. Enroll a host node to monitor real-time intrusion alerts.'
+                          : '✅ Perimeter secure. Zero active intrusion alerts detected on your enrolled nodes.'}
                       </td>
                     </tr>
                   );
@@ -666,11 +858,13 @@ export default function Overview({
         {/* Mobile Cards View */}
         <div className="grid grid-cols-1 gap-4 md:hidden max-h-[380px] overflow-y-auto pr-1">
           {(() => {
-            const realAlerts = activeAlerts.filter(a => a && a.id && a.id.startsWith('alt_real_'));
+            const realAlerts = activeAlerts.filter(a => a && a.id && (a.id.startsWith('alt_real_') || Boolean(a.hostId) || Boolean(a.ownerId)));
             if (realAlerts.length === 0) {
               return (
                 <p className="text-center py-8 text-slate-500 font-mono text-xs">
-                  ✅ Perimeter secure. Zero active intrusion alerts detected by Real-Time Deep Packet Inspection.
+                  {hosts.length === 0
+                    ? '🛡️ No personal nodes enrolled yet. Enroll a host node to monitor real-time intrusion alerts.'
+                    : '✅ Perimeter secure. Zero active intrusion alerts detected on your enrolled nodes.'}
                 </p>
               );
             }

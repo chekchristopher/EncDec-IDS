@@ -14,6 +14,11 @@ export function getAuthToken(): string | null {
   return localStorage.getItem('encdec_ids_token');
 }
 
+export function getWsUrl(): string {
+  const token = getAuthToken();
+  return token ? `${WS_BASE}?token=${encodeURIComponent(token)}` : WS_BASE;
+}
+
 export function setAuthToken(token: string | null) {
   if (token) {
     localStorage.setItem('encdec_ids_token', token);

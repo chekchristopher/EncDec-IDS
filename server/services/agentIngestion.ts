@@ -4,9 +4,11 @@
  */
 
 import { Router, Request, Response } from 'express';
+import jwt from 'jsonwebtoken';
 import { CorrelationEngine } from './correlationEngine.js';
 import { DbSchema } from '../db/schema.js';
 import { RawSecurityEvent, Host } from '../../src/types.js';
+import { getJwtSecret } from '../routes/auth.js';
 
 export function createIngestRouter(
   dbState: DbSchema,
@@ -131,13 +133,57 @@ export function createIngestRouter(
    */
   router.post('/host-agent', async (req: Request, res: Response) => {
     try {
-      const { hostId, hostName, os, ipAddress, processes, fileChanges, cpu, memory, disk, suspiciousEvents } = req.body;
+      const { hostId, hostName, os, ipAddress, processes, fileChanges, cpu, memory, disk, ownerId, ownerEmail } = req.body;
 
-      // Automatically register or update host
-      let host = dbState.hosts.find(h => h.id === hostId || h.name === hostName || h.ipAddress === ipAddress);
+      // Resolve authenticated owner (Bearer JWT preferred, fallback to explicit registered user match)
+      let resolvedOwnerId: string | undefined;
+      let resolvedOwnerEmail: string | undefined;
+      const authHeader = req.headers.authorization;
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        try {
+          const decoded: any = jwt.verify(authHeader.slice(7), getJwtSecret());
+          if (decoded?.id) {
+            resolvedOwnerId = decoded.id;
+            resolvedOwnerEmail = decoded.email;
+          }
+        } catch {
+          // Ignore invalid bearer here; checked below if enrolling a new host
+        }
+      }
+      if (!resolvedOwnerId && (ownerId || ownerEmail)) {
+        const matchedUser = dbState.users.find(
+          (u) =>
+            (ownerId && u.id === ownerId) ||
+            (ownerEmail && u.email?.toLowerCase() === String(ownerEmail).toLowerCase())
+        );
+        if (matchedUser) {
+          resolvedOwnerId = matchedUser.id;
+          resolvedOwnerEmail = matchedUser.email;
+        }
+      }
+
+      // Match strictly within owner's scope (or exact hostId heartbeat belonging to an already-enrolled owner)
+      let host = dbState.hosts.find((h) => {
+        if (!h.ownerId) return false;
+        if (hostId && h.id === hostId) {
+          return !resolvedOwnerId || h.ownerId === resolvedOwnerId;
+        }
+        if (resolvedOwnerId && h.ownerId === resolvedOwnerId) {
+          return (hostName && h.name === hostName) || (ipAddress && h.ipAddress === ipAddress);
+        }
+        return false;
+      });
+
       if (!host) {
+        if (!resolvedOwnerId) {
+          return res.status(401).json({
+            error: 'Owner authentication required: Pass a valid user Bearer token or ownerId to enroll a new host agent.'
+          });
+        }
         host = {
           id: hostId || 'hst_' + Math.random().toString(36).substring(2, 9),
+          ownerId: resolvedOwnerId,
+          ownerEmail: resolvedOwnerEmail,
           name: hostName || ipAddress || 'Unknown Endpoint',
           os: os || 'linux',
           ipAddress: ipAddress || req.ip || '127.0.0.1',
@@ -150,7 +196,8 @@ export function createIngestRouter(
           createdAt: new Date().toISOString()
         };
         dbState.hosts.push(host);
-        addAuditLog('system', 'agent@encdec.io', 'New Host Agent Enrolled', host.name, req.ip || '127.0.0.1', 'success');
+        saveDb();
+        addAuditLog(resolvedOwnerId, resolvedOwnerEmail || 'agent@encdec.io', 'New Host Agent Enrolled', host.name, req.ip || '127.0.0.1', 'success');
         broadcastWs({ type: 'HOSTS_UPDATE', payload: dbState.hosts });
       } else {
         host.status = 'online';
@@ -158,6 +205,8 @@ export function createIngestRouter(
         if (cpu !== undefined) host.cpuUsage = cpu;
         if (memory !== undefined) host.memoryUsage = memory;
         if (disk !== undefined) host.diskUsage = disk;
+        saveDb();
+        broadcastWs({ type: 'HOSTS_UPDATE', payload: dbState.hosts });
       }
 
       // Check for suspicious processes
@@ -166,10 +215,12 @@ export function createIngestRouter(
           if (proc.suspicious) {
             const rawEvt: RawSecurityEvent = {
               id: 'agt_' + Math.random().toString(36).substring(2, 9),
+              ownerId: host.ownerId,
               timestamp: new Date().toISOString(),
               sourceType: 'host_agent',
               sensorId: `agent-${host.name}`,
               hostId: host.id,
+              destIp: host.ipAddress,
               eventType: 'process_spawn',
               details: {
                 pid: proc.pid,
@@ -199,10 +250,12 @@ export function createIngestRouter(
           if (isCritical || file.action === 'created') {
             const rawEvt: RawSecurityEvent = {
               id: 'fim_' + Math.random().toString(36).substring(2, 9),
+              ownerId: host.ownerId,
               timestamp: file.timestamp || new Date().toISOString(),
               sourceType: 'host_agent',
               sensorId: `agent-${host.name}`,
               hostId: host.id,
+              destIp: host.ipAddress,
               eventType: 'file_modify',
               details: file,
               severity: isCritical ? 'high' : 'medium',

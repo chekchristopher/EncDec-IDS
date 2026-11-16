@@ -4,6 +4,8 @@
  */
 
 import express from 'express';
+import bcryptjs from 'bcryptjs';
+import jwt from 'jsonwebtoken';
 import { createServer } from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import path from 'path';
@@ -13,12 +15,34 @@ import { DbSchema } from './server/db/schema.js';
 import { DEFAULT_DB } from './server/db/seed.js';
 import { firestoreSyncService } from './server/db/firestore.js';
 import { mssqlSyncService } from './server/db/mssql.js';
-import { createAuthRouter } from './server/routes/auth.js';
+import { createAuthRouter, getJwtSecret } from './server/routes/auth.js';
 import { createApiRouter } from './server/routes/api.js';
 import { createHealthRouter } from './server/routes/health.js';
 import { CorrelationEngine } from './server/services/correlationEngine.js';
 import { createIngestRouter } from './server/services/agentIngestion.js';
 import { Packet, LiveActivity, AuditLog, KillChainStage } from './src/types.js';
+import { DEFAULT_BILLING_CONFIG } from './src/utils/subscription.js';
+import {
+  filterHostsForUser,
+  sanitizeOwnedHosts,
+  filterAlertsForUser,
+  filterThreatsForUser,
+  isAlertOwnedByUser,
+} from './src/utils/hostOwnership.js';
+import { inspectHttpIngressPayload } from './server/services/dpiSignatures.js';
+import { evaluateUserCertificationStatus } from './src/utils/certificationStatus.js';
+
+function isFalsePositiveAlert(a: any): boolean {
+  if (!a || !a.id) return true;
+  if (!a.id.startsWith('alt_real_') && !a.ownerId && !a.hostId) return true;
+  // Purge legacy unowned DPI false positives (pre-fix User-Agent semicolon matches on /, /src/*, /api/*)
+  if (!a.ownerId && !a.hostId && a.ruleId === 'rul_real_dpi') return true;
+  const desc = String(a.description || '');
+  if (!a.ownerId && !a.hostId && (desc.includes('"/api/') || desc.includes('"/src/') || desc.includes('to "/"') || desc.includes('"/assets/'))) {
+    return true;
+  }
+  return false;
+}
 
 const PORT = process.env.CONTROL_PLANE_PORT 
   ? 3000 
@@ -35,10 +59,18 @@ function loadDb() {
       const parsed = JSON.parse(data);
       dbState = { ...DEFAULT_DB, ...parsed };
       dbState.incidents = (parsed.incidents && parsed.incidents.length > 0) ? parsed.incidents : DEFAULT_DB.incidents;
-      dbState.securityEvents = (parsed.securityEvents && parsed.securityEvents.length > 0) ? parsed.securityEvents : DEFAULT_DB.securityEvents;
+      const rawEvents = (parsed.securityEvents && parsed.securityEvents.length > 0) ? parsed.securityEvents : DEFAULT_DB.securityEvents;
+      const seenEventIds = new Set<string>();
+      dbState.securityEvents = (rawEvents || []).filter(evt => {
+        if (!evt || !evt.id) return false;
+        if (seenEventIds.has(evt.id)) return false;
+        seenEventIds.add(evt.id);
+        return true;
+      });
       dbState.activeResponses = (parsed.activeResponses && parsed.activeResponses.length > 0) ? parsed.activeResponses : DEFAULT_DB.activeResponses;
-      // Sanitize: Purge legacy synthetic records, dummy certificates, and orphaned threats
-      dbState.alerts = (dbState.alerts || []).filter(a => a && a.id && a.id.startsWith('alt_real_'));
+      // Sanitize: Purge legacy synthetic records, false-positive DPI alerts, unowned hosts, and orphaned threats
+      dbState.hosts = sanitizeOwnedHosts(dbState.hosts);
+      dbState.alerts = (dbState.alerts || []).filter(a => !isFalsePositiveAlert(a));
       dbState.certificates = (dbState.certificates || []).filter(c => c && c.userId && !c.userId.startsWith('usr_seed_'));
       const realAlertIds = new Set((dbState.alerts || []).map(a => a.id));
       dbState.threats = (dbState.threats || []).filter(t => t && t.associatedAlerts && t.associatedAlerts.some((id: string) => realAlertIds.has(id)));
@@ -49,13 +81,51 @@ function loadDb() {
           attestationStatement: (cert.attestationStatement || '').replace(/ and Chukwuemeka Odumegwu Ojukwu University \(COOU\)/gi, '')
         }));
       }
+      // Ensure billingConfig and payments arrays are initialized
+      dbState.billingConfig = {
+        ...DEFAULT_BILLING_CONFIG,
+        ...(parsed.billingConfig || {}),
+        nowPaymentsUrl: DEFAULT_BILLING_CONFIG.nowPaymentsUrl,
+        nowPaymentsInvoiceId: DEFAULT_BILLING_CONFIG.nowPaymentsInvoiceId,
+        priceUsd: DEFAULT_BILLING_CONFIG.priceUsd,
+        billingCycleMonths: DEFAULT_BILLING_CONFIG.billingCycleMonths,
+        billingCycleDays: DEFAULT_BILLING_CONFIG.billingCycleDays,
+      };
+      dbState.payments = Array.isArray(parsed.payments) ? parsed.payments : [];
+
+      // Ensure admin user has separate Safe Box defaults and active subscription initialized
+      const ensureAdminSafeBoxDefaults = () => {
+        const defaultSafeBoxPasskey = process.env.ADMIN_SAFEBOX_PASSKEY || 'En1!🔐9';
+        (dbState.users || []).forEach((u) => {
+          if (u.role === 'admin' && u.safeBoxEnabled === undefined && !u.safeBoxPasskeyHash) {
+            u.safeBoxEnabled = true;
+            u.safeBoxPasskeyHash = bcryptjs.hashSync(defaultSafeBoxPasskey, 10);
+          }
+          if (u.role === 'admin' && !u.subscriptionStatus) {
+            u.subscriptionStatus = 'active';
+          }
+          if (u.role !== 'admin' && !u.subscriptionStatus) {
+            u.subscriptionStatus = 'inactive';
+          }
+        });
+      };
+      ensureAdminSafeBoxDefaults();
       saveDb();
     } else {
       saveDb();
     }
     // Asynchronously synchronize with Firestore
     firestoreSyncService.syncFromFirestore(dbState, () => {
-      dbState.alerts = (dbState.alerts || []).filter(a => a && a.id && a.id.startsWith('alt_real_'));
+      const unownedHosts = (dbState.hosts || []).filter(h => h && !h.ownerId);
+      unownedHosts.forEach((h) => {
+        if (h.id) firestoreSyncService.deleteDocument('hosts', h.id);
+      });
+      dbState.hosts = sanitizeOwnedHosts(dbState.hosts);
+      const fpAlerts = (dbState.alerts || []).filter(a => isFalsePositiveAlert(a));
+      fpAlerts.forEach((a) => {
+        if (a?.id) firestoreSyncService.deleteDocument('alerts', a.id);
+      });
+      dbState.alerts = (dbState.alerts || []).filter(a => !isFalsePositiveAlert(a));
       dbState.certificates = (dbState.certificates || []).filter(c => c && c.userId && !c.userId.startsWith('usr_seed_'));
       const liveAlertIds = new Set((dbState.alerts || []).map(a => a.id));
       dbState.threats = (dbState.threats || []).filter(t => t && t.associatedAlerts && t.associatedAlerts.some((id: string) => liveAlertIds.has(id)));
@@ -65,6 +135,29 @@ function loadDb() {
           attestationStatement: (cert.attestationStatement || '').replace(/ and Chukwuemeka Odumegwu Ojukwu University \(COOU\)/gi, '')
         }));
       }
+      const defaultSafeBoxPasskey = process.env.ADMIN_SAFEBOX_PASSKEY || 'En1!🔐9';
+      (dbState.users || []).forEach((u) => {
+        if (u.role === 'admin' && u.safeBoxEnabled === undefined && !u.safeBoxPasskeyHash) {
+          u.safeBoxEnabled = true;
+          u.safeBoxPasskeyHash = bcryptjs.hashSync(defaultSafeBoxPasskey, 10);
+        }
+        if (u.role === 'admin' && !u.subscriptionStatus) {
+          u.subscriptionStatus = 'active';
+        }
+        if (u.role !== 'admin' && !u.subscriptionStatus) {
+          u.subscriptionStatus = 'inactive';
+        }
+      });
+      dbState.billingConfig = {
+        ...DEFAULT_BILLING_CONFIG,
+        ...(dbState.billingConfig || {}),
+        nowPaymentsUrl: DEFAULT_BILLING_CONFIG.nowPaymentsUrl,
+        nowPaymentsInvoiceId: DEFAULT_BILLING_CONFIG.nowPaymentsInvoiceId,
+        priceUsd: DEFAULT_BILLING_CONFIG.priceUsd,
+        billingCycleMonths: DEFAULT_BILLING_CONFIG.billingCycleMonths,
+        billingCycleDays: DEFAULT_BILLING_CONFIG.billingCycleDays,
+      };
+      dbState.payments = Array.isArray(dbState.payments) ? dbState.payments : [];
       saveDb();
     }).catch(err => {
       console.error('[Persistence] Failed initial sync from Firestore:', err);
@@ -117,16 +210,54 @@ const httpServer = createServer(app);
 const wss = new WebSocketServer({ noServer: true });
 const activeConnections = new Set<WebSocket>();
 
-wss.on('connection', (ws: WebSocket) => {
+wss.on('connection', (ws: WebSocket, request: any) => {
+  let wsUserId: string | null = null;
+  let wsUserRole: string | null = null;
+
+  try {
+    const reqUrl = new URL(request?.url || '/ws', 'http://localhost');
+    const token = reqUrl.searchParams.get('token');
+    if (token) {
+      const decoded: any = jwt.verify(token, getJwtSecret());
+      if (decoded?.id) {
+        wsUserId = decoded.id;
+        wsUserRole = decoded.role || null;
+      }
+    }
+  } catch {
+    wsUserId = null;
+  }
+
+  (ws as any).userId = wsUserId;
+  (ws as any).userRole = wsUserRole;
   activeConnections.add(ws);
   
-  // Initial state transmission
+  const wsUserHosts = filterHostsForUser(dbState.hosts, wsUserId);
+  const wsUserAlerts = filterAlertsForUser(dbState.alerts, wsUserHosts, wsUserId);
+  const wsUserThreats = filterThreatsForUser(dbState.threats, wsUserHosts, wsUserAlerts, wsUserId);
+  const wsUser = wsUserId ? dbState.users.find(u => u.id === wsUserId) : null;
+  const wsProgress = wsUserId
+    ? (dbState.workbookProgress || []).find(
+        p => p.userId === wsUserId || (wsUser?.email && p.email?.toLowerCase() === wsUser.email.toLowerCase())
+      ) || null
+    : null;
+  const wsCertificationStatus = wsUserId
+    ? evaluateUserCertificationStatus({
+        userId: wsUserId,
+        userEmail: wsUser?.email,
+        progress: wsProgress,
+        certificates: dbState.certificates || [],
+      })
+    : null;
+
+  // Initial state transmission (hosts, alerts, threats, and certification status strictly scoped to user)
   ws.send(JSON.stringify({
     type: 'INIT',
     payload: {
-      hosts: dbState.hosts,
-      alerts: dbState.alerts,
-      threats: dbState.threats,
+      hosts: wsUserHosts,
+      alerts: wsUserAlerts,
+      threats: wsUserThreats,
+      certificationStatus: wsCertificationStatus,
       rules: dbState.rules,
       threatIntel: dbState.threatIntel,
       mlModels: dbState.mlModels,
@@ -156,6 +287,72 @@ httpServer.on('upgrade', (request, socket, head) => {
 });
 
 function broadcastToAllWebsockets(message: any) {
+  if (message?.type === 'HOSTS_UPDATE' && Array.isArray(message.payload)) {
+    for (const ws of activeConnections) {
+      if (ws.readyState === WebSocket.OPEN) {
+        const wsUserId = (ws as any).userId || null;
+        ws.send(JSON.stringify({
+          type: 'HOSTS_UPDATE',
+          payload: filterHostsForUser(message.payload, wsUserId)
+        }));
+      }
+    }
+    return;
+  }
+
+  if (message?.type === 'ALERTS_UPDATE' && Array.isArray(message.payload)) {
+    for (const ws of activeConnections) {
+      if (ws.readyState === WebSocket.OPEN) {
+        const wsUserId = (ws as any).userId || null;
+        const wsHosts = filterHostsForUser(dbState.hosts, wsUserId);
+        ws.send(JSON.stringify({
+          type: 'ALERTS_UPDATE',
+          payload: filterAlertsForUser(message.payload, wsHosts, wsUserId)
+        }));
+      }
+    }
+    return;
+  }
+
+  if (message?.type === 'THREATS_UPDATE' && Array.isArray(message.payload)) {
+    for (const ws of activeConnections) {
+      if (ws.readyState === WebSocket.OPEN) {
+        const wsUserId = (ws as any).userId || null;
+        const wsHosts = filterHostsForUser(dbState.hosts, wsUserId);
+        const wsAlerts = filterAlertsForUser(dbState.alerts, wsHosts, wsUserId);
+        ws.send(JSON.stringify({
+          type: 'THREATS_UPDATE',
+          payload: filterThreatsForUser(message.payload, wsHosts, wsAlerts, wsUserId)
+        }));
+      }
+    }
+    return;
+  }
+
+  if (message?.type === 'ALERT_TRIGGERED' && message.payload) {
+    for (const ws of activeConnections) {
+      if (ws.readyState === WebSocket.OPEN) {
+        const wsUserId = (ws as any).userId || null;
+        const wsHosts = filterHostsForUser(dbState.hosts, wsUserId);
+        if (isAlertOwnedByUser(message.payload, wsHosts, wsUserId)) {
+          ws.send(JSON.stringify(message));
+        }
+      }
+    }
+    return;
+  }
+
+  if ((message?.type === 'CERTIFICATION_STATUS_UPDATE' || message?.type === 'CERTIFICATION_REMINDER') && message.payload?.userId) {
+    const targetUserId = message.payload.userId;
+    const serialized = JSON.stringify(message);
+    for (const ws of activeConnections) {
+      if (ws.readyState === WebSocket.OPEN && (ws as any).userId === targetUserId) {
+        ws.send(serialized);
+      }
+    }
+    return;
+  }
+
   const serialized = JSON.stringify(message);
   for (const ws of activeConnections) {
     if (ws.readyState === WebSocket.OPEN) {
@@ -237,48 +434,15 @@ setInterval(() => {
 // Instantiate correlation engine before middleware so real attacks can be processed immediately
 const correlationEngine = new CorrelationEngine(dbState, saveDb, broadcastToAllWebsockets, addAuditLog);
 
-const ATTACK_SIGNATURES: {
-  category: string;
-  regex: RegExp;
-  severity: 'critical' | 'high' | 'medium';
-  mitre: { tactic: KillChainStage; technique: string };
-}[] = [
-  {
-    category: 'SQL Injection (SQLi)',
-    regex: /((\%27)|(\')|(\-\-)|(\%23)|(#)|(\b(UNION|SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|EXEC|XP_|BENCHMARK|SLEEP)\b))/i,
-    severity: 'critical',
-    mitre: { tactic: 'Initial Access', technique: 'T1190' }
-  },
-  {
-    category: 'Cross-Site Scripting (XSS)',
-    regex: /(<script|javascript:|onerror\s*=|onload\s*=|alert\(|<iframe|<img\s+src=)/i,
-    severity: 'high',
-    mitre: { tactic: 'Execution', technique: 'T1059.007' }
-  },
-  {
-    category: 'Path Traversal / LFI',
-    regex: /(\.\.\/|\.\.\\|\/etc\/(passwd|shadow)|win\.ini|boot\.ini)/i,
-    severity: 'high',
-    mitre: { tactic: 'Defense Evasion', technique: 'T1083' }
-  },
-  {
-    category: 'Reconnaissance / Vulnerability Scanner',
-    regex: /(\.env|\.git|wp-login|wp-admin|phpmyadmin|\/shell|\/cmd|actuator|\/debug)/i,
-    severity: 'medium',
-    mitre: { tactic: 'Reconnaissance', technique: 'T1595' }
-  },
-  {
-    category: 'Command Injection / Reverse Shell',
-    regex: /(\;|\`|\|\s*(\bcurl|\bwget|\bbash|\bsh|\bnc|\bncat|\bpowershell)\b)/i,
-    severity: 'critical',
-    mitre: { tactic: 'Execution', technique: 'T1059.004' }
-  }
-];
-
 // Live HTTP Ingress Sniffer Middleware
 app.use((req, res, next) => {
-  // Filter out static internal Vite bundle assets to focus on API and ingress traffic
-  if (req.path.startsWith('/@') || req.path.startsWith('/node_modules') || req.path.match(/\.(js|css|svg|png|jpg|ico|woff2|map)$/)) {
+  // Filter out static internal Vite bundle assets and TypeScript/React module fetches to focus on API and ingress traffic
+  if (
+    req.path.startsWith('/@') ||
+    req.path.startsWith('/node_modules') ||
+    req.path.startsWith('/src/') ||
+    req.path.match(/\.(js|mjs|ts|tsx|jsx|css|svg|png|jpg|jpeg|gif|webp|ico|woff2?|ttf|map)$/i)
+  ) {
     return next();
   }
 
@@ -287,30 +451,34 @@ app.use((req, res, next) => {
 
   const rawIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0].trim() || req.socket.remoteAddress || '127.0.0.1';
   const cleanIp = rawIp.replace(/^::ffff:/, '');
-  const urlToScan = decodeURIComponent(req.originalUrl || req.url || '');
-  const bodyString = typeof req.body === 'object' ? JSON.stringify(req.body) : String(req.body || '');
-  const combinedPayload = `${urlToScan} ${bodyString} ${req.headers['user-agent'] || ''}`;
-
-  let detectedAttack: typeof ATTACK_SIGNATURES[0] | null = null;
-  // Ignore legitimate login or registration payloads that may contain normal credentials
-  if (!req.path.startsWith('/api/auth/') && !req.path.startsWith('/api/profile/maps-key')) {
-    for (const sig of ATTACK_SIGNATURES) {
-      if (sig.regex.test(combinedPayload)) {
-        detectedAttack = sig;
-        break;
-      }
-    }
+  let urlToScan = req.originalUrl || req.url || '';
+  try {
+    urlToScan = decodeURIComponent(urlToScan);
+  } catch {
+    // Keep raw URL if malformed percent encoding
   }
+  const bodyString = typeof req.body === 'object' ? JSON.stringify(req.body) : String(req.body || '');
+  const userAgent = String(req.headers['user-agent'] || '');
 
-  const packetLength = Number(req.headers['content-length']) || Buffer.byteLength(combinedPayload, 'utf8') + 72;
+  const detectedAttack = inspectHttpIngressPayload({
+    path: req.path,
+    urlToScan,
+    bodyString,
+    userAgent,
+  });
+
+  const packetLength = Number(req.headers['content-length']) || Buffer.byteLength(`${urlToScan} ${bodyString}`, 'utf8') + 72;
   const isSuspicious = !!detectedAttack;
+  const probeTargetHost = req.headers['x-probe-target-host'] ? String(req.headers['x-probe-target-host']) : undefined;
+  const probeOwnerId = req.headers['x-probe-owner-id'] ? String(req.headers['x-probe-owner-id']) : undefined;
+  const targetLabel = probeTargetHost || req.headers.host || 'gateway';
 
   const realPacket: Packet = {
     id: 'pkt_' + Math.random().toString(36).substring(2, 9),
     timestamp: new Date().toISOString(),
     sourceIp: cleanIp,
-    destIp: req.headers.host || 'portal.coou.edu.ng',
-    destinationIp: req.headers.host || 'portal.coou.edu.ng',
+    destIp: targetLabel,
+    destinationIp: targetLabel,
     protocol: (req.protocol.toUpperCase() as any) || 'HTTP',
     length: packetLength,
     flags: req.method,
@@ -333,15 +501,23 @@ app.use((req, res, next) => {
 
   // If a real attack signature is matched, log a real Alert and trigger Correlation Engine
   if (detectedAttack) {
+    const matchedEnrolledHost = dbState.hosts.find((h) => {
+      if (probeOwnerId && h.ownerId !== probeOwnerId) return false;
+      const targetLower = targetLabel.toLowerCase();
+      return (h.name && targetLower.includes(h.name.toLowerCase())) || (h.ipAddress && targetLower.includes(h.ipAddress.toLowerCase()));
+    });
+
     const realAlert = {
       id: 'alt_real_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+      ownerId: probeOwnerId || matchedEnrolledHost?.ownerId,
+      hostId: matchedEnrolledHost?.id,
       timestamp: new Date().toISOString(),
       severity: detectedAttack.severity,
       title: `Live Attack Detected: ${detectedAttack.category}`,
       description: `Real HTTP ${req.method} request from IP ${cleanIp} to "${req.path}" matched live signature: ${detectedAttack.category}.`,
       category: detectedAttack.category,
       source: cleanIp,
-      target: req.headers.host || 'portal.coou.edu.ng',
+      target: targetLabel,
       status: 'unhandled' as const,
       ruleId: 'rul_real_dpi',
       mitreMapping: `${detectedAttack.mitre.technique} (${detectedAttack.mitre.tactic})`
@@ -352,11 +528,13 @@ app.use((req, res, next) => {
 
     const rawEvent = {
       id: 'evt_real_' + Math.random().toString(36).substring(2, 9),
+      ownerId: realAlert.ownerId,
+      hostId: realAlert.hostId,
       timestamp: realAlert.timestamp,
       sourceType: 'suricata' as const,
       sensorId: 'realtime-http-dpi',
       sourceIp: cleanIp,
-      destIp: req.headers.host || 'portal.coou.edu.ng',
+      destIp: targetLabel,
       destPort: 443,
       protocol: 'HTTP',
       eventType: 'exploit_detected',
@@ -371,11 +549,8 @@ app.use((req, res, next) => {
       mitre: detectedAttack.mitre
     };
 
-    dbState.securityEvents.unshift(rawEvent);
-    if (dbState.securityEvents.length > 200) dbState.securityEvents.pop();
-
-    saveDb();
-    addAuditLog('system', 'soc-engine@encdec.io', `Real Ingress Attack Intercepted: ${detectedAttack.category}`, req.path, cleanIp, 'success');
+    // correlationEngine.processEvent handles storing rawEvent into dbState.securityEvents, saving, and broadcasting
+    addAuditLog(realAlert.ownerId || 'system', 'soc-engine@encdec.io', `Real Ingress Attack Intercepted: ${detectedAttack.category}`, req.path, cleanIp, 'success');
     broadcastToAllWebsockets({ type: 'ALERTS_UPDATE', payload: dbState.alerts });
     correlationEngine.processEvent(rawEvent).catch(console.error);
   }
@@ -390,7 +565,7 @@ const ingestRouter = createIngestRouter(dbState, saveDb, correlationEngine, broa
 const healthRouter = createHealthRouter(() => activeConnections.size);
 
 app.use('/api/auth', authRouter);
-app.use('/api/profile', authRouter);
+app.use('/api', authRouter);
 app.use('/api/ingest', ingestRouter);
 app.use('/api', healthRouter);
 app.use('/api', apiRouter);
@@ -424,13 +599,33 @@ app.post('/api/probe/live-attack', async (req, res) => {
   }
 
   try {
+    let probeOwnerId: string | undefined;
+    let probeTargetHost: string | undefined;
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      try {
+        const decoded: any = jwt.verify(authHeader.slice(7), getJwtSecret());
+        if (decoded?.id) {
+          probeOwnerId = decoded.id;
+          const userHosts = filterHostsForUser(dbState.hosts, decoded.id);
+          probeTargetHost = req.body?.targetHost || userHosts[0]?.name;
+        }
+      } catch {
+        // Unauthenticated probe
+      }
+    }
+
+    const forwardHeaders: Record<string, string> = {
+      'x-forwarded-for': attackerIp,
+      'user-agent': 'Mozilla/5.0 (Kali; Linux x86_64; rv:109.0) ThreatHunter/2.4'
+    };
+    if (probeOwnerId) forwardHeaders['x-probe-owner-id'] = probeOwnerId;
+    if (probeTargetHost) forwardHeaders['x-probe-target-host'] = probeTargetHost;
+
     // Send actual real HTTP request over loopback port
     await fetch(`http://127.0.0.1:${PORT}${probePath}`, {
       method: 'GET',
-      headers: {
-        'x-forwarded-for': attackerIp,
-        'user-agent': 'Mozilla/5.0 (Kali; Linux x86_64; rv:109.0) ThreatHunter/2.4'
-      }
+      headers: forwardHeaders
     }).catch(() => null);
 
     res.json({

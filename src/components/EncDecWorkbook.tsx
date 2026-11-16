@@ -22,6 +22,7 @@ import {
   createCertificatePdfDoc, 
   CertificateData 
 } from '../services/certificatePdf.js';
+import type { UserCertificationStatus } from '../types.js';
 
 interface EncDecWorkbookProps {
   currentUser?: {
@@ -30,6 +31,7 @@ interface EncDecWorkbookProps {
     email?: string;
     role?: string;
   } | null;
+  onCertificationUpdated?: (status: UserCertificationStatus) => void;
 }
 
 interface QuizQuestion {
@@ -141,7 +143,7 @@ function parseNameParts(fullName: string) {
   };
 }
 
-export default function EncDecWorkbook({ currentUser }: EncDecWorkbookProps) {
+export default function EncDecWorkbook({ currentUser, onCertificationUpdated }: EncDecWorkbookProps) {
   const [activeChapterIndex, setActiveChapterIndex] = useState(0);
   const [lastReadParagraphIndex, setLastReadParagraphIndex] = useState(0);
   const [searchQuery, setSearchQuery] = useState('');
@@ -239,6 +241,9 @@ export default function EncDecWorkbook({ currentUser }: EncDecWorkbookProps) {
             setTimeout(() => setResumeNotification(null), 6000);
           }
         }
+        if (res?.certificationStatus && onCertificationUpdated) {
+          onCertificationUpdated(res.certificationStatus);
+        }
       } catch (err) {
         console.warn('Operating in offline/cached workbook mode, could not fetch from database:', err);
       }
@@ -283,6 +288,9 @@ export default function EncDecWorkbook({ currentUser }: EncDecWorkbookProps) {
 
       if (res && res.progress) {
         setDbLastSavedTime(res.progress.lastReadAt);
+      }
+      if (res?.certificationStatus && onCertificationUpdated) {
+        onCertificationUpdated(res.certificationStatus);
       }
     } catch (err) {
       console.warn('Failed to sync workbook reading position to database:', err);
@@ -471,6 +479,9 @@ export default function EncDecWorkbook({ currentUser }: EncDecWorkbookProps) {
         issueDate: new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
       });
 
+      if (res?.certificationStatus && onCertificationUpdated) {
+        onCertificationUpdated(res.certificationStatus);
+      }
       if (res && res.qrCodeDataUrl) {
         setCertQrCodeUrl(res.qrCodeDataUrl);
         if (res.verificationUrl) setCertVerificationUrl(res.verificationUrl);

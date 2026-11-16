@@ -70,8 +70,14 @@ export default function IncidentsWorkspace({
   const runThreatHunt = async (query = huntingQuery) => {
     setHuntingLoading(true);
     try {
-      const events = await apiRequest(`/api/security-events?q=${encodeURIComponent(query)}`);
-      setHuntingEvents(events);
+      const events: RawSecurityEvent[] = await apiRequest(`/api/security-events?q=${encodeURIComponent(query)}`);
+      const seen = new Set<string>();
+      const uniqueEvents = (Array.isArray(events) ? events : []).filter((evt) => {
+        if (!evt || !evt.id || seen.has(evt.id)) return false;
+        seen.add(evt.id);
+        return true;
+      });
+      setHuntingEvents(uniqueEvents);
     } catch (err: any) {
       console.error('Failed to run threat hunt:', err);
     } finally {
@@ -406,14 +412,19 @@ export default function IncidentsWorkspace({
                       {selectedIncident.attackerGeo?.asn}
                     </div>
                   </div>
-                  <button
-                    onClick={() => launchIncidentRecon(selectedIncident)}
-                    className="px-2.5 py-1 rounded bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/30 text-cyan-300 text-[10px] font-bold flex items-center gap-1 transition-colors cursor-pointer"
-                    title="Inspect physical street address and building via Google Maps Satellite & Street View"
-                  >
-                    <Crosshair className="w-3 h-3 text-cyan-400" />
-                    <span>Deep Seek</span>
-                  </button>
+                  <div className="flex flex-col items-end gap-1">
+                    <button
+                      onClick={() => launchIncidentRecon(selectedIncident)}
+                      className="px-2.5 py-1 rounded bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/30 text-cyan-300 text-[10px] font-bold flex items-center gap-1 transition-colors cursor-pointer"
+                      title="Inspect physical street address and building via Google Maps Satellite & Street View (requires Google Maps / Google Cloud billing subscription)"
+                    >
+                      <Crosshair className="w-3 h-3 text-cyan-400" />
+                      <span>Deep Seek</span>
+                    </button>
+                    <span className="text-[9px] text-amber-300/80 text-right">
+                      Google Maps subscription required
+                    </span>
+                  </div>
                 </div>
 
                 <div>

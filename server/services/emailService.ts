@@ -250,27 +250,36 @@ export async function sendEmail(options: SendEmailOptions): Promise<EmailDispatc
         details: `Delivered directly via Google Workspace Gmail API to ${to}`
       };
     } catch (oauthErr: any) {
-      console.warn(`[GMAIL OAUTH ERROR] Failed to send via OAuth API: ${oauthErr?.message || oauthErr}`);
+      console.log(`[GMAIL OAUTH INFO] OAuth delivery unavailable (${oauthErr?.message || oauthErr}). Falling back cleanly.`);
     }
   }
 
   // 3. Generic SMTP Transport Delivery
-  if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
+  const smtpHost = (process.env.SMTP_HOST || '').trim();
+  const smtpUser = (process.env.SMTP_USER || '').trim();
+  const rawSmtpPass = (process.env.SMTP_PASS || '').trim();
+  const smtpPass = smtpHost.toLowerCase().includes('gmail.com')
+    ? rawSmtpPass.replace(/\s+/g, '')
+    : rawSmtpPass;
+
+  if (smtpHost && smtpUser && smtpPass) {
     try {
       const transporter = nodemailer.createTransport({
-        host: process.env.SMTP_HOST,
+        host: smtpHost,
         port: parseInt(process.env.SMTP_PORT || '587', 10),
         secure: process.env.SMTP_SECURE === 'true',
         auth: {
-          user: process.env.SMTP_USER,
-          pass: process.env.SMTP_PASS
+          user: smtpUser,
+          pass: smtpPass
         },
         tls: {
           rejectUnauthorized: false
-        }
+        },
+        connectionTimeout: 10000,
+        greetingTimeout: 10000
       });
 
-      const senderFrom = process.env.SMTP_FROM || `"${fromName}" <${fromEmail || process.env.SMTP_USER}>`;
+      const senderFrom = process.env.SMTP_FROM || `"${fromName}" <${fromEmail || smtpUser}>`;
       const info = await transporter.sendMail({
         from: senderFrom,
         to,
@@ -284,10 +293,16 @@ export async function sendEmail(options: SendEmailOptions): Promise<EmailDispatc
         success: true,
         channel: 'smtp',
         messageId: info.messageId,
-        details: `Delivered via SMTP (${process.env.SMTP_HOST})`
+        details: `Delivered via SMTP (${smtpHost})`
       };
     } catch (smtpErr: any) {
-      console.warn(`[SMTP ERROR] Failed to send via SMTP: ${smtpErr?.message || smtpErr}`);
+      const errMsg = String(smtpErr?.message || smtpErr || '');
+      const isAuth535 = errMsg.includes('535') || smtpErr?.code === 'EAUTH';
+      if (isAuth535) {
+        console.log('[SMTP DISPATCH INFO] SMTP credentials not accepted (535-5.7.8; Gmail requires a 16-char App Password). Smoothly falling back to Audit Log delivery.');
+      } else {
+        console.log(`[SMTP DISPATCH INFO] SMTP transport unavailable (${errMsg || 'offline'}). Smoothly falling back to Audit Log delivery.`);
+      }
     }
   }
 

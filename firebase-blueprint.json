@@ -12,6 +12,14 @@
         "role": { "type": "string" },
         "status": { "type": "string" },
         "mfaEnabled": { "type": "boolean" },
+        "safeBoxEnabled": { "type": "boolean" },
+        "safeBoxPasskeyHash": { "type": "string" },
+        "safeBoxUpdatedAt": { "type": "string" },
+        "subscriptionStatus": { "type": "string" },
+        "subscriptionExpiresAt": { "type": "string" },
+        "subscriptionGrantedBy": { "type": "string" },
+        "subscriptionUpdatedAt": { "type": "string" },
+        "lastPaymentId": { "type": "string" },
         "createdAt": { "type": "string" }
       },
       "required": ["id", "email", "passwordHash", "name", "role", "status", "createdAt"]
@@ -22,6 +30,8 @@
       "type": "object",
       "properties": {
         "id": { "type": "string" },
+        "ownerId": { "type": "string" },
+        "ownerEmail": { "type": "string" },
         "name": { "type": "string" },
         "os": { "type": "string" },
         "ipAddress": { "type": "string" },
@@ -33,7 +43,7 @@
         "diskUsage": { "type": "number" },
         "createdAt": { "type": "string" }
       },
-      "required": ["id", "name", "os", "ipAddress", "status", "lastSeen", "cpuUsage", "memoryUsage", "diskUsage"]
+      "required": ["id", "ownerId", "name", "os", "ipAddress", "status", "lastSeen", "cpuUsage", "memoryUsage", "diskUsage"]
     },
     "rule": {
       "title": "Rule",
@@ -239,6 +249,47 @@
         "attestationStatement": { "type": "string" }
       },
       "required": ["certificateId", "firstName", "lastName", "fullName", "quizScore", "verificationCode", "verificationUrl"]
+    },
+    "paymentRecord": {
+      "title": "PaymentRecord",
+      "description": "NOWPayments $500 / 3-month subscription payment and grant records",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "userEmail": { "type": "string" },
+        "userName": { "type": "string" },
+        "amountUsd": { "type": "number" },
+        "billingCycleMonths": { "type": "number" },
+        "provider": { "type": "string" },
+        "invoiceId": { "type": "string" },
+        "paymentReference": { "type": "string" },
+        "status": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "confirmedAt": { "type": "string" },
+        "confirmedBy": { "type": "string" }
+      },
+      "required": ["id", "userId", "userEmail", "amountUsd", "billingCycleMonths", "provider", "status", "createdAt"]
+    },
+    "billingSetting": {
+      "title": "BillingSetting",
+      "description": "Global platform subscription paywall and timed free access settings",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "subscriptionRequired": { "type": "boolean" },
+        "nowPaymentsUrl": { "type": "string" },
+        "nowPaymentsInvoiceId": { "type": "string" },
+        "priceUsd": { "type": "number" },
+        "billingCycleMonths": { "type": "number" },
+        "billingCycleDays": { "type": "number" },
+        "freeAccessActive": { "type": "boolean" },
+        "freeAccessExpiresAt": { "type": "string" },
+        "freeAccessDurationLabel": { "type": "string" },
+        "updatedAt": { "type": "string" },
+        "updatedBy": { "type": "string" }
+      },
+      "required": ["id", "subscriptionRequired", "priceUsd", "billingCycleMonths", "freeAccessActive", "updatedAt"]
     }
   },
   "firestore": {
@@ -297,6 +348,14 @@
     "certificates": {
       "schema": "certificate",
       "description": "Registered CE-SOC credentials and verification records"
+    },
+    "payments": {
+      "schema": "paymentRecord",
+      "description": "NOWPayments subscription payment & admin grant logs"
+    },
+    "billingSettings": {
+      "schema": "billingSetting",
+      "description": "Global subscription paywall & free access settings"
     }
   }
 }

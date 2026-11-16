@@ -63,5 +63,13 @@ service cloud.firestore {
     match /certificates/{certId} {
       allow read, write: if true; // Publicly verifiable for employer authentication
     }
+
+    match /payments/{paymentId} {
+      allow read, write: if true;
+    }
+
+    match /billingSettings/{settingId} {
+      allow read, write: if true;
+    }
   }
 }

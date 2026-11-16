@@ -221,10 +221,13 @@ export default function RealTimeMap({ alerts = [], onSelectThreat, customApiKey,
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
-  // 3. Dynamically update markers exclusively from live incoming real alerts
+  // 3. Dynamically update markers exclusively from live incoming real alerts for enrolled nodes
   useEffect(() => {
-    // Only map real active unhandled alerts intercepted by the DPI sniffer
-    const activeRealAlerts = (alerts || []).filter(a => a && a.status !== 'resolved' && a.id && a.id.startsWith('alt_real_'));
+    const hasEnrolledTarget = Boolean(activeTargetNode?.ip && activeTargetNode.ip !== '0.0.0.0');
+    // Only map real active unhandled alerts when user has enrolled at least one node
+    const activeRealAlerts = hasEnrolledTarget
+      ? (alerts || []).filter(a => a && a.status !== 'resolved' && a.id && a.id.startsWith('alt_real_'))
+      : [];
 
     if (activeRealAlerts.length > 0) {
       const mappedFromAlerts: ThreatMarker[] = activeRealAlerts.slice(0, 10).map((alert, idx) => {
@@ -530,7 +533,7 @@ export default function RealTimeMap({ alerts = [], onSelectThreat, customApiKey,
               if (targetToRecon) launchRecon(targetToRecon);
             }}
             className="px-3 py-1.5 rounded-lg bg-cyan-500/10 border border-cyan-500/30 text-cyan-400 hover:bg-cyan-500/20 font-bold flex items-center gap-1.5 transition-colors cursor-pointer text-xs"
-            title="Launch Google Maps Satellite & 360° Street View Reconnaissance"
+            title="Launch Deep Seek via Google Maps (requires paid Google Cloud / Google Maps Platform subscription & API key)"
             id="deep-seek-active-threat-btn"
           >
             <Crosshair className="w-3.5 h-3.5 text-cyan-400 animate-pulse" />
@@ -604,19 +607,25 @@ export default function RealTimeMap({ alerts = [], onSelectThreat, customApiKey,
 
         {/* Target Asset Corner Badge */}
         <div className="absolute bottom-3 right-3 bg-slate-950/80 border border-white/10 px-3 py-2 rounded-lg text-xs font-mono text-slate-400 backdrop-blur-sm z-10 flex items-center gap-2">
-          <div className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-ping" />
-          <span>Protected Node: <strong className="text-cyan-300">{activeTargetNode.name}</strong> • <span className="text-slate-400 font-mono text-[11px]">{activeTargetNode.ip}</span></span>
+          <div className={`w-2.5 h-2.5 rounded-full ${activeTargetNode.ip === '0.0.0.0' ? 'bg-slate-500' : 'bg-cyan-400 animate-ping'}`} />
+          {activeTargetNode.ip === '0.0.0.0' ? (
+            <span>No Personal Nodes Enrolled • <strong className="text-slate-300">Enroll a Node to Monitor</strong></span>
+          ) : (
+            <span>Protected Node: <strong className="text-cyan-300">{activeTargetNode.name}</strong> • <span className="text-slate-400 font-mono text-[11px]">{activeTargetNode.ip}</span></span>
+          )}
         </div>
       </div>
 
       {/* Real-time Threat Card Strip */}
       <div className="pt-3 border-t border-white/5">
-        <div className="flex items-center justify-between text-xs font-mono text-slate-400 mb-2">
+        <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-mono text-slate-400 mb-2">
           <span className="flex items-center gap-1.5 text-slate-300 font-semibold uppercase text-[11px]">
             <Zap className="w-3.5 h-3.5 text-amber-400" />
             Live Incursion Feed ({activeThreatMarkers.length} Active Nodes)
           </span>
-          <span className="text-[11px] text-slate-500">Click any threat node for ground recon</span>
+          <span className="text-[11px] text-amber-300/90" id="realtime-map-google-billing-hint">
+            Deep Seek uses Google Maps Platform (requires paid Google Cloud / Google Maps subscription &amp; BYOK key in Settings)
+          </span>
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">

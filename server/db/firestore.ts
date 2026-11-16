@@ -105,7 +105,7 @@ export class FirestoreSyncService {
   public async syncFromFirestore(dbState: DbSchema, onSynced?: () => void): Promise<boolean> {
     if (!this.db || this.quotaExceeded) return false;
     const collectionsList = [
-      'users', 'hosts', 'rules', 'alerts', 'threats', 'apiKeys', 'auditLogs', 'liveActivities', 'threatIntel', 'mlModels', 'quarantine', 'emailLogs', 'workbookProgress', 'certificates'
+      'users', 'hosts', 'rules', 'alerts', 'threats', 'apiKeys', 'auditLogs', 'liveActivities', 'threatIntel', 'mlModels', 'quarantine', 'emailLogs', 'workbookProgress', 'certificates', 'payments'
     ];
     let updatedAny = false;
 
@@ -137,6 +137,28 @@ export class FirestoreSyncService {
       }
     }
 
+    if (!this.quotaExceeded) {
+      try {
+        const billingSnap = await getDocs(collection(this.db, 'billingSettings'));
+        let globalSetting: any = null;
+        billingSnap.forEach((d) => {
+          if (d.id === 'global') globalSetting = d.data();
+        });
+        if (globalSetting) {
+          const { id: _ignored, ...rest } = globalSetting;
+          dbState.billingConfig = { ...(dbState.billingConfig || DEFAULT_DB.billingConfig!), ...rest };
+          updatedAny = true;
+        } else if (dbState.billingConfig) {
+          await setDoc(
+            doc(this.db, 'billingSettings', 'global'),
+            sanitizeForFirestore({ id: 'global', ...dbState.billingConfig })
+          );
+        }
+      } catch (err) {
+        this.handleError(err, 'syncing billingSettings');
+      }
+    }
+
     if (updatedAny && onSynced) {
       onSynced();
     }
@@ -160,7 +182,7 @@ export class FirestoreSyncService {
     this.isSyncing = true;
     try {
       const collectionsList = [
-        'users', 'hosts', 'rules', 'alerts', 'threats', 'apiKeys', 'auditLogs', 'liveActivities', 'threatIntel', 'mlModels', 'quarantine', 'emailLogs', 'workbookProgress', 'certificates'
+        'users', 'hosts', 'rules', 'alerts', 'threats', 'apiKeys', 'auditLogs', 'liveActivities', 'threatIntel', 'mlModels', 'quarantine', 'emailLogs', 'workbookProgress', 'certificates', 'payments'
       ];
       for (const colName of collectionsList) {
         if (this.quotaExceeded) break;
@@ -174,6 +196,13 @@ export class FirestoreSyncService {
             await setDoc(doc(this.db!, colName, docId), cleanDoc);
           }
         }
+      }
+
+      if (!this.quotaExceeded && dbState.billingConfig) {
+        await setDoc(
+          doc(this.db!, 'billingSettings', 'global'),
+          sanitizeForFirestore({ id: 'global', ...dbState.billingConfig })
+        );
       }
     } catch (error) {
       this.handleError(error, 'executing Firestore sync');

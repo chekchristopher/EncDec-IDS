@@ -8,16 +8,20 @@ import {
   Lock, Unlock, ShieldAlert, Key, UserCheck, 
   Ban, RefreshCw, Trash2, Database, Radio,
   Search, Award, CheckCircle2, AlertCircle, ExternalLink,
-  QrCode, FileCheck, Copy, Check
+  QrCode, FileCheck, Copy, Check, CreditCard, Clock, Power,
+  Mail, GraduationCap
 } from 'lucide-react';
 import { apiRequest } from '../api.js';
+import { BillingConfig, PaymentRecord } from '../types.js';
+import { NOWPAYMENTS_PAYMENT_URL, SUBSCRIPTION_PRICE_USD, SUBSCRIPTION_CYCLE_MONTHS } from '../utils/subscription.js';
 
 interface AdminPortalProps {
   adminPasskeyPassed: boolean;
   onPasskeySuccess: () => void;
+  onBillingConfigUpdated?: (cfg: BillingConfig) => void;
 }
 
-export default function AdminPortal({ adminPasskeyPassed, onPasskeySuccess }: AdminPortalProps) {
+export default function AdminPortal({ adminPasskeyPassed, onPasskeySuccess, onBillingConfigUpdated }: AdminPortalProps) {
   const [passkeyInput, setPasskeyInput] = useState('');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   
@@ -39,6 +43,16 @@ export default function AdminPortal({ adminPasskeyPassed, onPasskeySuccess }: Ad
   ]);
   const [copiedResultHash, setCopiedResultHash] = useState(false);
   const [registeredCertificates, setRegisteredCertificates] = useState<any[]>([]);
+
+  // Billing & Subscription Governance States
+  const [billingConfig, setBillingConfig] = useState<BillingConfig | null>(null);
+  const [payments, setPayments] = useState<PaymentRecord[]>([]);
+  const [billingBusy, setBillingBusy] = useState(false);
+  const [billingNotice, setBillingNotice] = useState<string | null>(null);
+  const [freeDurationValue, setFreeDurationValue] = useState<number>(24);
+  const [freeDurationUnit, setFreeDurationUnit] = useState<'minutes' | 'hours' | 'days' | 'months'>('hours');
+  const [notifyBusy, setNotifyBusy] = useState(false);
+  const [notifyMessage, setNotifyMessage] = useState<string | null>(null);
 
   useEffect(() => {
     if (adminPasskeyPassed) {
@@ -90,6 +104,12 @@ export default function AdminPortal({ adminPasskeyPassed, onPasskeySuccess }: Ad
       setUsers(data.users);
       setSocketsCount(data.activeSocketsCount);
       setDbSize(data.dbFileSize);
+      if (data.billingConfig) {
+        setBillingConfig(data.billingConfig);
+      }
+      if (Array.isArray(data.payments)) {
+        setPayments(data.payments);
+      }
       if (certsRes && certsRes.certificates) {
         setRegisteredCertificates(certsRes.certificates);
       }
@@ -150,6 +170,148 @@ export default function AdminPortal({ adminPasskeyPassed, onPasskeySuccess }: Ad
       setErrorMsg(err.message);
     }
   };
+
+  // Send live in-app + email notification to uncertified operators
+  const handleNotifyUncertifiedUsers = async (userId?: string) => {
+    setNotifyBusy(true);
+    setNotifyMessage(null);
+    setErrorMsg(null);
+    try {
+      const res = await apiRequest(
+        '/api/admin/users/notify-uncertified',
+        'POST',
+        userId ? { userId } : {},
+        { 'x-secret-passkey': 'VIGIL_ADMIN_77' }
+      );
+      setNotifyMessage(res?.message || 'Uncertified operators notified to complete the EncDec Workbook.');
+    } catch (err: any) {
+      setErrorMsg(err?.message || 'Failed to notify uncertified operators.');
+    } finally {
+      setNotifyBusy(false);
+    }
+  };
+
+  // Toggle global subscription paywall ON / OFF
+  const handleTogglePaywall = async () => {
+    const nextRequired = !(billingConfig?.subscriptionRequired ?? true);
+    setBillingBusy(true);
+    setBillingNotice(null);
+    setErrorMsg(null);
+    try {
+      const res = await apiRequest('/api/admin/billing/toggle-paywall', 'POST', {
+        subscriptionRequired: nextRequired,
+      }, {
+        'x-secret-passkey': 'VIGIL_ADMIN_77'
+      });
+      if (res?.billingConfig) {
+        setBillingConfig(res.billingConfig);
+        onBillingConfigUpdated?.(res.billingConfig);
+      }
+      setBillingNotice(
+        nextRequired
+          ? 'Subscription paywall ENABLED ($500 / 3 months required for non-admin users).'
+          : 'Subscription paywall DISABLED (all users can access the platform without paying).'
+      );
+      await loadAdminDashboard();
+    } catch (err: any) {
+      setErrorMsg(err.message);
+    } finally {
+      setBillingBusy(false);
+    }
+  };
+
+  // Activate or end global free access for all users for a chosen duration
+  const handleFreeAccess = async (enabled: boolean, customVal?: number, customUnit?: 'minutes' | 'hours' | 'days' | 'months', customLabel?: string) => {
+    setBillingBusy(true);
+    setBillingNotice(null);
+    setErrorMsg(null);
+    try {
+      const res = await apiRequest('/api/admin/billing/free-access', 'POST', {
+        enabled,
+        durationValue: customVal ?? freeDurationValue,
+        durationUnit: customUnit ?? freeDurationUnit,
+        durationLabel: customLabel,
+      }, {
+        'x-secret-passkey': 'VIGIL_ADMIN_77'
+      });
+      if (res?.billingConfig) {
+        setBillingConfig(res.billingConfig);
+        onBillingConfigUpdated?.(res.billingConfig);
+      }
+      setBillingNotice(
+        enabled
+          ? `Global free access ACTIVATED for all users (${customLabel || `${customVal ?? freeDurationValue} ${customUnit ?? freeDurationUnit}`}).`
+          : 'Global free access window ended. Standard subscription rules apply.'
+      );
+      await loadAdminDashboard();
+    } catch (err: any) {
+      setErrorMsg(err.message);
+    } finally {
+      setBillingBusy(false);
+    }
+  };
+
+  // Grant 3-month subscription to a specific user
+  const handleGrantSubscription = async (userId: string, months = 3) => {
+    setBillingBusy(true);
+    setBillingNotice(null);
+    setErrorMsg(null);
+    try {
+      await apiRequest(`/api/admin/users/${userId}/subscription/grant`, 'POST', { months }, {
+        'x-secret-passkey': 'VIGIL_ADMIN_77'
+      });
+      setBillingNotice(`Granted ${months}-month subscription access.`);
+      await loadAdminDashboard();
+    } catch (err: any) {
+      setErrorMsg(err.message);
+    } finally {
+      setBillingBusy(false);
+    }
+  };
+
+  // Revoke subscription from a specific user
+  const handleRevokeSubscription = async (userId: string) => {
+    setBillingBusy(true);
+    setBillingNotice(null);
+    setErrorMsg(null);
+    try {
+      await apiRequest(`/api/admin/users/${userId}/subscription/revoke`, 'POST', {}, {
+        'x-secret-passkey': 'VIGIL_ADMIN_77'
+      });
+      setBillingNotice('User subscription revoked and dashboard access locked.');
+      await loadAdminDashboard();
+    } catch (err: any) {
+      setErrorMsg(err.message);
+    } finally {
+      setBillingBusy(false);
+    }
+  };
+
+  // Approve or Reject pending NOWPayments submission
+  const handlePaymentDecision = async (paymentId: string, approve: boolean) => {
+    setBillingBusy(true);
+    setBillingNotice(null);
+    setErrorMsg(null);
+    try {
+      await apiRequest(`/api/admin/payments/${paymentId}/${approve ? 'approve' : 'reject'}`, 'POST', {}, {
+        'x-secret-passkey': 'VIGIL_ADMIN_77'
+      });
+      setBillingNotice(approve ? 'NOWPayments submission approved & 3-month subscription activated.' : 'NOWPayments submission rejected.');
+      await loadAdminDashboard();
+    } catch (err: any) {
+      setErrorMsg(err.message);
+    } finally {
+      setBillingBusy(false);
+    }
+  };
+
+  const pendingPayments = payments.filter((p) => p.status === 'pending_verification');
+  const isPaywallEnabled = billingConfig?.subscriptionRequired ?? true;
+  const isFreeAccessLive = Boolean(
+    billingConfig?.freeAccessActive &&
+      billingConfig?.freeAccessExpiresAt &&
+      Date.parse(billingConfig.freeAccessExpiresAt) > Date.now()
+  );
 
   return (
     <div className="space-y-6 font-mono text-xs animate-fadeIn" id="admin-portal-container">
@@ -233,7 +395,7 @@ export default function AdminPortal({ adminPasskeyPassed, onPasskeySuccess }: Ad
               </p>
             </div>
 
-            <div className="flex gap-4">
+            <div className="flex flex-wrap gap-3">
               <div className="p-3 bg-slate-950 rounded border border-white/5 text-center min-w-32">
                 <span className="text-[10px] text-slate-500 uppercase block">Active sockets</span>
                 <span className="text-lg font-bold text-white flex items-center justify-center gap-1.5 mt-1">
@@ -245,7 +407,256 @@ export default function AdminPortal({ adminPasskeyPassed, onPasskeySuccess }: Ad
                 <span className="text-[10px] text-slate-500 uppercase block">Cache Footprint</span>
                 <span className="text-lg font-bold text-cyan-400 mt-1 block">{(dbSize / 1024).toFixed(2)} KB</span>
               </div>
+              <button
+                type="button"
+                disabled={billingBusy}
+                onClick={handleTogglePaywall}
+                className={`p-3 rounded border text-center min-w-44 cursor-pointer transition-colors ${
+                  isPaywallEnabled
+                    ? 'bg-amber-950/30 border-amber-500/40 hover:bg-amber-950/50 text-amber-300'
+                    : 'bg-emerald-950/30 border-emerald-500/40 hover:bg-emerald-950/50 text-emerald-300'
+                }`}
+                title="Click to turn EncDec IDS subscription ON or OFF for all users"
+                id="admin-portal-telemetry-sub-toggle"
+              >
+                <span className="text-[10px] text-slate-400 uppercase block">EncDec Subscription</span>
+                <span className="text-sm font-bold flex items-center justify-center gap-1.5 mt-1">
+                  <Power className="w-3.5 h-3.5" />
+                  {isPaywallEnabled ? 'ON (Licensed Only)' : 'OFF (Free For All)'}
+                </span>
+              </button>
             </div>
+          </div>
+
+          {/* ========================================================================= */}
+          {/* NOWPAYMENTS SUBSCRIPTION PAYWALL & FREE ACCESS CONTROL CENTER             */}
+          {/* ========================================================================= */}
+          <div className="bg-slate-900 border border-amber-500/30 rounded-xl p-6 space-y-5 shadow-xl" id="admin-billing-governance">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-white/10 pb-4">
+              <div className="space-y-1">
+                <h3 className="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2">
+                  <CreditCard className="w-4 h-4 text-amber-400" />
+                  <span>NOWPayments Subscription & Paywall Governance</span>
+                  <span
+                    className={`px-2 py-0.5 rounded text-[9px] font-bold uppercase border ${
+                      isPaywallEnabled
+                        ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
+                        : 'bg-amber-500/10 text-amber-300 border-amber-500/30'
+                    }`}
+                  >
+                    {isPaywallEnabled ? 'Paywall ON ($500 / 3 Mo)' : 'Paywall OFF (Open Access)'}
+                  </span>
+                </h3>
+                <p className="text-[11px] text-slate-400">
+                  Control subscription enforcement, timed free access for all users, and NOWPayments verification approvals.
+                </p>
+              </div>
+
+              <a
+                href={billingConfig?.nowPaymentsUrl || NOWPAYMENTS_PAYMENT_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="px-3 py-1.5 rounded bg-slate-950 hover:bg-slate-800 border border-cyan-500/30 text-cyan-300 text-[11px] font-bold flex items-center gap-1.5 shrink-0"
+              >
+                <span>NOWPayments Link</span>
+                <ExternalLink className="w-3 h-3" />
+              </a>
+            </div>
+
+            {billingNotice && (
+              <div className="p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-xs flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 shrink-0" />
+                <span>{billingNotice}</span>
+              </div>
+            )}
+
+            {errorMsg && (
+              <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/30 text-red-300 text-xs flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0" />
+                <span>{errorMsg}</span>
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+              {/* Master Paywall ON / OFF Switch */}
+              <div className="p-4 rounded-xl bg-slate-950 border border-white/10 space-y-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <span className="text-[10px] text-slate-500 uppercase font-bold block">
+                      Master Payment Switch
+                    </span>
+                    <h4 className="text-sm font-bold text-white mt-0.5">
+                      Subscription Enforcement ({isPaywallEnabled ? 'Enabled' : 'Disabled'})
+                    </h4>
+                    <p className="text-[11px] text-slate-400 mt-1 leading-relaxed">
+                      When ON, non-admin users must hold an active ${SUBSCRIPTION_PRICE_USD} / {SUBSCRIPTION_CYCLE_MONTHS}-month subscription unless free access is active. Turn OFF to let everyone use the platform without subscribing.
+                    </p>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  disabled={billingBusy}
+                  onClick={handleTogglePaywall}
+                  className={`w-full py-2.5 px-4 rounded-lg font-bold uppercase tracking-wider text-xs flex items-center justify-center gap-2 border cursor-pointer transition-colors ${
+                    isPaywallEnabled
+                      ? 'bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border-amber-500/40'
+                      : 'bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border-emerald-500/40'
+                  }`}
+                  id="admin-toggle-paywall-btn"
+                >
+                  <Power className="w-4 h-4" />
+                  <span>
+                    {isPaywallEnabled
+                      ? 'Turn Subscription Payment OFF'
+                      : 'Turn Subscription Payment ON'}
+                  </span>
+                </button>
+              </div>
+
+              {/* Global Timed Free Access for All Users */}
+              <div className="p-4 rounded-xl bg-slate-950 border border-white/10 space-y-4">
+                <div className="flex items-start justify-between gap-2">
+                  <div>
+                    <span className="text-[10px] text-slate-500 uppercase font-bold block">
+                      Timed Free Access Window
+                    </span>
+                    <h4 className="text-sm font-bold text-white mt-0.5 flex items-center gap-1.5">
+                      <Clock className="w-4 h-4 text-cyan-400" />
+                      <span>Let All Users Use Platform For Free</span>
+                    </h4>
+                  </div>
+                  {isFreeAccessLive && (
+                    <span className="px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 text-[9px] font-bold uppercase">
+                      LIVE
+                    </span>
+                  )}
+                </div>
+
+                {isFreeAccessLive && billingConfig?.freeAccessExpiresAt && (
+                  <div className="p-3 rounded-lg bg-emerald-950/40 border border-emerald-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <div className="text-[11px] text-emerald-200">
+                      <span className="font-bold block">
+                        Free Access Active ({billingConfig.freeAccessDurationLabel || 'Custom Window'})
+                      </span>
+                      <span className="text-emerald-400/80 text-[10px]">
+                        Expires: {new Date(billingConfig.freeAccessExpiresAt).toLocaleString()}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      disabled={billingBusy}
+                      onClick={() => handleFreeAccess(false)}
+                      className="px-3 py-1.5 rounded bg-red-500/15 hover:bg-red-500/25 border border-red-500/30 text-red-300 text-[10px] font-bold uppercase cursor-pointer shrink-0"
+                      id="admin-end-free-access-btn"
+                    >
+                      End Free Access
+                    </button>
+                  </div>
+                )}
+
+                {/* Preset Quick Buttons */}
+                <div className="flex flex-wrap gap-1.5">
+                  {[
+                    { label: '1 Hour', val: 1, unit: 'hours' as const },
+                    { label: '24 Hours', val: 24, unit: 'hours' as const },
+                    { label: '7 Days', val: 7, unit: 'days' as const },
+                    { label: '30 Days', val: 30, unit: 'days' as const },
+                    { label: '3 Months', val: 3, unit: 'months' as const },
+                  ].map((preset) => (
+                    <button
+                      key={preset.label}
+                      type="button"
+                      disabled={billingBusy}
+                      onClick={() => handleFreeAccess(true, preset.val, preset.unit, preset.label)}
+                      className="px-2.5 py-1 rounded bg-slate-900 hover:bg-cyan-500/20 border border-white/10 hover:border-cyan-500/40 text-slate-300 hover:text-cyan-300 text-[10px] font-bold cursor-pointer transition-colors"
+                    >
+                      {preset.label}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Custom Duration Selector */}
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <input
+                    type="number"
+                    min={1}
+                    max={8760}
+                    value={freeDurationValue}
+                    onChange={(e) => setFreeDurationValue(Math.max(1, Number(e.target.value) || 1))}
+                    className="w-full sm:w-24 bg-slate-900 border border-white/15 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-400"
+                    id="admin-free-duration-input"
+                  />
+                  <select
+                    value={freeDurationUnit}
+                    onChange={(e) => setFreeDurationUnit(e.target.value as any)}
+                    className="bg-slate-900 border border-white/15 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-400"
+                    id="admin-free-unit-select"
+                  >
+                    <option value="minutes">Minutes</option>
+                    <option value="hours">Hours</option>
+                    <option value="days">Days</option>
+                    <option value="months">Months</option>
+                  </select>
+                  <button
+                    type="button"
+                    disabled={billingBusy}
+                    onClick={() => handleFreeAccess(true)}
+                    className="flex-1 py-2 px-4 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold uppercase text-xs cursor-pointer transition-colors"
+                    id="admin-activate-free-access-btn"
+                  >
+                    Activate Free Access
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Pending NOWPayments Verification Queue */}
+            {pendingPayments.length > 0 && (
+              <div className="p-4 rounded-xl bg-slate-950 border border-amber-500/30 space-y-3">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-bold text-amber-300 uppercase tracking-wider">
+                    Pending NOWPayments Submissions ({pendingPayments.length})
+                  </h4>
+                </div>
+                <div className="space-y-2">
+                  {pendingPayments.map((p) => (
+                    <div
+                      key={p.id}
+                      className="p-3 rounded-lg bg-slate-900 border border-white/10 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                    >
+                      <div className="space-y-0.5 min-w-0">
+                        <p className="text-xs font-bold text-white truncate">
+                          {p.userName} ({p.userEmail})
+                        </p>
+                        <p className="text-[11px] text-cyan-300 truncate">
+                          Ref: <span className="select-all">{p.paymentReference || p.id}</span> • ${p.amountUsd} / {p.billingCycleMonths} Mo
+                        </p>
+                        {p.notes && <p className="text-[10px] text-slate-400 truncate">{p.notes}</p>}
+                      </div>
+                      <div className="flex gap-2 shrink-0">
+                        <button
+                          type="button"
+                          disabled={billingBusy}
+                          onClick={() => handlePaymentDecision(p.id, true)}
+                          className="px-3 py-1.5 rounded bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold uppercase text-[10px] cursor-pointer"
+                        >
+                          Approve & Grant 3 Mo
+                        </button>
+                        <button
+                          type="button"
+                          disabled={billingBusy}
+                          onClick={() => handlePaymentDecision(p.id, false)}
+                          className="px-3 py-1.5 rounded bg-red-500/15 hover:bg-red-500/25 border border-red-500/30 text-red-300 font-bold uppercase text-[10px] cursor-pointer"
+                        >
+                          Reject
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* ========================================================================= */}
@@ -504,16 +915,47 @@ export default function AdminPortal({ adminPasskeyPassed, onPasskeySuccess }: Ad
                 <Database className="w-4 h-4 text-red-500" />
                 Operator Fleet registry nodes
               </h3>
-              <button
-                onClick={loadAdminDashboard}
-                disabled={loading}
-                className="bg-slate-950 border border-white/10 hover:border-cyan-500 hover:text-cyan-400 text-slate-400 px-3 py-1.5 rounded flex items-center gap-1 transition-all cursor-pointer w-full sm:w-auto justify-center"
-                id="refresh-admin-btn"
-              >
-                <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
-                <span>Reload database</span>
-              </button>
+              <div className="flex flex-wrap items-center gap-2">
+                {(() => {
+                  const uncertifiedCount = users.filter(
+                    (u) => u.status !== 'suspended' && !u.certificationStatus?.isCertified
+                  ).length;
+                  return (
+                    <button
+                      type="button"
+                      onClick={() => handleNotifyUncertifiedUsers()}
+                      disabled={notifyBusy || uncertifiedCount === 0}
+                      className="bg-amber-500/15 border border-amber-500/40 hover:bg-amber-500/25 disabled:opacity-50 text-amber-300 px-3 py-1.5 rounded flex items-center gap-1.5 text-xs font-mono font-bold transition-all cursor-pointer whitespace-nowrap shrink-0"
+                      id="admin-notify-uncertified-btn"
+                    >
+                      <Mail className="w-3.5 h-3.5" />
+                      <span>
+                        {notifyBusy ? 'Notifying...' : `Notify Uncertified (${uncertifiedCount})`}
+                      </span>
+                    </button>
+                  );
+                })()}
+                <button
+                  onClick={loadAdminDashboard}
+                  disabled={loading}
+                  className="bg-slate-950 border border-white/10 hover:border-cyan-500 hover:text-cyan-400 text-slate-400 px-3 py-1.5 rounded flex items-center gap-1 transition-all cursor-pointer w-full sm:w-auto justify-center"
+                  id="refresh-admin-btn"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+                  <span>Reload database</span>
+                </button>
+              </div>
             </div>
+
+            {notifyMessage && (
+              <div
+                className="mb-4 px-3 py-2 rounded-lg bg-emerald-950/50 border border-emerald-500/35 text-emerald-300 font-mono text-xs flex items-center gap-2"
+                id="admin-notify-uncertified-feedback"
+              >
+                <GraduationCap className="w-4 h-4 shrink-0" />
+                <span>{notifyMessage}</span>
+              </div>
+            )}
 
             {/* Desktop Registry Table */}
             <div className="overflow-x-auto hidden md:block">
@@ -523,115 +965,232 @@ export default function AdminPortal({ adminPasskeyPassed, onPasskeySuccess }: Ad
                     <th className="py-2 px-3">Operator ID (Email)</th>
                     <th className="py-2 px-3">Name</th>
                     <th className="py-2 px-3">Clearance Role</th>
+                    <th className="py-2 px-3">Certification</th>
                     <th className="py-2 px-3">MFA Status</th>
-                    <th className="py-2 px-3 text-right">Gate Actions</th>
+                    <th className="py-2 px-3">Subscription ($500 / 3 Mo)</th>
+                    <th className="py-2 px-3 text-right">Gate & Billing Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-white/5 text-slate-300">
-                  {users.map((user) => (
-                    <tr key={user.id} className="hover:bg-white/[0.01]">
-                      <td className="py-3 px-3 font-semibold text-white">{user.email}</td>
-                      <td className="py-3 px-3">{user.name}</td>
-                      <td className="py-3 px-3">
-                        <span className={`px-2 py-0.5 rounded text-[9px] font-bold uppercase ${
-                          user.role === 'admin' ? 'bg-red-950 text-red-400 border border-red-500/20' : 'bg-slate-950 text-cyan-400 border border-white/10'
-                        }`}>
-                          {user.role}
-                        </span>
-                      </td>
-                      <td className="py-3 px-3">
-                        <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${
-                          user.mfaEnabled ? 'bg-emerald-950 text-emerald-400' : 'bg-slate-800 text-slate-500'
-                        }`}>
-                          {user.mfaEnabled ? 'ENABLED' : 'OFFLINE'}
-                        </span>
-                      </td>
-                      <td className="py-3 px-3 text-right">
-                        <div className="flex gap-2 justify-end">
-                          <button
-                            onClick={() => handleAlterRole(user.id, user.role)}
-                            className="bg-slate-950 border border-white/10 text-slate-300 hover:border-cyan-500 hover:text-cyan-400 px-2.5 py-1 rounded text-[10px] uppercase font-bold cursor-pointer"
-                            id={`alter-role-btn-${user.id}`}
-                          >
-                            Toggle Role
-                          </button>
-                          <button
-                            onClick={() => handleToggleSuspension(user.id, user.status)}
-                            className={`px-2.5 py-1 rounded text-[10px] uppercase font-bold border transition-colors cursor-pointer ${
-                              user.status === 'active'
-                                ? 'bg-red-500/10 border-red-500/30 text-red-400 hover:bg-red-500/20'
-                                : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20'
-                            }`}
-                            id={`suspend-user-btn-${user.id}`}
-                          >
-                            {user.status === 'active' ? 'Suspend' : 'Unsuspend'}
-                          </button>
-                          <button
-                            onClick={() => handleDeleteOperator(user.id)}
-                            className="bg-slate-950 border border-white/10 hover:border-red-500 text-slate-400 hover:text-red-400 p-1.5 rounded transition-all cursor-pointer"
-                            id={`delete-user-btn-${user.id}`}
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
+                  {users.map((user) => {
+                    const isSubActive =
+                      user.role === 'admin' ||
+                      (user.subscriptionStatus === 'active' &&
+                        user.subscriptionExpiresAt &&
+                        Date.parse(user.subscriptionExpiresAt) > Date.now());
+                    const certInfo = user.certificationStatus;
+                    const isUserCertified = Boolean(certInfo?.isCertified);
+                    return (
+                      <tr key={user.id} className="hover:bg-white/[0.01]">
+                        <td className="py-3 px-3 font-semibold text-white">{user.email}</td>
+                        <td className="py-3 px-3">{user.name}</td>
+                        <td className="py-3 px-3">
+                          <span className={`px-2 py-0.5 rounded text-[9px] font-bold uppercase ${
+                            user.role === 'admin' ? 'bg-red-950 text-red-400 border border-red-500/20' : 'bg-slate-950 text-cyan-400 border border-white/10'
+                          }`}>
+                            {user.role}
+                          </span>
+                        </td>
+                        <td className="py-3 px-3 tabular-nums">
+                          {isUserCertified ? (
+                            <span className="text-emerald-400 text-[11px] font-semibold">
+                              CE-SOC Certified
+                            </span>
+                          ) : (
+                            <div className="flex items-center gap-2">
+                              <span className="text-amber-300 text-[11px]">
+                                Uncertified · {certInfo?.chaptersCompleted ?? 0}/{certInfo?.totalChapters ?? 10}
+                              </span>
+                              <button
+                                type="button"
+                                disabled={notifyBusy}
+                                onClick={() => handleNotifyUncertifiedUsers(user.id)}
+                                className="text-[10px] text-cyan-400 hover:text-cyan-300 underline cursor-pointer"
+                                title="Send workbook certification reminder"
+                                id={`remind-cert-btn-${user.id}`}
+                              >
+                                Remind
+                              </button>
+                            </div>
+                          )}
+                        </td>
+                        <td className="py-3 px-3">
+                          <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${
+                            user.mfaEnabled ? 'bg-emerald-950 text-emerald-400' : 'bg-slate-800 text-slate-500'
+                          }`}>
+                            {user.mfaEnabled ? 'ENABLED' : 'OFFLINE'}
+                          </span>
+                        </td>
+                        <td className="py-3 px-3">
+                          <div className="space-y-0.5">
+                            <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold uppercase inline-block ${
+                              user.role === 'admin'
+                                ? 'bg-cyan-500/15 text-cyan-300 border border-cyan-500/30'
+                                : isSubActive
+                                ? 'bg-emerald-950 text-emerald-400 border border-emerald-500/30'
+                                : user.subscriptionStatus === 'revoked'
+                                ? 'bg-red-950 text-red-400 border border-red-500/30'
+                                : 'bg-amber-950/60 text-amber-400 border border-amber-500/30'
+                            }`}>
+                              {user.role === 'admin' ? 'ADMIN OVERRIDE' : isSubActive ? 'ACTIVE' : (user.subscriptionStatus || 'INACTIVE')}
+                            </span>
+                            {user.role !== 'admin' && user.subscriptionExpiresAt && isSubActive && (
+                              <span className="block text-[9px] text-slate-400">
+                                Until {new Date(user.subscriptionExpiresAt).toLocaleDateString()}
+                              </span>
+                            )}
+                          </div>
+                        </td>
+                        <td className="py-3 px-3 text-right">
+                          <div className="flex flex-wrap gap-1.5 justify-end">
+                            {user.role !== 'admin' && (
+                              <>
+                                <button
+                                  type="button"
+                                  disabled={billingBusy}
+                                  onClick={() => handleGrantSubscription(user.id, 3)}
+                                  className="bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/25 px-2 py-1 rounded text-[10px] uppercase font-bold cursor-pointer"
+                                  id={`grant-sub-btn-${user.id}`}
+                                >
+                                  Grant 3 Mo
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={billingBusy}
+                                  onClick={() => handleRevokeSubscription(user.id)}
+                                  className="bg-amber-500/15 border border-amber-500/30 text-amber-300 hover:bg-amber-500/25 px-2 py-1 rounded text-[10px] uppercase font-bold cursor-pointer"
+                                  id={`revoke-sub-btn-${user.id}`}
+                                >
+                                  Revoke Sub
+                                </button>
+                              </>
+                            )}
+                            <button
+                              onClick={() => handleAlterRole(user.id, user.role)}
+                              className="bg-slate-950 border border-white/10 text-slate-300 hover:border-cyan-500 hover:text-cyan-400 px-2.5 py-1 rounded text-[10px] uppercase font-bold cursor-pointer"
+                              id={`alter-role-btn-${user.id}`}
+                            >
+                              Toggle Role
+                            </button>
+                            <button
+                              onClick={() => handleToggleSuspension(user.id, user.status)}
+                              className={`px-2.5 py-1 rounded text-[10px] uppercase font-bold border transition-colors cursor-pointer ${
+                                user.status === 'active'
+                                  ? 'bg-red-500/10 border-red-500/30 text-red-400 hover:bg-red-500/20'
+                                  : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20'
+                              }`}
+                              id={`suspend-user-btn-${user.id}`}
+                            >
+                              {user.status === 'active' ? 'Suspend' : 'Unsuspend'}
+                            </button>
+                            <button
+                              onClick={() => handleDeleteOperator(user.id)}
+                              className="bg-slate-950 border border-white/10 hover:border-red-500 text-slate-400 hover:text-red-400 p-1.5 rounded transition-all cursor-pointer"
+                              id={`delete-user-btn-${user.id}`}
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
 
             {/* Mobile Registry Cards */}
             <div className="grid grid-cols-1 gap-4 md:hidden">
-              {users.map((user) => (
-                <div key={user.id} className="p-4 bg-slate-950 rounded-lg border border-white/5 space-y-3" id={`mobile-operator-${user.id}`}>
-                  <div className="flex justify-between items-start gap-2">
-                    <div className="space-y-1 min-w-0">
-                      <p className="font-semibold text-white text-xs truncate max-w-[150px]">{user.name}</p>
-                      <p className="text-[10px] text-slate-400 font-mono truncate max-w-[150px]">{user.email}</p>
+              {users.map((user) => {
+                const isSubActive =
+                  user.role === 'admin' ||
+                  (user.subscriptionStatus === 'active' &&
+                    user.subscriptionExpiresAt &&
+                    Date.parse(user.subscriptionExpiresAt) > Date.now());
+                return (
+                  <div key={user.id} className="p-4 bg-slate-950 rounded-lg border border-white/5 space-y-3" id={`mobile-operator-${user.id}`}>
+                    <div className="flex justify-between items-start gap-2">
+                      <div className="space-y-1 min-w-0">
+                        <p className="font-semibold text-white text-xs truncate max-w-[150px]">{user.name}</p>
+                        <p className="text-[10px] text-slate-400 font-mono truncate max-w-[150px]">{user.email}</p>
+                      </div>
+                      <span className={`px-2 py-0.5 rounded text-[9px] font-bold uppercase border shrink-0 ${
+                        user.role === 'admin' ? 'bg-red-950 text-red-400 border border-red-500/20' : 'bg-slate-950 text-cyan-400 border border-white/10'
+                      }`}>
+                        {user.role}
+                      </span>
                     </div>
-                    <span className={`px-2 py-0.5 rounded text-[9px] font-bold uppercase border shrink-0 ${
-                      user.role === 'admin' ? 'bg-red-950 text-red-400 border border-red-500/20' : 'bg-slate-950 text-cyan-400 border border-white/10'
-                    }`}>
-                      {user.role}
-                    </span>
-                  </div>
 
-                  <div className="flex justify-between items-center text-[10px] font-mono border-t border-white/5 pt-2">
-                    <span className="text-slate-500">MFA Status:</span>
-                    <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${
-                      user.mfaEnabled ? 'bg-emerald-950 text-emerald-400' : 'bg-slate-800 text-slate-500'
-                    }`}>
-                      {user.mfaEnabled ? 'ENABLED' : 'OFFLINE'}
-                    </span>
-                  </div>
+                    <div className="flex justify-between items-center text-[10px] font-mono border-t border-white/5 pt-2">
+                      <span className="text-slate-500">MFA Status:</span>
+                      <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${
+                        user.mfaEnabled ? 'bg-emerald-950 text-emerald-400' : 'bg-slate-800 text-slate-500'
+                      }`}>
+                        {user.mfaEnabled ? 'ENABLED' : 'OFFLINE'}
+                      </span>
+                    </div>
 
-                  <div className="border-t border-white/5 pt-2 flex flex-wrap gap-2 justify-end">
-                    <button
-                      onClick={() => handleAlterRole(user.id, user.role)}
-                      className="flex-1 bg-slate-905 border border-white/10 text-slate-300 hover:border-cyan-500 hover:text-cyan-400 px-2.5 py-1.5 rounded text-[10px] uppercase font-bold cursor-pointer"
-                    >
-                      Toggle Role
-                    </button>
-                    <button
-                      onClick={() => handleToggleSuspension(user.id, user.status)}
-                      className={`flex-1 px-2.5 py-1.5 rounded text-[10px] uppercase font-bold border transition-colors cursor-pointer ${
-                        user.status === 'active'
-                          ? 'bg-red-500/10 border-red-500/30 text-red-400 hover:bg-red-500/20'
-                          : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20'
-                      }`}
-                    >
-                      {user.status === 'active' ? 'Suspend' : 'Unsuspend'}
-                    </button>
-                    <button
-                      onClick={() => handleDeleteOperator(user.id)}
-                      className="bg-slate-905 border border-white/10 hover:border-red-500 text-slate-400 hover:text-red-400 p-1.5 rounded transition-all cursor-pointer"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
+                    <div className="flex justify-between items-center text-[10px] font-mono border-t border-white/5 pt-2">
+                      <span className="text-slate-500">Subscription:</span>
+                      <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold uppercase ${
+                        user.role === 'admin'
+                          ? 'bg-cyan-500/15 text-cyan-300'
+                          : isSubActive
+                          ? 'bg-emerald-950 text-emerald-400'
+                          : 'bg-amber-950 text-amber-400'
+                      }`}>
+                        {user.role === 'admin' ? 'ADMIN OVERRIDE' : isSubActive ? 'ACTIVE' : (user.subscriptionStatus || 'INACTIVE')}
+                      </span>
+                    </div>
+
+                    {user.role !== 'admin' && (
+                      <div className="flex gap-2 border-t border-white/5 pt-2">
+                        <button
+                          type="button"
+                          disabled={billingBusy}
+                          onClick={() => handleGrantSubscription(user.id, 3)}
+                          className="flex-1 bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/25 px-2.5 py-1.5 rounded text-[10px] uppercase font-bold cursor-pointer"
+                        >
+                          Grant 3 Mo
+                        </button>
+                        <button
+                          type="button"
+                          disabled={billingBusy}
+                          onClick={() => handleRevokeSubscription(user.id)}
+                          className="flex-1 bg-amber-500/15 border border-amber-500/30 text-amber-300 hover:bg-amber-500/25 px-2.5 py-1.5 rounded text-[10px] uppercase font-bold cursor-pointer"
+                        >
+                          Revoke Sub
+                        </button>
+                      </div>
+                    )}
+
+                    <div className="border-t border-white/5 pt-2 flex flex-wrap gap-2 justify-end">
+                      <button
+                        onClick={() => handleAlterRole(user.id, user.role)}
+                        className="flex-1 bg-slate-905 border border-white/10 text-slate-300 hover:border-cyan-500 hover:text-cyan-400 px-2.5 py-1.5 rounded text-[10px] uppercase font-bold cursor-pointer"
+                      >
+                        Toggle Role
+                      </button>
+                      <button
+                        onClick={() => handleToggleSuspension(user.id, user.status)}
+                        className={`flex-1 px-2.5 py-1.5 rounded text-[10px] uppercase font-bold border transition-colors cursor-pointer ${
+                          user.status === 'active'
+                            ? 'bg-red-500/10 border-red-500/30 text-red-400 hover:bg-red-500/20'
+                            : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20'
+                        }`}
+                      >
+                        {user.status === 'active' ? 'Suspend' : 'Unsuspend'}
+                      </button>
+                      <button
+                        onClick={() => handleDeleteOperator(user.id)}
+                        className="bg-slate-905 border border-white/10 hover:border-red-500 text-slate-400 hover:text-red-400 p-1.5 rounded transition-all cursor-pointer"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
 
           </div>

@@ -35,15 +35,23 @@ export const GMAIL_SCOPES = [
   'https://www.googleapis.com/auth/gmail.addons.current.message.readonly'
 ];
 
-const provider = new GoogleAuthProvider();
-// Add all requested Gmail scopes
-GMAIL_SCOPES.forEach((scope) => {
-  provider.addScope(scope);
-});
-provider.setCustomParameters({
-  prompt: 'consent',
-  access_type: 'offline'
-});
+const createGoogleProvider = (includeGmailScopes: boolean) => {
+  const gProvider = new GoogleAuthProvider();
+  if (includeGmailScopes) {
+    GMAIL_SCOPES.forEach((scope) => {
+      gProvider.addScope(scope);
+    });
+    gProvider.setCustomParameters({
+      prompt: 'consent',
+      access_type: 'offline'
+    });
+  } else {
+    gProvider.setCustomParameters({
+      prompt: 'select_account'
+    });
+  }
+  return gProvider;
+};
 
 // Flag to track sign-in in progress
 let isSigningIn = false;
@@ -90,25 +98,41 @@ export const initGoogleAuth = (
 };
 
 // Sign in with Google Popup
-export const signInWithGoogle = async (): Promise<{ user: User; accessToken: string }> => {
+export const signInWithGoogle = async (
+  options: { includeGmailScopes?: boolean } = {}
+): Promise<{ user: User; accessToken: string | null }> => {
+  const { includeGmailScopes = true } = options;
   try {
     isSigningIn = true;
-    const result = await signInWithPopup(auth, provider);
+    const authProvider = createGoogleProvider(includeGmailScopes);
+    const result = await signInWithPopup(auth, authProvider);
     const credential = GoogleAuthProvider.credentialFromResult(result);
-    if (!credential?.accessToken) {
+    if (includeGmailScopes && !credential?.accessToken) {
       throw new Error('Failed to obtain Google access token. Please grant the requested permissions.');
     }
 
-    cachedAccessToken = credential.accessToken;
+    cachedAccessToken = credential?.accessToken || null;
     cachedGoogleUser = result.user;
     notifyListeners();
 
     return { user: result.user, accessToken: cachedAccessToken };
   } catch (error: any) {
     if (error?.code === 'auth/popup-blocked' || error?.message?.includes('popup-blocked')) {
-      const friendlyErr = new Error('Popup blocked by browser or iframe sandbox. Please allow popups for this site, or open the app in a new window to authorize Gmail access.');
+      const friendlyErr = new Error('Popup blocked by browser or iframe sandbox. Please allow popups for this site, or open the app in a new tab.');
       (friendlyErr as any).code = 'auth/popup-blocked';
       console.warn('Google Sign-In popup was blocked:', error);
+      throw friendlyErr;
+    }
+    if (
+      error?.code === 'auth/popup-closed-by-user' ||
+      error?.code === 'auth/cancelled-popup-request' ||
+      error?.message?.includes('popup-closed-by-user')
+    ) {
+      const friendlyErr = new Error(
+        'Google Sign-In popup was closed before sign-in finished. Keep the Google popup open until it redirects back automatically, or open the app URL directly in a standalone browser tab if embedded preview policies close popups.'
+      );
+      (friendlyErr as any).code = error?.code || 'auth/popup-closed-by-user';
+      console.warn('Google Sign-In popup closed before completion:', error?.code);
       throw friendlyErr;
     }
     console.error('Google Sign-In failed:', error);

@@ -44,9 +44,22 @@ export const mfaToggleSchema = z.object({
   mfaEnabled: z.boolean(),
 });
 
+export const safeBoxToggleSchema = z.object({
+  enabled: z.boolean(),
+});
+
+export const safeBoxPasskeySchema = z.object({
+  passkey: z.string().min(1, 'Admin Safe Box passkey is required'),
+});
+
+export const safeBoxVerifySchema = z.object({
+  email: z.string().email('Invalid email address format').optional().or(z.literal('')),
+  passkey: z.string().min(1, 'Admin Safe Box passkey is required'),
+});
+
 export const hostRegisterSchema = z.object({
   name: z.string().min(2, 'Host name is required'),
-  os: z.enum(['linux', 'windows', 'darwin', 'other']),
+  os: z.enum(['linux', 'windows', 'macos', 'darwin', 'other']),
   ipAddress: z.string().min(3, 'Valid IP Address is required'),
   agentVersion: z.string().default('v4.1.2-agent'),
 });
@@ -116,4 +129,25 @@ export const mssqlConfigureSchema = z.object({
 
 export const mssqlQuerySchema = z.object({
   query: z.string().min(1, 'SQL query cannot be empty'),
+});
+
+export const verifyPaymentSubmissionSchema = z.object({
+  paymentReference: z.string().trim().min(4, 'Enter your NOWPayments Payment ID or transaction hash (min 4 characters).'),
+  notes: z.string().trim().max(300).optional(),
+});
+
+export const adminGrantSubscriptionSchema = z.object({
+  months: z.number().int().min(1).max(36).default(3),
+  notes: z.string().trim().max(300).optional(),
+});
+
+export const adminBillingToggleSchema = z.object({
+  subscriptionRequired: z.boolean(),
+});
+
+export const adminFreeAccessSchema = z.object({
+  enabled: z.boolean(),
+  durationValue: z.number().positive().max(8760).optional(),
+  durationUnit: z.enum(['minutes', 'hours', 'days', 'months']).optional(),
+  durationLabel: z.string().trim().max(60).optional(),
 });

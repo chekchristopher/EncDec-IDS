@@ -13,11 +13,16 @@ import {
   loginSchema, 
   signupSchema, 
   profileUpdateSchema, 
-  mfaToggleSchema, 
+  mfaToggleSchema,
+  safeBoxToggleSchema,
+  safeBoxPasskeySchema,
+  safeBoxVerifySchema,
   forgotPasswordSchema, 
   verifyResetCodeSchema,
   resetPasswordSchema 
 } from '../schemas/validation.js';
+import { validateSafeBoxPasskey } from '../../src/utils/safeBoxToken.js';
+import { evaluateSubscriptionAccess, DEFAULT_BILLING_CONFIG } from '../../src/utils/subscription.js';
 
 interface PasswordResetSession {
   email: string;
@@ -28,7 +33,7 @@ interface PasswordResetSession {
 
 const passwordResetSessions = new Map<string, PasswordResetSession>();
 
-function getJwtSecret(): string {
+export function getJwtSecret(): string {
   const secret = process.env.JWT_SECRET;
   if (!secret) {
     console.warn('[Security Notice] JWT_SECRET environment variable is not defined; using default signing key. Set JWT_SECRET in production settings for hardened security.');
@@ -45,6 +50,29 @@ export function createAuthRouter(
 ) {
   const router = Router();
   const JWT_SECRET = getJwtSecret();
+
+  const buildSafeUser = (u: User) => ({
+    id: u.id,
+    email: u.email,
+    name: u.name,
+    role: u.role,
+    mfaEnabled: u.mfaEnabled,
+    safeBoxEnabled: u.safeBoxEnabled ?? (u.role === 'admin'),
+    hasSafeBoxPasskey: Boolean(u.safeBoxPasskeyHash),
+    safeBoxUpdatedAt: u.safeBoxUpdatedAt,
+    subscriptionStatus: u.subscriptionStatus || (u.role === 'admin' ? 'active' : 'inactive'),
+    subscriptionExpiresAt: u.subscriptionExpiresAt,
+    subscriptionGrantedBy: u.subscriptionGrantedBy,
+    subscriptionUpdatedAt: u.subscriptionUpdatedAt,
+    lastPaymentId: u.lastPaymentId,
+    subscriptionAccess: evaluateSubscriptionAccess(u, dbState.billingConfig),
+    billingConfig: dbState.billingConfig || DEFAULT_BILLING_CONFIG,
+    avatarUrl: u.avatarUrl,
+    lastNameChangeDate: u.lastNameChangeDate,
+    customMapsApiKey: u.customMapsApiKey,
+    customMapsApiKeyAddedAt: u.customMapsApiKeyAddedAt,
+    createdAt: u.createdAt,
+  });
 
   // Authentication Middleware
   const authenticateToken = (req: any, res: Response, next: NextFunction) => {
@@ -185,6 +213,8 @@ export function createAuthRouter(
       role: role || 'analyst',
       status: 'active',
       mfaEnabled: false,
+      safeBoxEnabled: false,
+      subscriptionStatus: (role === 'admin') ? 'active' : 'inactive',
       createdAt: new Date().toISOString()
     };
 
@@ -197,17 +227,7 @@ export function createAuthRouter(
     const token = jwt.sign({ id: newUser.id, email: newUser.email, role: newUser.role }, JWT_SECRET, { expiresIn: '8h' });
     res.status(201).json({
       token,
-      user: {
-        id: newUser.id,
-        email: newUser.email,
-        name: newUser.name,
-        role: newUser.role,
-        mfaEnabled: newUser.mfaEnabled,
-        avatarUrl: newUser.avatarUrl,
-        lastNameChangeDate: newUser.lastNameChangeDate,
-        customMapsApiKey: newUser.customMapsApiKey,
-        customMapsApiKeyAddedAt: newUser.customMapsApiKeyAddedAt
-      }
+      user: buildSafeUser(newUser)
     });
   });
 
@@ -268,17 +288,7 @@ export function createAuthRouter(
     const token = jwt.sign({ id: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '8h' });
     res.json({
       token,
-      user: {
-        id: user.id,
-        email: user.email,
-        name: user.name,
-        role: user.role,
-        mfaEnabled: user.mfaEnabled,
-        avatarUrl: user.avatarUrl,
-        lastNameChangeDate: user.lastNameChangeDate,
-        customMapsApiKey: user.customMapsApiKey,
-        customMapsApiKeyAddedAt: user.customMapsApiKeyAddedAt
-      }
+      user: buildSafeUser(user)
     });
   });
 
@@ -303,6 +313,8 @@ export function createAuthRouter(
         role: isAdminEmail ? 'admin' : 'analyst',
         status: 'active',
         mfaEnabled: false,
+        safeBoxEnabled: isAdminEmail,
+        subscriptionStatus: isAdminEmail ? 'active' : 'inactive',
         avatarUrl: avatarUrl || undefined,
         createdAt: new Date().toISOString()
       };
@@ -324,17 +336,7 @@ export function createAuthRouter(
     res.json({
       token,
       isNewUser,
-      user: {
-        id: user.id,
-        email: user.email,
-        name: user.name,
-        role: user.role,
-        mfaEnabled: user.mfaEnabled,
-        avatarUrl: user.avatarUrl,
-        lastNameChangeDate: user.lastNameChangeDate,
-        customMapsApiKey: user.customMapsApiKey,
-        customMapsApiKeyAddedAt: user.customMapsApiKeyAddedAt
-      }
+      user: buildSafeUser(user)
     });
   });
 
@@ -516,17 +518,7 @@ export function createAuthRouter(
       status: 'ok', 
       success: true, 
       token,
-      user: {
-        id: user.id,
-        email: user.email,
-        name: user.name,
-        role: user.role,
-        mfaEnabled: user.mfaEnabled,
-        avatarUrl: user.avatarUrl,
-        lastNameChangeDate: user.lastNameChangeDate,
-        customMapsApiKey: user.customMapsApiKey,
-        customMapsApiKeyAddedAt: user.customMapsApiKeyAddedAt
-      },
+      user: buildSafeUser(user),
       message: 'Password successfully updated! Logging you in...' 
     });
   });
@@ -535,18 +527,7 @@ export function createAuthRouter(
   router.get('/profile', authenticateToken, (req: any, res: Response) => {
     const user = dbState.users.find(u => u.id === req.user.id);
     if (!user) return res.status(404).json({ error: 'Operator profile offline.' });
-    res.json({
-      id: user.id,
-      email: user.email,
-      name: user.name,
-      role: user.role,
-      mfaEnabled: user.mfaEnabled,
-      avatarUrl: user.avatarUrl,
-      lastNameChangeDate: user.lastNameChangeDate,
-      customMapsApiKey: user.customMapsApiKey,
-      customMapsApiKeyAddedAt: user.customMapsApiKeyAddedAt,
-      createdAt: user.createdAt
-    });
+    res.json(buildSafeUser(user));
   });
 
   router.post('/profile/update', authenticateToken, (req: any, res: Response) => {
@@ -585,18 +566,7 @@ export function createAuthRouter(
     saveDb();
     addAuditLog(user.id, user.email, nameUpdated ? 'Updated Operator Name & Profile' : 'Updated Operator Avatar', user.email, req.ip || '127.0.0.1', 'success');
 
-    res.json({
-      id: user.id,
-      email: user.email,
-      name: user.name,
-      role: user.role,
-      mfaEnabled: user.mfaEnabled,
-      avatarUrl: user.avatarUrl,
-      lastNameChangeDate: user.lastNameChangeDate,
-      customMapsApiKey: user.customMapsApiKey,
-      customMapsApiKeyAddedAt: user.customMapsApiKeyAddedAt,
-      createdAt: user.createdAt
-    });
+    res.json(buildSafeUser(user));
   });
 
   router.post('/profile/mfa', authenticateToken, (req: any, res: Response) => {
@@ -613,6 +583,131 @@ export function createAuthRouter(
     
     addAuditLog(user.id, user.email, `MFA configuration altered: ${mfaEnabled ? 'ENABLED' : 'DISABLED'}`, 'MFA Token Manager', req.ip || '127.0.0.1', 'success');
     res.json({ mfaEnabled: user.mfaEnabled });
+  });
+
+  // --- ADMIN SAFE BOX (SEPARATE FROM MFA) ---
+  // Public status check for LoginScreen (does not expose PII)
+  router.get('/safebox/status', (req: Request, res: Response) => {
+    const queryEmail = typeof req.query.email === 'string' ? req.query.email.trim().toLowerCase() : '';
+    const matchedUser = queryEmail
+      ? dbState.users.find(u => u.email.toLowerCase() === queryEmail)
+      : undefined;
+    const targetUser = matchedUser || dbState.users.find(u => u.role === 'admin') || dbState.users[0];
+
+    if (!targetUser) {
+      return res.json({ safeBoxEnabled: false, hasPasskey: false });
+    }
+
+    const enabled = targetUser.safeBoxEnabled ?? (targetUser.role === 'admin');
+    res.json({
+      safeBoxEnabled: Boolean(enabled),
+      hasPasskey: Boolean(targetUser.safeBoxPasskeyHash),
+    });
+  });
+
+  // Verify separate 6-token mixed passkey to unlock Admin Safe Box on LoginScreen
+  router.post('/safebox/verify', (req: Request, res: Response) => {
+    const parseResult = safeBoxVerifySchema.safeParse(req.body);
+    if (!parseResult.success) {
+      const err = parseResult.error.issues?.[0]?.message || 'Invalid Safe Box verification payload.';
+      return res.status(400).json({ error: err });
+    }
+
+    const { email, passkey } = parseResult.data;
+    const cleanEmail = (email || '').trim().toLowerCase();
+    const matchedUser = cleanEmail
+      ? dbState.users.find(u => u.email.toLowerCase() === cleanEmail)
+      : undefined;
+    const targetUser = matchedUser || dbState.users.find(u => u.role === 'admin') || dbState.users[0];
+
+    if (!targetUser) {
+      return res.status(404).json({ error: 'No operator vault found.' });
+    }
+
+    const isEnabled = targetUser.safeBoxEnabled ?? (targetUser.role === 'admin');
+    if (!isEnabled) {
+      return res.status(403).json({ error: 'Admin Safe Box is currently turned OFF in operator settings.' });
+    }
+
+    if (!targetUser.safeBoxPasskeyHash) {
+      return res.status(400).json({ error: 'No Admin Safe Box passkey has been set yet. Sign in and configure your 6-token mixed passkey in Settings.' });
+    }
+
+    const validation = validateSafeBoxPasskey(passkey);
+    if (!validation.valid) {
+      addAuditLog(targetUser.id, targetUser.email, 'Admin Safe Box Invalid Token Format', 'Admin Safe Box Vault', req.ip || '127.0.0.1', 'failure');
+      return res.status(401).json({
+        error: `Access Denied: ${validation.errors[0] || 'Requires a 6-token mixed passkey (number, alphabet, sign & emoji).'}`
+      });
+    }
+
+    const matches = bcryptjs.compareSync(passkey, targetUser.safeBoxPasskeyHash);
+    if (!matches) {
+      addAuditLog(targetUser.id, targetUser.email, 'Admin Safe Box Unlock Failure', 'Admin Safe Box Vault', req.ip || '127.0.0.1', 'failure');
+      return res.status(401).json({ error: 'Access Denied: Incorrect Admin Safe Box passkey.' });
+    }
+
+    addAuditLog(targetUser.id, targetUser.email, 'Admin Safe Box Unlocked', 'Admin Safe Box Vault', req.ip || '127.0.0.1', 'success');
+    res.json({ unlocked: true });
+  });
+
+  // Turn Admin Safe Box ON / OFF in Settings
+  router.post('/profile/safebox/toggle', authenticateToken, (req: any, res: Response) => {
+    const parseResult = safeBoxToggleSchema.safeParse(req.body);
+    if (!parseResult.success) {
+      return res.status(400).json({ error: 'Invalid Safe Box toggle state.' });
+    }
+
+    const user = dbState.users.find(u => u.id === req.user.id);
+    if (!user) return res.status(404).json({ error: 'Operator not found.' });
+
+    const { enabled } = parseResult.data;
+    user.safeBoxEnabled = enabled;
+    user.safeBoxUpdatedAt = new Date().toISOString();
+    saveDb();
+
+    addAuditLog(user.id, user.email, `Admin Safe Box ${enabled ? 'ENABLED' : 'DISABLED'}`, 'Admin Safe Box Vault', req.ip || '127.0.0.1', 'success');
+    res.json({
+      safeBoxEnabled: user.safeBoxEnabled,
+      hasSafeBoxPasskey: Boolean(user.safeBoxPasskeyHash),
+      safeBoxUpdatedAt: user.safeBoxUpdatedAt
+    });
+  });
+
+  // Set / update separate 6-token mixed Safe Box passkey in Settings
+  router.post('/profile/safebox/passkey', authenticateToken, (req: any, res: Response) => {
+    const parseResult = safeBoxPasskeySchema.safeParse(req.body);
+    if (!parseResult.success) {
+      const err = parseResult.error.issues?.[0]?.message || 'Safe Box passkey is required.';
+      return res.status(400).json({ error: err });
+    }
+
+    const user = dbState.users.find(u => u.id === req.user.id);
+    if (!user) return res.status(404).json({ error: 'Operator not found.' });
+
+    const { passkey } = parseResult.data;
+    const validation = validateSafeBoxPasskey(passkey);
+    if (!validation.valid) {
+      return res.status(400).json({
+        error: validation.errors.join(' ')
+      });
+    }
+
+    user.safeBoxPasskeyHash = bcryptjs.hashSync(passkey, 10);
+    if (user.safeBoxEnabled === undefined) {
+      user.safeBoxEnabled = true;
+    }
+    user.safeBoxUpdatedAt = new Date().toISOString();
+    saveDb();
+
+    addAuditLog(user.id, user.email, 'Updated Admin Safe Box Passkey', 'Admin Safe Box Vault', req.ip || '127.0.0.1', 'success');
+    res.json({
+      success: true,
+      safeBoxEnabled: user.safeBoxEnabled,
+      hasSafeBoxPasskey: true,
+      safeBoxUpdatedAt: user.safeBoxUpdatedAt,
+      message: 'Admin Safe Box 6-token mixed passkey saved successfully.'
+    });
   });
 
   // BYOK: Save personal Google Maps Platform API key

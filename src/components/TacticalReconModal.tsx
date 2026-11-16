@@ -246,6 +246,7 @@ export default function TacticalReconModal({ isOpen, onClose, target, customApiK
   const [copiedDossier, setCopiedDossier] = useState(false);
   const [streetViewAvailable, setStreetViewAvailable] = useState<boolean | null>(null);
   const [streetViewStatusText, setStreetViewStatusText] = useState('Initializing 360° Ground Recon...');
+  const [showMapsBillingNotice, setShowMapsBillingNotice] = useState(true);
 
   const streetViewContainerRef = useRef<HTMLDivElement | null>(null);
   const panoramaInstanceRef = useRef<any>(null);
@@ -400,13 +401,13 @@ Prepared by EncDec Autonomous IDS Reconnaissance Engine
                 DEEP SEEK TACTICAL RECONNAISSANCE
               </span>
               {customApiKey ? (
-                <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30" title="Billed to operator's linked Google Cloud account ($200/mo Free Tier)">
+                <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30" title="Billed directly to your Google Cloud / Google Maps Platform subscription account">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                  BYOK Active (Personal GCP Tier)
+                  Personal Google Maps Key Linked
                 </span>
               ) : (
-                <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-mono text-amber-400/90 bg-amber-500/10 border border-amber-500/20" title="Using shared system tier. Link your personal key in Settings for dedicated $200 free quota.">
-                  System Shared Tier
+                <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-mono text-amber-300 bg-amber-500/15 border border-amber-500/30" title="Google Maps Platform subscription & billing account in Google Cloud is required for uninterrupted Deep Seek map loads">
+                  Google Maps Billing Required
                 </span>
               )}
               <span className="text-[11px] font-mono text-slate-400">
@@ -499,6 +500,47 @@ Prepared by EncDec Autonomous IDS Reconnaissance Engine
 
         {/* Main Recon Content Body */}
         <div className="flex-1 overflow-y-auto p-4 sm:p-5 flex flex-col gap-4">
+
+          {/* Google Maps Subscription & Billing Notice for Deep Seek */}
+          {showMapsBillingNotice && (
+            <div
+              className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/35 text-amber-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs font-mono"
+              id="deepseek-google-maps-notice"
+            >
+              <div className="flex items-start gap-2.5">
+                <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                <div className="space-y-1">
+                  <p className="font-bold text-amber-300 uppercase text-[11px]">
+                    Google Maps Subscription Required for Deep Seek Reconnaissance
+                  </p>
+                  <p className="text-[11px] text-slate-300 leading-relaxed">
+                    Google Maps Satellite Aerial &amp; 360° Street View in Deep Seek require an active{' '}
+                    <strong className="text-white">Google Cloud Billing / Google Maps Platform subscription</strong>{' '}
+                    (paid Pay-As-You-Go or monthly Google Maps plan beyond Google&apos;s monthly free SKU caps). You must pay Google directly and link your Google Maps API key under{' '}
+                    <strong className="text-cyan-300">Security Settings → Google Maps Platform (BYOK)</strong>.
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <a
+                  href="https://mapsplatform.google.com/pricing/?utm_campaign=gmp_mcp_codeassist_v1_aistudio"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="px-2.5 py-1.5 rounded bg-amber-500/20 hover:bg-amber-500/30 border border-amber-400/40 text-amber-200 text-[10px] font-bold flex items-center gap-1 transition-colors"
+                >
+                  <span>Google Maps Pricing</span>
+                  <ExternalLink className="w-3 h-3" />
+                </a>
+                <button
+                  type="button"
+                  onClick={() => setShowMapsBillingNotice(false)}
+                  className="px-2 py-1.5 rounded bg-slate-900/80 hover:bg-slate-800 border border-white/10 text-slate-400 hover:text-white text-[10px] cursor-pointer"
+                >
+                  Dismiss
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* TAB 1: SATELLITE AERIAL RECONNAISSANCE */}
           {activeTab === 'satellite' && (

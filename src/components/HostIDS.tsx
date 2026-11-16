@@ -25,10 +25,19 @@ export default function HostIDS({
   onQuarantine
 }: HostIDSProps) {
   
-  const [selectedHostId, setSelectedHostId] = useState<string>('hst_1');
+  const [selectedHostId, setSelectedHostId] = useState<string>(hosts[0]?.id || '');
   const [telemetry, setTelemetry] = useState<any>(null);
   const [loadingTelemetry, setLoadingTelemetry] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+
+  useEffect(() => {
+    if (hosts.length > 0 && (!selectedHostId || !hosts.some(h => h.id === selectedHostId))) {
+      setSelectedHostId(hosts[0].id);
+    } else if (hosts.length === 0 && selectedHostId) {
+      setSelectedHostId('');
+      setTelemetry(null);
+    }
+  }, [hosts, selectedHostId]);
 
   // Register Host states
   const [showDeployWizard, setShowDeployWizard] = useState(false);
@@ -129,43 +138,52 @@ export default function HostIDS({
         <div className="space-y-3 lg:col-span-1">
           <p className="text-[10px] font-mono text-slate-500 uppercase tracking-widest pl-1">Enrolled Nodes</p>
           <div className="space-y-2">
-            {hosts.map((host) => {
-              const isSelected = host.id === selectedHostId;
-              return (
-                <button
-                  key={host.id}
-                  onClick={() => setSelectedHostId(host.id)}
-                  className={`w-full text-left p-4 rounded border transition-all flex justify-between items-center ${
-                    isSelected 
-                      ? 'bg-cyan-500/10 border-cyan-500/40' 
-                      : 'bg-slate-900 border-white/5 hover:border-white/15'
-                  }`}
-                  id={`host-card-${host.id}`}
-                >
-                  <div className="space-y-1 min-w-0">
-                    <p className="text-xs font-bold text-white truncate">{host.name}</p>
-                    <p className="font-mono text-[10px] text-slate-400">{host.ipAddress}</p>
-                    <span className="inline-block text-[8px] font-mono uppercase tracking-wide text-cyan-400 bg-cyan-950/40 px-1 rounded">
-                      {host.os}
-                    </span>
-                  </div>
-                  
-                  <div className="flex flex-col items-end gap-2">
-                    <span className="flex h-2.5 w-2.5 relative">
+            {hosts.length === 0 ? (
+              <div className="p-4 rounded border border-dashed border-white/10 bg-slate-900/60 text-center space-y-2">
+                <p className="text-xs font-mono text-slate-300 font-semibold">No nodes enrolled yet</p>
+                <p className="text-[10px] font-mono text-slate-500">
+                  Your enrolled hosts are private to your account. Deploy an agent to add your first node.
+                </p>
+              </div>
+            ) : (
+              hosts.map((host) => {
+                const isSelected = host.id === selectedHostId;
+                return (
+                  <button
+                    key={host.id}
+                    onClick={() => setSelectedHostId(host.id)}
+                    className={`w-full text-left p-4 rounded border transition-all flex justify-between items-center ${
+                      isSelected 
+                        ? 'bg-cyan-500/10 border-cyan-500/40' 
+                        : 'bg-slate-900 border-white/5 hover:border-white/15'
+                    }`}
+                    id={`host-card-${host.id}`}
+                  >
+                    <div className="space-y-1 min-w-0">
+                      <p className="text-xs font-bold text-white truncate">{host.name}</p>
+                      <p className="font-mono text-[10px] text-slate-400">{host.ipAddress}</p>
+                      <span className="inline-block text-[8px] font-mono uppercase tracking-wide text-cyan-400 bg-cyan-950/40 px-1 rounded">
+                        {host.os}
+                      </span>
+                    </div>
+                    
+                    <div className="flex flex-col items-end gap-2">
+                      <span className="flex h-2.5 w-2.5 relative">
+                        {host.status === 'online' && (
+                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                        )}
+                        <span className={`relative inline-flex rounded-full h-2.5 w-2.5 ${
+                          host.status === 'online' ? 'bg-emerald-500' : 'bg-slate-700'
+                        }`} />
+                      </span>
                       {host.status === 'online' && (
-                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                        <span className="text-[9px] font-mono text-slate-500">{host.cpuUsage}% CPU</span>
                       )}
-                      <span className={`relative inline-flex rounded-full h-2.5 w-2.5 ${
-                        host.status === 'online' ? 'bg-emerald-500' : 'bg-slate-700'
-                      }`} />
-                    </span>
-                    {host.status === 'online' && (
-                      <span className="text-[9px] font-mono text-slate-500">{host.cpuUsage}% CPU</span>
-                    )}
-                  </div>
-                </button>
-              );
-            })}
+                    </div>
+                  </button>
+                );
+              })
+            )}
           </div>
         </div>
 
@@ -352,14 +370,16 @@ export default function HostIDS({
                         </div>
                         <div className="p-2 bg-slate-900/50 rounded">
                           <p className="text-slate-500 uppercase text-[9px]">Failed Logins (24h)</p>
-                          <p className="text-red-400 font-bold mt-1">14 Atts</p>
+                          <p className={`font-bold mt-1 ${(telemetry.failedLogins24h || 0) > 0 ? 'text-red-400' : 'text-emerald-400'}`}>
+                            {telemetry.failedLogins24h ?? 0} Atts
+                          </p>
                         </div>
                       </div>
 
                       <div className="space-y-1">
                         <p className="text-[10px] text-slate-400">Captured system calls buffer:</p>
                         <div className="flex flex-wrap gap-1.5 pt-1">
-                          {telemetry.systemCalls.map((sc: string, i: number) => (
+                          {(telemetry.systemCalls || []).map((sc: string, i: number) => (
                             <span key={i} className="bg-slate-900 text-slate-400 text-[10px] px-1.5 py-0.5 rounded border border-white/5">
                               {sc}
                             </span>
@@ -369,8 +389,8 @@ export default function HostIDS({
 
                       <div className="space-y-1">
                         <p className="text-[10px] text-slate-400">Monitored cron/scheduled entries:</p>
-                        <div className="bg-slate-900 p-2 rounded text-[10px] text-red-400 border border-red-500/10">
-                          {telemetry.cronJobs[0]}
+                        <div className="bg-slate-900 p-2 rounded text-[10px] text-slate-300 border border-white/5">
+                          {(telemetry.cronJobs && telemetry.cronJobs.length > 0) ? telemetry.cronJobs[0] : 'No unauthorized scheduled tasks detected'}
                         </div>
                       </div>
                     </div>
@@ -381,8 +401,25 @@ export default function HostIDS({
 
             </div>
           ) : (
-            <div className="bg-slate-900 border border-white/5 rounded-lg p-12 text-center text-slate-500 font-mono text-xs">
-              ⚠️ Please enroll or select an active host node from the list side-rail.
+            <div className="bg-slate-900 border border-white/5 rounded-lg p-12 text-center space-y-4">
+              <p className="text-slate-300 font-mono text-sm font-bold">
+                {hosts.length === 0 ? 'No Personal Host Nodes Enrolled Yet' : 'Select an Active Host Node'}
+              </p>
+              <p className="text-slate-500 font-mono text-xs max-w-md mx-auto">
+                {hosts.length === 0
+                  ? 'Every user enrolls and manages their own endpoints independently. Deploy a host agent to monitor your server, workstation, or domain.'
+                  : 'Select an enrolled node from the left rail to inspect live processes, file integrity logs, and active services.'}
+              </p>
+              {hosts.length === 0 && (
+                <button
+                  onClick={() => setShowDeployWizard(true)}
+                  className="bg-cyan-500 hover:bg-cyan-400 text-slate-950 px-4 py-2 rounded text-xs font-mono font-bold uppercase tracking-wider inline-flex items-center gap-1.5 cursor-pointer"
+                  id="enroll-first-node-btn"
+                >
+                  <Command className="w-4 h-4" />
+                  <span>Enroll Your First Node</span>
+                </button>
+              )}
             </div>
           )}
         </div>

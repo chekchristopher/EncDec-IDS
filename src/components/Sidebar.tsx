@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import EncDecLogo from './EncDecLogo.js';
 import ThemeToggle from './ThemeToggle.jsx';
+import type { UserCertificationStatus } from '../types.js';
 
 interface SidebarProps {
   activeView: string;
@@ -21,6 +22,8 @@ interface SidebarProps {
   isOpen: boolean;
   onClose: () => void;
   onOpenProfile?: () => void;
+  subscriptionLocked?: boolean;
+  certificationStatus?: UserCertificationStatus | null;
 }
 
 export default function Sidebar({ 
@@ -31,7 +34,9 @@ export default function Sidebar({
   adminPasskeyPassed,
   isOpen,
   onClose,
-  onOpenProfile
+  onOpenProfile,
+  subscriptionLocked = false,
+  certificationStatus = null,
 }: SidebarProps) {
   
   const isAdmin = currentUser?.role === 'admin';
@@ -52,6 +57,9 @@ export default function Sidebar({
   ];
 
   const handleNavItemClick = (id: string) => {
+    if (subscriptionLocked) {
+      return;
+    }
     onViewChange(id);
     onClose();
   };
@@ -94,57 +102,110 @@ export default function Sidebar({
           </button>
         </div>
 
+      {subscriptionLocked && (
+        <div
+          className="mx-3 mb-3 px-3 py-2 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-300 font-mono text-[10px] flex items-center gap-2"
+          id="sidebar-license-lock-notice"
+        >
+          <Lock className="w-3.5 h-3.5 shrink-0 text-amber-400" />
+          <span>Navigation locked — Get licensed ($500 / 3 mo) to unlock.</span>
+        </div>
+      )}
+
       {/* Navigation Links */}
       <nav className="flex-1 overflow-y-auto min-h-0 space-y-1 px-3 py-1 my-1">
         {menuItems.map((item) => {
           const IconComponent = item.icon;
-          const isActive = activeView === item.id;
+          const isActive = !subscriptionLocked && activeView === item.id;
           return (
             <button
               key={item.id}
+              type="button"
+              disabled={subscriptionLocked}
+              aria-disabled={subscriptionLocked}
+              title={subscriptionLocked ? 'Payment required ($500 / 3 months) to unlock this section' : item.label}
               onClick={() => handleNavItemClick(item.id)}
-              className={`w-full flex items-center gap-3 px-4 py-3 rounded text-xs font-mono tracking-wide transition-all ${
-                isActive 
-                  ? 'bg-cyan-500/10 border-l-4 border-cyan-400 text-cyan-400' 
-                  : 'text-slate-400 hover:bg-white/5 hover:text-white'
+              className={`w-full flex items-center justify-between gap-2 px-4 py-3 rounded text-xs font-mono tracking-wide transition-all ${
+                subscriptionLocked
+                  ? 'text-slate-500 bg-slate-950/40 opacity-65 cursor-not-allowed border border-transparent'
+                  : isActive 
+                  ? 'bg-cyan-500/10 border-l-4 border-cyan-400 text-cyan-400 cursor-pointer' 
+                  : 'text-slate-400 hover:bg-white/5 hover:text-white cursor-pointer'
               }`}
               id={`nav-item-${item.id}`}
             >
-              <IconComponent className="w-4 h-4" />
-              <span>{item.label}</span>
+              <div className="flex items-center gap-3 min-w-0">
+                <IconComponent className="w-4 h-4 shrink-0" />
+                <span className="truncate">{item.label}</span>
+              </div>
+              {subscriptionLocked ? (
+                <Lock className="w-3.5 h-3.5 text-amber-400/80 shrink-0" />
+              ) : item.id === 'workbook' && certificationStatus ? (
+                <span
+                  className={`text-[10px] font-mono tabular-nums shrink-0 ${
+                    certificationStatus.isCertified ? 'text-emerald-400' : 'text-amber-400'
+                  }`}
+                  title={
+                    certificationStatus.isCertified
+                      ? 'Certified EncDec Analyst (CE-SOC)'
+                      : 'Uncertified — complete the workbook to get certified'
+                  }
+                >
+                  {certificationStatus.isCertified
+                    ? 'CE-SOC'
+                    : `${certificationStatus.chaptersCompleted}/${certificationStatus.totalChapters}`}
+                </span>
+              ) : null}
             </button>
           );
         })}
 
-        {/* Admin Gateway Link */}
-        <button
-          onClick={() => handleNavItemClick('adminPortal')}
-          className={`w-full flex items-center justify-between px-4 py-3 rounded text-xs font-mono tracking-wide transition-all ${
-            activeView === 'adminPortal'
-              ? 'bg-red-500/15 border-l-4 border-red-500 text-red-400 font-bold'
-              : 'text-slate-400 hover:bg-white/5 hover:text-white'
-          }`}
-          id="nav-item-admin"
-        >
-          <div className="flex items-center gap-3">
-            <Lock className="w-4 h-4 text-red-500" />
-            <span>Admin Gateway</span>
-          </div>
-          {adminPasskeyPassed ? (
-            <span className="w-2 h-2 rounded-full bg-emerald-500" title="Gate unlocked" />
-          ) : (
-            <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" title="Passkey required" />
-          )}
-        </button>
+        {/* Admin Gateway Link (visible to admins only) */}
+        {isAdmin && (
+          <button
+            type="button"
+            disabled={subscriptionLocked}
+            aria-disabled={subscriptionLocked}
+            title={subscriptionLocked ? 'Payment required to unlock' : 'Admin Gateway'}
+            onClick={() => handleNavItemClick('adminPortal')}
+            className={`w-full flex items-center justify-between px-4 py-3 rounded text-xs font-mono tracking-wide transition-all ${
+              subscriptionLocked
+                ? 'text-slate-500 bg-slate-950/40 opacity-65 cursor-not-allowed'
+                : activeView === 'adminPortal'
+                ? 'bg-red-500/15 border-l-4 border-red-500 text-red-400 font-bold cursor-pointer'
+                : 'text-slate-400 hover:bg-white/5 hover:text-white cursor-pointer'
+            }`}
+            id="nav-item-admin"
+          >
+            <div className="flex items-center gap-3">
+              <Lock className={`w-4 h-4 ${subscriptionLocked ? 'text-amber-400/80' : 'text-red-500'}`} />
+              <span>Admin Gateway</span>
+            </div>
+            {subscriptionLocked ? (
+              <Lock className="w-3.5 h-3.5 text-amber-400/80 shrink-0" />
+            ) : adminPasskeyPassed ? (
+              <span className="w-2 h-2 rounded-full bg-emerald-500" title="Gate unlocked" />
+            ) : (
+              <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" title="Passkey required" />
+            )}
+          </button>
+        )}
       </nav>
 
       {/* Operator profile card at bottom */}
       <div className="px-4 mt-auto shrink-0">
         <button
-          onClick={onOpenProfile}
+          onClick={() => {
+            if (!subscriptionLocked && onOpenProfile) onOpenProfile();
+          }}
           type="button"
-          className="w-full text-left p-3.5 bg-slate-950/70 hover:bg-slate-950 border border-white/5 hover:border-cyan-500/30 rounded-lg mb-4 transition-all duration-200 group cursor-pointer shadow-sm relative overflow-hidden focus-visible:ring-2 focus-visible:ring-cyan-400 focus-visible:outline-none"
-          title="Click to view and edit profile"
+          disabled={subscriptionLocked}
+          className={`w-full text-left p-3.5 bg-slate-950/70 border border-white/5 rounded-lg mb-4 transition-all duration-200 group shadow-sm relative overflow-hidden focus-visible:ring-2 focus-visible:ring-cyan-400 focus-visible:outline-none ${
+            subscriptionLocked
+              ? 'opacity-80 cursor-not-allowed'
+              : 'hover:bg-slate-950 hover:border-cyan-500/30 cursor-pointer'
+          }`}
+          title={subscriptionLocked ? 'Subscription required to edit profile' : 'Click to view and edit profile'}
           aria-label="View and edit operator profile"
           id="sidebar-profile-card"
         >
@@ -158,7 +219,7 @@ export default function Sidebar({
                 )}
               </div>
               <div className="absolute -bottom-0.5 -right-0.5 p-0.5 rounded-full bg-slate-900 border border-cyan-500/40 text-cyan-400 opacity-80 group-hover:opacity-100">
-                <UserPen className="w-2.5 h-2.5" />
+                {subscriptionLocked ? <Lock className="w-2.5 h-2.5 text-amber-400" /> : <UserPen className="w-2.5 h-2.5" />}
               </div>
             </div>
 
@@ -172,8 +233,8 @@ export default function Sidebar({
           </div>
 
           <div className="mt-2 pt-1.5 border-t border-white/5 flex items-center justify-between text-[9px] text-slate-400 group-hover:text-cyan-400 transition-colors">
-            <span>Edit Profile & Avatar</span>
-            <span>→</span>
+            <span>{subscriptionLocked ? 'Account Unlicensed' : 'Edit Profile & Avatar'}</span>
+            <span>{subscriptionLocked ? '🔒' : '→'}</span>
           </div>
         </button>
 

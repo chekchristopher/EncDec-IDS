@@ -79,10 +79,12 @@ export class CorrelationEngine {
     correlatedIncident?: Incident;
     alertCreated?: Alert;
   }> {
-    // 1. Store event in securityEvents collection (capped at 1000 items)
-    this.dbState.securityEvents.unshift(event);
-    if (this.dbState.securityEvents.length > 1000) {
-      this.dbState.securityEvents.pop();
+    // 1. Store event in securityEvents collection (deduplicated & capped at 1000 items)
+    if (!this.dbState.securityEvents.some(e => e.id === event.id)) {
+      this.dbState.securityEvents.unshift(event);
+      if (this.dbState.securityEvents.length > 1000) {
+        this.dbState.securityEvents.pop();
+      }
     }
 
     // 2. Update sensor heartbeat and stats
@@ -91,15 +93,22 @@ export class CorrelationEngine {
     // 3. Determine if an Alert should be created
     let createdAlert: Alert | undefined;
     if (event.severity === 'critical' || event.severity === 'high' || event.details?.suspicious) {
+      const matchedHost = this.dbState.hosts.find(
+        (h) => (event.hostId && h.id === event.hostId) || (event.destIp && h.ipAddress === event.destIp)
+      );
+      const derivedOwnerId = event.ownerId || matchedHost?.ownerId;
+
       createdAlert = {
         id: 'alt_' + Math.random().toString(36).substring(2, 9),
+        ownerId: derivedOwnerId,
+        hostId: event.hostId || matchedHost?.id,
         timestamp: event.timestamp,
         severity: event.severity === 'critical' ? 'critical' : 'high',
         title: `${event.sourceType.toUpperCase()}: ${event.eventType.replace(/_/g, ' ').toUpperCase()}`,
         description: event.details?.signature || event.details?.commandLine || JSON.stringify(event.details),
         category: event.mitre?.tactic || 'Intrusion Detection',
         source: event.sourceIp || event.hostId || event.sensorId,
-        target: event.destIp || event.hostId,
+        target: event.destIp || matchedHost?.name || event.hostId,
         status: 'unhandled',
         mitreMapping: event.mitre ? `${event.mitre.technique} (${event.mitre.tactic})` : undefined
       };

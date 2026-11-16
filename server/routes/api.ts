@@ -4,11 +4,12 @@
  */
 
 import { Router, Request, Response, NextFunction } from 'express';
+import crypto from 'crypto';
 import fs from 'fs';
 import QRCode from 'qrcode';
 import { GoogleGenAI, Type } from '@google/genai';
 import { 
-  Host, Rule, Alert, Threat, APIKey, QuarantineItem, SecurityReport, DualDatabaseStatus, MssqlConfig, EmailLog, StoredCertificate
+  Host, Rule, Alert, Threat, APIKey, QuarantineItem, SecurityReport, DualDatabaseStatus, MssqlConfig, EmailLog, StoredCertificate, PaymentRecord
 } from '../../src/types.js';
 import { DbSchema } from '../db/schema.js';
 import { firestoreSyncService } from '../db/firestore.js';
@@ -17,8 +18,33 @@ import { sendEmail, getGmailAppConfig, verifyGmailAppConnection } from '../servi
 import { 
   hostRegisterSchema, ruleCreateSchema, reportGenerateSchema, 
   apiKeyCreateSchema, quarantineSchema, emailTestSchema,
-  aiEmailGenerateSchema, mssqlConfigureSchema, mssqlQuerySchema
+  aiEmailGenerateSchema, mssqlConfigureSchema, mssqlQuerySchema,
+  verifyPaymentSubmissionSchema, adminGrantSubscriptionSchema,
+  adminBillingToggleSchema, adminFreeAccessSchema
 } from '../schemas/validation.js';
+import {
+  evaluateSubscriptionAccess,
+  DEFAULT_BILLING_CONFIG,
+  NOWPAYMENTS_PAYMENT_URL,
+  NOWPAYMENTS_INVOICE_ID,
+  SUBSCRIPTION_PRICE_USD,
+  SUBSCRIPTION_CYCLE_MONTHS,
+  SUBSCRIPTION_CYCLE_DAYS,
+} from '../../src/utils/subscription.js';
+import {
+  verifyNowPaymentsIpnSignature,
+  validateNowPaymentsPayload,
+  findConflictingPaymentRecord,
+  verifyPaymentWithNowPaymentsApi,
+} from '../services/nowPaymentsService.js';
+import {
+  filterHostsForUser,
+  isHostOwnedByUser,
+  filterAlertsForUser,
+  filterThreatsForUser,
+  isAlertOwnedByUser,
+} from '../../src/utils/hostOwnership.js';
+import { evaluateUserCertificationStatus } from '../../src/utils/certificationStatus.js';
 
 export function createApiRouter(
   dbState: DbSchema,
@@ -41,29 +67,126 @@ export function createApiRouter(
     };
   };
 
+  const getUserCertificationStatus = (userId: string, userEmail?: string) => {
+    const emailLower = (userEmail || '').trim().toLowerCase();
+    const progress = (dbState.workbookProgress || []).find(
+      (p) => p.userId === userId || (emailLower && p.email?.toLowerCase() === emailLower)
+    ) || null;
+    return evaluateUserCertificationStatus({
+      userId,
+      userEmail,
+      progress,
+      certificates: dbState.certificates || [],
+    });
+  };
+
+  const getNormalizedBillingConfig = () => {
+    if (!dbState.billingConfig) {
+      dbState.billingConfig = { ...DEFAULT_BILLING_CONFIG, updatedAt: new Date().toISOString() };
+    }
+    return {
+      ...DEFAULT_BILLING_CONFIG,
+      ...dbState.billingConfig,
+      nowPaymentsUrl: NOWPAYMENTS_PAYMENT_URL,
+      nowPaymentsInvoiceId: NOWPAYMENTS_INVOICE_ID,
+      priceUsd: SUBSCRIPTION_PRICE_USD,
+      billingCycleMonths: SUBSCRIPTION_CYCLE_MONTHS,
+      billingCycleDays: SUBSCRIPTION_CYCLE_DAYS,
+    };
+  };
+
+  const requireActiveSubscription = (req: any, res: Response, next: NextFunction) => {
+    if (!req.user) {
+      return res.status(401).json({ error: 'Authentication required.' });
+    }
+    const dbUser = dbState.users.find((u) => u.id === req.user.id) || req.user;
+    const cfg = getNormalizedBillingConfig();
+    const access = evaluateSubscriptionAccess(dbUser, cfg);
+    if (!access.hasAccess) {
+      return res.status(402).json({
+        error: `Subscription required ($${SUBSCRIPTION_PRICE_USD} / ${SUBSCRIPTION_CYCLE_MONTHS} months via NOWPayments) to access the EncDec IDS dashboard.`,
+        code: 'SUBSCRIPTION_REQUIRED',
+        access,
+        billingConfig: cfg,
+      });
+    }
+    next();
+  };
+
+  const grantSubscriptionDaysToUser = (
+    targetUser: any,
+    months: number,
+    provider: 'nowpayments' | 'admin',
+    actorEmail: string,
+    reference?: string,
+    notes?: string,
+    extraFields?: Partial<PaymentRecord>
+  ): PaymentRecord => {
+    const nowMs = Date.now();
+    const existingExpMs = targetUser.subscriptionExpiresAt ? Date.parse(targetUser.subscriptionExpiresAt) : NaN;
+    const baseMs = !Number.isNaN(existingExpMs) && existingExpMs > nowMs ? existingExpMs : nowMs;
+    const addDays = Math.max(1, months) * 30;
+    const newExpiresAt = new Date(baseMs + addDays * 24 * 60 * 60 * 1000).toISOString();
+    const nowIso = new Date(nowMs).toISOString();
+
+    const paymentId = 'pay_' + crypto.randomBytes(6).toString('hex');
+    const paymentRecord: PaymentRecord = {
+      id: paymentId,
+      userId: targetUser.id,
+      userEmail: targetUser.email,
+      userName: targetUser.name,
+      amountUsd: SUBSCRIPTION_PRICE_USD,
+      billingCycleMonths: months,
+      provider,
+      invoiceId: NOWPAYMENTS_INVOICE_ID,
+      paymentReference: reference || (provider === 'admin' ? `ADMIN-GRANT-${paymentId.toUpperCase()}` : undefined),
+      status: provider === 'admin' ? 'granted_by_admin' : 'confirmed',
+      createdAt: nowIso,
+      confirmedAt: nowIso,
+      confirmedBy: actorEmail,
+      notes: notes || (provider === 'admin' ? `Granted ${months}-month subscription by administrator` : `Confirmed NOWPayments subscription (${months} months)`),
+      ...extraFields,
+    };
+
+    targetUser.subscriptionStatus = 'active';
+    targetUser.subscriptionExpiresAt = newExpiresAt;
+    targetUser.subscriptionGrantedBy = actorEmail;
+    targetUser.subscriptionUpdatedAt = nowIso;
+    targetUser.lastPaymentId = paymentId;
+
+    if (!Array.isArray(dbState.payments)) {
+      dbState.payments = [];
+    }
+    dbState.payments.unshift(paymentRecord);
+    return paymentRecord;
+  };
+
   // Metrics
-  router.get('/metrics', authenticateToken, (_req: any, res: Response) => {
-    const onlineCount = dbState.hosts.filter(h => h.status === 'online').length;
-    const criticalAlertsCount = dbState.alerts.filter(a => a.severity === 'critical' && a.status === 'unhandled').length;
-    const highAlertsCount = dbState.alerts.filter(a => a.severity === 'high' && a.status === 'unhandled').length;
-    const totalThreatScore = dbState.threats.reduce((acc, curr) => Math.max(acc, curr.score), 0);
+  router.get('/metrics', authenticateToken, requireActiveSubscription, (req: any, res: Response) => {
+    const userHosts = filterHostsForUser(dbState.hosts, req.user?.id);
+    const userAlerts = filterAlertsForUser(dbState.alerts, userHosts, req.user?.id);
+    const userThreats = filterThreatsForUser(dbState.threats, userHosts, userAlerts, req.user?.id);
+    const onlineCount = userHosts.filter(h => h.status === 'online').length;
+    const criticalAlertsCount = userAlerts.filter(a => a.severity === 'critical' && a.status === 'unhandled').length;
+    const highAlertsCount = userAlerts.filter(a => a.severity === 'high' && a.status === 'unhandled').length;
+    const totalThreatScore = userThreats.reduce((acc, curr) => Math.max(acc, curr.score), 0);
 
     res.json({
       hostsOnline: onlineCount,
-      hostsTotal: dbState.hosts.length,
+      hostsTotal: userHosts.length,
       criticalAlerts: criticalAlertsCount,
       highAlerts: highAlertsCount,
       globalThreatScore: totalThreatScore || 0,
-      totalPacketsSec: dbState.securityEvents.length > 0 ? Math.max(1, Math.min(dbState.securityEvents.length, 45)) : 1
+      totalPacketsSec: userHosts.length > 0 && dbState.securityEvents.length > 0 ? Math.max(1, Math.min(dbState.securityEvents.length, 45)) : 0
     });
   });
 
-  // Hosts
-  router.get('/hosts', authenticateToken, (_req: any, res: Response) => {
-    res.json(dbState.hosts);
+  // Hosts (strictly isolated per user — each user sees & manages only their own enrolled nodes)
+  router.get('/hosts', authenticateToken, requireActiveSubscription, (req: any, res: Response) => {
+    res.json(filterHostsForUser(dbState.hosts, req.user?.id));
   });
 
-  router.post('/hosts/register', authenticateToken, (req: any, res: Response) => {
+  router.post('/hosts/register', authenticateToken, requireActiveSubscription, (req: any, res: Response) => {
     const parsed = hostRegisterSchema.safeParse(req.body);
     if (!parsed.success) {
       const err = parsed.error.issues?.[0]?.message || 'Invalid host parameters';
@@ -73,6 +196,8 @@ export function createApiRouter(
     const { name, os, ipAddress, agentVersion } = parsed.data;
     const newHost: Host = {
       id: 'hst_' + Math.random().toString(36).substring(2, 9),
+      ownerId: req.user.id,
+      ownerEmail: req.user.email,
       name,
       os,
       ipAddress,
@@ -93,9 +218,12 @@ export function createApiRouter(
     res.status(201).json(newHost);
   });
 
-  router.delete('/hosts/:id', authenticateToken, (req: any, res: Response) => {
+  router.delete('/hosts/:id', authenticateToken, requireActiveSubscription, (req: any, res: Response) => {
     const host = dbState.hosts.find(h => h.id === req.params.id);
     if (!host) return res.status(404).json({ error: 'Host entry not found.' });
+    if (!isHostOwnedByUser(host, req.user?.id)) {
+      return res.status(403).json({ error: 'Access denied: You can only deregister your own enrolled nodes.' });
+    }
 
     dbState.hosts = dbState.hosts.filter(h => h.id !== req.params.id);
     saveDb();
@@ -106,42 +234,59 @@ export function createApiRouter(
     res.json({ success: true });
   });
 
-  router.get('/hosts/:id/telemetry', authenticateToken, (req: any, res: Response) => {
+  router.get('/hosts/:id/telemetry', authenticateToken, requireActiveSubscription, (req: any, res: Response) => {
     const host = dbState.hosts.find(h => h.id === req.params.id);
     if (!host) return res.status(404).json({ error: 'Host not found.' });
+    if (!isHostOwnedByUser(host, req.user?.id)) {
+      return res.status(403).json({ error: 'Access denied: This node belongs to another user.' });
+    }
+
+    const hostAlerts = dbState.alerts.filter(
+      a =>
+        a.id.startsWith('alt_real_') &&
+        ((a.target || '').toLowerCase().includes(host.name.toLowerCase()) ||
+          (a.target || '').toLowerCase().includes(host.ipAddress.toLowerCase()))
+    );
+
+    const failedLogins24h = hostAlerts.filter(
+      a =>
+        (a.category || '').toLowerCase().includes('auth') ||
+        (a.category || '').toLowerCase().includes('brute') ||
+        (a.title || '').toLowerCase().includes('login')
+    ).length;
+
+    const realFileChanges = hostAlerts.slice(0, 10).map(a => ({
+      timestamp: a.timestamp,
+      filePath: `${a.target || host.name} [${a.category}]`,
+      action: a.status === 'resolved' ? 'verified' : 'flagged',
+      user: a.source || 'network-ingress'
+    }));
 
     res.json({
       host,
+      failedLogins24h,
       processes: [
-        { pid: 1, name: 'systemd', cpu: 0.1, memory: 0.2, user: 'root', path: '/sbin/init', suspicious: false },
-        { pid: 1204, name: 'sshd', cpu: 0.4, memory: 1.1, user: 'root', path: '/usr/sbin/sshd', suspicious: false },
-        { pid: 3042, name: 'nginx: master', cpu: 0.2, memory: 2.3, user: 'root', path: '/usr/sbin/nginx', suspicious: false },
-        { pid: 14201, name: 'sh -i', cpu: 2.5, memory: 0.8, user: 'www-data', path: '/bin/sh', suspicious: true },
-        { pid: 14210, name: 'cryptominer-bin', cpu: 94.2, memory: 12.4, user: 'nobody', path: '/tmp/cryptominer-bin', suspicious: true }
+        { pid: 1, name: host.os === 'windows' ? 'System' : 'systemd', cpu: 0.1, memory: 0.2, user: 'system', path: host.os === 'windows' ? 'C:\\Windows\\System32\\ntoskrnl.exe' : '/sbin/init', suspicious: false },
+        { pid: 1204, name: host.os === 'windows' ? 'svchost.exe' : 'sshd', cpu: 0.4, memory: 1.1, user: 'system', path: host.os === 'windows' ? 'C:\\Windows\\System32\\svchost.exe' : '/usr/sbin/sshd', suspicious: false },
+        { pid: 3042, name: 'encdec-hids-agent', cpu: +(host.cpuUsage * 0.08).toFixed(1), memory: +(host.memoryUsage * 0.05).toFixed(1), user: 'encdec', path: '/opt/encdec/agent', suspicious: false }
       ],
-      fileChanges: [
-        { timestamp: new Date(Date.now() - 50000).toISOString(), filePath: '/etc/shadow', action: 'modified', user: 'root' },
-        { timestamp: new Date(Date.now() - 320000).toISOString(), filePath: '/tmp/cryptominer-bin', action: 'created', user: 'www-data' },
-        { timestamp: new Date(Date.now() - 900000).toISOString(), filePath: '/var/www/html/upload/webshell.php', action: 'created', user: 'www-data' }
-      ],
+      fileChanges: realFileChanges,
       services: [
-        { name: 'sshd', displayName: 'OpenSSH Secure Shell Daemon', status: 'running' },
-        { name: 'ufw', displayName: 'Uncomplicated Firewall', status: 'running' },
-        { name: 'cron', displayName: 'Vixie Cron Scheduler Daemon', status: 'running' },
-        { name: 'docker', displayName: 'Docker Application Container Engine', status: 'running' }
+        { name: 'encdec-agent', displayName: 'EncDec HIDS Telemetry Agent', status: host.status === 'online' ? 'running' : 'stopped' },
+        { name: host.os === 'windows' ? 'WinDefend' : 'sshd', displayName: host.os === 'windows' ? 'Windows Defender Firewall' : 'OpenSSH Secure Shell Daemon', status: host.status === 'online' ? 'running' : 'stopped' }
       ],
-      systemCalls: ['sys_clone', 'sys_execve', 'sys_openat', 'sys_read', 'sys_write', 'sys_socket', 'sys_connect'],
+      systemCalls: ['sys_openat', 'sys_read', 'sys_write', 'sys_socket', 'sys_connect'],
       usbConnected: false,
-      cronJobs: ['* * * * * /tmp/cryptominer-bin --background', '0 0 * * * /var/log/rotate.sh']
+      cronJobs: []
     });
   });
 
   // Rules
-  router.get('/rules', authenticateToken, (_req: any, res: Response) => {
+  router.get('/rules', authenticateToken, requireActiveSubscription, (_req: any, res: Response) => {
     res.json(dbState.rules);
   });
 
-  router.post('/rules', authenticateToken, (req: any, res: Response) => {
+  router.post('/rules', authenticateToken, requireActiveSubscription, (req: any, res: Response) => {
     const parsed = ruleCreateSchema.safeParse(req.body);
     if (!parsed.success) {
       const err = parsed.error.issues?.[0]?.message || 'Invalid rule definition';
@@ -170,7 +315,7 @@ export function createApiRouter(
     res.status(201).json(newRule);
   });
 
-  router.delete('/rules/:id', authenticateToken, (req: any, res: Response) => {
+  router.delete('/rules/:id', authenticateToken, requireActiveSubscription, (req: any, res: Response) => {
     const rule = dbState.rules.find(r => r.id === req.params.id);
     if (!rule) return res.status(404).json({ error: 'IDS Rule not found.' });
 
@@ -183,7 +328,7 @@ export function createApiRouter(
     res.json({ success: true });
   });
 
-  router.post('/rules/:id/toggle', authenticateToken, (req: any, res: Response) => {
+  router.post('/rules/:id/toggle', authenticateToken, requireActiveSubscription, (req: any, res: Response) => {
     const rule = dbState.rules.find(r => r.id === req.params.id);
     if (!rule) return res.status(404).json({ error: 'IDS Rule not found.' });
 
@@ -195,14 +340,19 @@ export function createApiRouter(
     res.json(rule);
   });
 
-  // Alerts
-  router.get('/alerts', authenticateToken, (_req: any, res: Response) => {
-    res.json(dbState.alerts);
+  // Alerts (strictly isolated to user's own enrolled nodes — empty until user enrolls a node)
+  router.get('/alerts', authenticateToken, requireActiveSubscription, (req: any, res: Response) => {
+    const userHosts = filterHostsForUser(dbState.hosts, req.user?.id);
+    res.json(filterAlertsForUser(dbState.alerts, userHosts, req.user?.id));
   });
 
-  router.post('/alerts/:id/resolve', authenticateToken, (req: any, res: Response) => {
+  router.post('/alerts/:id/resolve', authenticateToken, requireActiveSubscription, (req: any, res: Response) => {
     const alert = dbState.alerts.find(a => a.id === req.params.id);
     if (!alert) return res.status(404).json({ error: 'Security Alert entry not found.' });
+    const userHosts = filterHostsForUser(dbState.hosts, req.user?.id);
+    if (!isAlertOwnedByUser(alert, userHosts, req.user?.id)) {
+      return res.status(403).json({ error: 'Access denied: Alert belongs to another user or unowned host.' });
+    }
 
     alert.status = 'resolved';
     saveDb();
@@ -212,9 +362,13 @@ export function createApiRouter(
     res.json(alert);
   });
 
-  router.post('/alerts/:id/ignore', authenticateToken, (req: any, res: Response) => {
+  router.post('/alerts/:id/ignore', authenticateToken, requireActiveSubscription, (req: any, res: Response) => {
     const alert = dbState.alerts.find(a => a.id === req.params.id);
     if (!alert) return res.status(404).json({ error: 'Security Alert entry not found.' });
+    const userHosts = filterHostsForUser(dbState.hosts, req.user?.id);
+    if (!isAlertOwnedByUser(alert, userHosts, req.user?.id)) {
+      return res.status(403).json({ error: 'Access denied: Alert belongs to another user or unowned host.' });
+    }
 
     alert.status = 'ignored';
     saveDb();
@@ -224,13 +378,18 @@ export function createApiRouter(
     res.json(alert);
   });
 
-  router.post('/alerts/:id/escalate', authenticateToken, (req: any, res: Response) => {
+  router.post('/alerts/:id/escalate', authenticateToken, requireActiveSubscription, (req: any, res: Response) => {
     const alert = dbState.alerts.find(a => a.id === req.params.id);
     if (!alert) return res.status(404).json({ error: 'Security Alert entry not found.' });
+    const userHosts = filterHostsForUser(dbState.hosts, req.user?.id);
+    if (!isAlertOwnedByUser(alert, userHosts, req.user?.id)) {
+      return res.status(403).json({ error: 'Access denied: Alert belongs to another user or unowned host.' });
+    }
 
     alert.status = 'escalated';
     const newThreat: Threat = {
       id: 'thr_' + Math.random().toString(36).substring(2, 9),
+      ownerId: req.user.id,
       timestamp: new Date().toISOString(),
       score: alert.severity === 'critical' ? 95 : alert.severity === 'high' ? 80 : 50,
       actor: 'Detected Intrusive Pivot',
@@ -249,11 +408,13 @@ export function createApiRouter(
   });
 
   // Threats
-  router.get('/threats', authenticateToken, (_req: any, res: Response) => {
-    res.json(dbState.threats);
+  router.get('/threats', authenticateToken, requireActiveSubscription, (req: any, res: Response) => {
+    const userHosts = filterHostsForUser(dbState.hosts, req.user?.id);
+    const userAlerts = filterAlertsForUser(dbState.alerts, userHosts, req.user?.id);
+    res.json(filterThreatsForUser(dbState.threats, userHosts, userAlerts, req.user?.id));
   });
 
-  router.post('/threats/:id/mitigate', authenticateToken, (req: any, res: Response) => {
+  router.post('/threats/:id/mitigate', authenticateToken, requireActiveSubscription, (req: any, res: Response) => {
     const threat = dbState.threats.find(t => t.id === req.params.id);
     if (!threat) return res.status(404).json({ error: 'Threat entry not found.' });
 
@@ -267,11 +428,11 @@ export function createApiRouter(
   });
 
   // API Keys
-  router.get('/apikeys', authenticateToken, (_req: any, res: Response) => {
+  router.get('/apikeys', authenticateToken, requireActiveSubscription, (_req: any, res: Response) => {
     res.json(dbState.apiKeys);
   });
 
-  router.post('/apikeys', authenticateToken, (req: any, res: Response) => {
+  router.post('/apikeys', authenticateToken, requireActiveSubscription, (req: any, res: Response) => {
     const parsed = apiKeyCreateSchema.safeParse(req.body);
     if (!parsed.success) {
       const err = parsed.error.issues?.[0]?.message || 'Invalid API key parameters';
@@ -296,7 +457,7 @@ export function createApiRouter(
     res.status(201).json({ ...newKey, plainTextKey: plainKey });
   });
 
-  router.delete('/apikeys/:id', authenticateToken, (req: any, res: Response) => {
+  router.delete('/apikeys/:id', authenticateToken, requireActiveSubscription, (req: any, res: Response) => {
     const key = dbState.apiKeys.find(k => k.id === req.params.id);
     if (!key) return res.status(404).json({ error: 'API Key not found.' });
 
@@ -309,7 +470,7 @@ export function createApiRouter(
   });
 
   // Quarantine
-  router.post('/quarantine', authenticateToken, (req: any, res: Response) => {
+  router.post('/quarantine', authenticateToken, requireActiveSubscription, (req: any, res: Response) => {
     const { hostId, type, targetValue, reason } = req.body;
     if (!hostId || !type || !targetValue || !reason) {
       return res.status(400).json({ error: 'Quarantine payload requirements incomplete.' });
@@ -334,12 +495,12 @@ export function createApiRouter(
   });
 
   // Reports
-  router.get('/reports', authenticateToken, (_req: any, res: Response) => {
+  router.get('/reports', authenticateToken, requireActiveSubscription, (_req: any, res: Response) => {
     const storedReports = (dbState as any).reports || [];
     res.json(storedReports);
   });
 
-  router.post('/reports/generate', authenticateToken, (req: any, res: Response) => {
+  router.post('/reports/generate', authenticateToken, requireActiveSubscription, (req: any, res: Response) => {
     const parsed = reportGenerateSchema.safeParse(req.body);
     if (!parsed.success) {
       const err = parsed.error.issues?.[0]?.message || 'Invalid report parameters';
@@ -375,11 +536,113 @@ export function createApiRouter(
     }
 
     res.json({
-      users: dbState.users.map(u => ({ id: u.id, email: u.email, name: u.name, role: u.role, status: u.status, mfaEnabled: u.mfaEnabled })),
+      users: dbState.users.map(u => ({
+        id: u.id,
+        email: u.email,
+        name: u.name,
+        role: u.role,
+        status: u.status,
+        mfaEnabled: u.mfaEnabled,
+        subscriptionStatus: u.subscriptionStatus || (u.role === 'admin' ? 'active' : 'inactive'),
+        subscriptionExpiresAt: u.subscriptionExpiresAt || null,
+        subscriptionGrantedBy: u.subscriptionGrantedBy || null,
+        subscriptionUpdatedAt: u.subscriptionUpdatedAt || null,
+        lastPaymentId: u.lastPaymentId || null,
+        certificationStatus: getUserCertificationStatus(u.id, u.email),
+      })),
+      billingConfig: getNormalizedBillingConfig(),
+      payments: dbState.payments || [],
       activeSocketsCount: activeConnections.size,
       auditLogs: dbState.auditLogs,
       liveActivities: dbState.liveActivities,
       dbFileSize: fs.existsSync(dbFilePath) ? fs.statSync(dbFilePath).size : 0
+    });
+  });
+
+  // Notify uncertified users via live in-app alert + email to complete the EncDec Workbook
+  router.post('/admin/users/notify-uncertified', authenticateToken, requireRole(['admin']), async (req: any, res: Response) => {
+    const secretHeader = req.headers['x-secret-passkey'] || req.query.passkey;
+    if (secretHeader !== 'VIGIL_ADMIN_77') {
+      return res.status(403).json({ error: 'Gateway Passkey Invalid.' });
+    }
+
+    const targetUserId = typeof req.body?.userId === 'string' ? req.body.userId.trim() : '';
+    const activeUsers = (dbState.users || []).filter(u => u && u.status !== 'suspended');
+    const uncertifiedTargets = activeUsers
+      .map(u => ({ user: u, certStatus: getUserCertificationStatus(u.id, u.email) }))
+      .filter(({ user, certStatus }) => {
+        if (certStatus.isCertified) return false;
+        if (targetUserId && user.id !== targetUserId) return false;
+        return true;
+      });
+
+    if (uncertifiedTargets.length === 0) {
+      return res.json({
+        success: true,
+        notifiedCount: 0,
+        message: targetUserId
+          ? 'Selected operator is already certified or inactive.'
+          : 'All active operators are already certified EncDec Analysts.',
+      });
+    }
+
+    const emailResults: string[] = [];
+    for (const { user, certStatus } of uncertifiedTargets) {
+      const reminderText = `Scale through the EncDec Workbook (${certStatus.chaptersCompleted}/${certStatus.totalChapters} chapters completed) and pass the Capstone Knowledge Check (≥ 80%) to become a Certified EncDec Analyst (CE-SOC).`;
+
+      broadcastWs({
+        type: 'CERTIFICATION_REMINDER',
+        payload: {
+          userId: user.id,
+          message: reminderText,
+          certificationStatus: certStatus,
+          sentBy: req.user.email,
+          timestamp: new Date().toISOString(),
+        },
+      });
+
+      const subject = '[EncDec Academy] Complete Your EncDec Workbook to Become a Certified Analyst (CE-SOC)';
+      const bodyText = `Hello ${user.name || 'Operator'},\n\nYou are currently ${certStatus.chaptersCompleted} of ${certStatus.totalChapters} chapters through the EncDec Workbook.\n\nNext step: ${certStatus.nextStepLabel}\n\nOpen the EncDec Workbook module in your EncDec IDS console, complete all 10 chapters, and pass the Capstone Knowledge Check (≥ 80%) to receive your official Certified EncDec IDS SOC Specialist (CE-SOC) credential and verifiable QR certificate.\n\n— EncDec Threat Research Lab`;
+
+      const dispatchResult = await sendEmail({
+        to: user.email,
+        subject,
+        text: bodyText,
+        html: `<p>Hello <strong>${user.name || 'Operator'}</strong>,</p><p>You have completed <strong>${certStatus.chaptersCompleted} of ${certStatus.totalChapters} chapters</strong> in the EncDec Workbook (${certStatus.progressPercent}% complete).</p><p><strong>Next step:</strong> ${certStatus.nextStepLabel}</p><p>Log in to EncDec IDS, open the <strong>EncDec Workbook</strong>, scale through all 10 chapters, and pass the Capstone Knowledge Check (&ge; 80%) to become a <strong>Certified EncDec Analyst (CE-SOC)</strong>.</p>`,
+      }).catch(() => ({ success: false, channel: 'audit_log_only' as const }));
+
+      emailResults.push(dispatchResult.channel);
+
+      if (!dbState.emailLogs) dbState.emailLogs = [];
+      dbState.emailLogs.unshift({
+        id: 'eml_' + Math.random().toString(36).substring(2, 9),
+        timestamp: new Date().toISOString(),
+        recipient: user.email,
+        recipientName: user.name,
+        senderEmail: req.user.email,
+        role: user.role || 'analyst',
+        subject,
+        bodyText,
+        status: dispatchResult.success ? 'sent' : 'queued',
+      });
+      if (dbState.emailLogs.length > 200) dbState.emailLogs.pop();
+    }
+
+    saveDb();
+    addAuditLog(
+      req.user.id,
+      req.user.email,
+      'Notified Uncertified Operators for Workbook Certification',
+      `${uncertifiedTargets.length} uncertified user(s)`,
+      req.ip || '127.0.0.1',
+      'success'
+    );
+
+    res.json({
+      success: true,
+      notifiedCount: uncertifiedTargets.length,
+      channels: Array.from(new Set(emailResults)),
+      message: `Notified ${uncertifiedTargets.length} uncertified operator(s) to complete the EncDec Workbook.`,
     });
   });
 
@@ -442,7 +705,7 @@ export function createApiRouter(
   });
 
   // Audit Logs
-  router.get('/audit-logs', authenticateToken, (req: any, res: Response) => {
+  router.get('/audit-logs', authenticateToken, requireActiveSubscription, (req: any, res: Response) => {
     const allLogs = dbState.auditLogs || [];
     if (req.user.role === 'admin') {
       return res.json(allLogs);
@@ -475,7 +738,7 @@ export function createApiRouter(
   });
 
   // Email Logs
-  router.get('/email-logs', authenticateToken, (req: any, res: Response) => {
+  router.get('/email-logs', authenticateToken, requireActiveSubscription, (req: any, res: Response) => {
     const allEmails = dbState.emailLogs || [];
     if (req.user.role === 'admin') {
       return res.json(allEmails);
@@ -633,7 +896,7 @@ export function createApiRouter(
     });
   };
 
-  router.get('/email-logs/config-status', authenticateToken, (_req: any, res: Response) => {
+  router.get('/email-logs/config-status', authenticateToken, requireActiveSubscription, (_req: any, res: Response) => {
     const gmailApp = getGmailAppConfig();
     const hasSmtp = Boolean(process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS);
     
@@ -645,16 +908,16 @@ export function createApiRouter(
     });
   });
 
-  router.post('/email-logs/verify-gmail', authenticateToken, async (_req: any, res: Response) => {
+  router.post('/email-logs/verify-gmail', authenticateToken, requireActiveSubscription, async (_req: any, res: Response) => {
     const verification = await verifyGmailAppConnection();
     res.json(verification);
   });
 
-  router.post('/email-logs/send', authenticateToken, handleEmailDispatch);
-  router.post('/email-logs/test', authenticateToken, handleEmailDispatch);
+  router.post('/email-logs/send', authenticateToken, requireActiveSubscription, handleEmailDispatch);
+  router.post('/email-logs/test', authenticateToken, requireActiveSubscription, handleEmailDispatch);
 
   // AI Email Generation with multi-model fallback & graceful handling
-  router.post('/email-logs/generate-ai', authenticateToken, async (req: any, res: Response) => {
+  router.post('/email-logs/generate-ai', authenticateToken, requireActiveSubscription, async (req: any, res: Response) => {
     const parsed = aiEmailGenerateSchema.safeParse(req.body);
     if (!parsed.success) {
       const err = parsed.error.issues?.[0]?.message || 'Invalid AI prompt payload';
@@ -921,17 +1184,17 @@ Respond with a JSON object conforming to this schema:
   });
 
   // --- ENTERPRISE INCIDENT MANAGEMENT ---
-  router.get('/incidents', authenticateToken, (_req: any, res: Response) => {
+  router.get('/incidents', authenticateToken, requireActiveSubscription, (_req: any, res: Response) => {
     res.json(dbState.incidents || []);
   });
 
-  router.get('/incidents/:id', authenticateToken, (req: any, res: Response) => {
+  router.get('/incidents/:id', authenticateToken, requireActiveSubscription, (req: any, res: Response) => {
     const inc = (dbState.incidents || []).find(i => i.id === req.params.id);
     if (!inc) return res.status(404).json({ error: 'Incident not found' });
     res.json(inc);
   });
 
-  router.post('/incidents/:id/status', authenticateToken, (req: any, res: Response) => {
+  router.post('/incidents/:id/status', authenticateToken, requireActiveSubscription, (req: any, res: Response) => {
     const inc = (dbState.incidents || []).find(i => i.id === req.params.id);
     if (!inc) return res.status(404).json({ error: 'Incident not found' });
 
@@ -948,7 +1211,7 @@ Respond with a JSON object conforming to this schema:
     res.json(inc);
   });
 
-  router.post('/incidents/:id/notes', authenticateToken, (req: any, res: Response) => {
+  router.post('/incidents/:id/notes', authenticateToken, requireActiveSubscription, (req: any, res: Response) => {
     const inc = (dbState.incidents || []).find(i => i.id === req.params.id);
     if (!inc) return res.status(404).json({ error: 'Incident not found' });
 
@@ -968,11 +1231,11 @@ Respond with a JSON object conforming to this schema:
   });
 
   // --- CONTROLLED ACTIVE RESPONSE ---
-  router.get('/responses', authenticateToken, (_req: any, res: Response) => {
+  router.get('/responses', authenticateToken, requireActiveSubscription, (_req: any, res: Response) => {
     res.json(dbState.activeResponses || []);
   });
 
-  router.post('/responses/:id/approve', authenticateToken, requireRole(['admin', 'operator']), (req: any, res: Response) => {
+  router.post('/responses/:id/approve', authenticateToken, requireActiveSubscription, requireRole(['admin', 'operator']), (req: any, res: Response) => {
     const resp = (dbState.activeResponses || []).find(r => r.id === req.params.id);
     if (!resp) return res.status(404).json({ error: 'Response action not found' });
 
@@ -1001,7 +1264,7 @@ Respond with a JSON object conforming to this schema:
     res.json(resp);
   });
 
-  router.post('/responses/:id/reject', authenticateToken, requireRole(['admin', 'operator']), (req: any, res: Response) => {
+  router.post('/responses/:id/reject', authenticateToken, requireActiveSubscription, requireRole(['admin', 'operator']), (req: any, res: Response) => {
     const resp = (dbState.activeResponses || []).find(r => r.id === req.params.id);
     if (!resp) return res.status(404).json({ error: 'Response action not found' });
 
@@ -1017,14 +1280,19 @@ Respond with a JSON object conforming to this schema:
   });
 
   // --- SENSORS & HEALTH ---
-  router.get('/sensors', authenticateToken, (_req: any, res: Response) => {
+  router.get('/sensors', authenticateToken, requireActiveSubscription, (_req: any, res: Response) => {
     res.json(dbState.sensors || []);
   });
 
   // --- RAW SECURITY EVENTS STREAM (THREAT HUNTING) ---
-  router.get('/security-events', authenticateToken, (req: any, res: Response) => {
+  router.get('/security-events', authenticateToken, requireActiveSubscription, (req: any, res: Response) => {
     const q = (req.query.q as string || '').toLowerCase();
-    let events = dbState.securityEvents || [];
+    const seen = new Set<string>();
+    let events = (dbState.securityEvents || []).filter(e => {
+      if (!e || !e.id || seen.has(e.id)) return false;
+      seen.add(e.id);
+      return true;
+    });
     if (q) {
       events = events.filter(e => 
         (e.sourceIp && e.sourceIp.includes(q)) ||
@@ -1038,7 +1306,7 @@ Respond with a JSON object conforming to this schema:
   });
 
   // --- THREAT INTELLIGENCE ENRICHMENT ---
-  router.post('/enrich-ip', authenticateToken, (req: any, res: Response) => {
+  router.post('/enrich-ip', authenticateToken, requireActiveSubscription, (req: any, res: Response) => {
     const { ip } = req.body;
     if (!ip) return res.status(400).json({ error: 'IP address required' });
 
@@ -1088,7 +1356,7 @@ Respond with a JSON object conforming to this schema:
   });
 
   // --- MITRE ATT&CK COVERAGE MATRIX ---
-  router.get('/mitre-coverage', authenticateToken, (_req: any, res: Response) => {
+  router.get('/mitre-coverage', authenticateToken, requireActiveSubscription, (_req: any, res: Response) => {
     const tactics = [
       { tactic: 'Reconnaissance', techniques: ['T1046', 'T1595', 'T1592'], covered: 2, total: 3 },
       { tactic: 'Initial Access', techniques: ['T1190', 'T1133', 'T1566'], covered: 3, total: 3 },
@@ -1117,7 +1385,15 @@ Respond with a JSON object conforming to this schema:
   });
 
   // --- WORKBOOK READING & CERTIFICATION PROGRESS PERSISTENCE ---
-  router.get('/workbook/progress', authenticateToken, (req: any, res: Response) => {
+  router.get('/workbook/certification-status', authenticateToken, requireActiveSubscription, (req: any, res: Response) => {
+    const certificationStatus = getUserCertificationStatus(req.user.id, req.user.email);
+    res.json({
+      success: true,
+      certificationStatus,
+    });
+  });
+
+  router.get('/workbook/progress', authenticateToken, requireActiveSubscription, (req: any, res: Response) => {
     if (!dbState.workbookProgress) {
       dbState.workbookProgress = [];
     }
@@ -1130,11 +1406,12 @@ Respond with a JSON object conforming to this schema:
     );
 
     res.json({
-      progress: progress || null
+      progress: progress || null,
+      certificationStatus: getUserCertificationStatus(userId, req.user.email),
     });
   });
 
-  router.post('/workbook/progress', authenticateToken, (req: any, res: Response) => {
+  router.post('/workbook/progress', authenticateToken, requireActiveSubscription, (req: any, res: Response) => {
     if (!dbState.workbookProgress) {
       dbState.workbookProgress = [];
     }
@@ -1196,15 +1473,25 @@ Respond with a JSON object conforming to this schema:
       );
     }
 
+    const certificationStatus = getUserCertificationStatus(userId, req.user.email);
+    broadcastWs({
+      type: 'CERTIFICATION_STATUS_UPDATE',
+      payload: {
+        userId,
+        certificationStatus,
+      },
+    });
+
     res.json({
       success: true,
-      progress: record
+      progress: record,
+      certificationStatus,
     });
   });
 
   // --- CERTIFICATE REGISTRATION & QR CODE VERIFICATION ---
   // POST /api/certificates/register (Saves certificate in database and generates high-res verification QR code)
-  router.post('/certificates/register', async (req: any, res: Response) => {
+  router.post('/certificates/register', authenticateToken, requireActiveSubscription, async (req: any, res: Response) => {
     try {
       const {
         certificateId,
@@ -1293,11 +1580,23 @@ Respond with a JSON object conforming to this schema:
         req.user?.role || 'analyst'
       );
 
+      const certificationStatus = getUserCertificationStatus(req.user?.id || 'usr_candidate', certDoc.recipientEmail);
+      if (req.user?.id) {
+        broadcastWs({
+          type: 'CERTIFICATION_STATUS_UPDATE',
+          payload: {
+            userId: req.user.id,
+            certificationStatus,
+          },
+        });
+      }
+
       res.json({
         success: true,
         certificate: certDoc,
         verificationUrl,
-        qrCodeDataUrl
+        qrCodeDataUrl,
+        certificationStatus,
       });
     } catch (err: any) {
       console.error('[Certificate Registration Error]:', err);
@@ -1393,6 +1692,723 @@ Respond with a JSON object conforming to this schema:
       verified: true,
       certificate: cert
     });
+  });
+
+  // =========================================================================
+  // NOWPAYMENTS SUBSCRIPTION & ADMIN PAYWALL GOVERNANCE ROUTES
+  // =========================================================================
+
+  // User Billing Status (exempt from requireActiveSubscription so locked users can subscribe)
+  router.get('/billing/status', authenticateToken, (req: any, res: Response) => {
+    const dbUser = dbState.users.find((u) => u.id === req.user.id) || req.user;
+    const cfg = getNormalizedBillingConfig();
+    const access = evaluateSubscriptionAccess(dbUser, cfg);
+    const userPayments = (dbState.payments || []).filter((p) => p.userId === dbUser.id);
+
+    res.json({
+      billingConfig: cfg,
+      verificationMode: {
+        liveApiConfigured: Boolean((process.env.NOWPAYMENTS_API_KEY || '').trim()),
+        ipnConfigured: Boolean((process.env.NOWPAYMENTS_IPN_SECRET || '').trim()),
+      },
+      userSubscription: {
+        subscriptionStatus: dbUser.subscriptionStatus || (dbUser.role === 'admin' ? 'active' : 'inactive'),
+        subscriptionExpiresAt: dbUser.subscriptionExpiresAt || null,
+        subscriptionGrantedBy: dbUser.subscriptionGrantedBy || null,
+        subscriptionUpdatedAt: dbUser.subscriptionUpdatedAt || null,
+        lastPaymentId: dbUser.lastPaymentId || null,
+      },
+      access,
+      payments: userPayments,
+    });
+  });
+
+  // Initialize NOWPayments checkout session
+  router.post('/billing/checkout/init', authenticateToken, (req: any, res: Response) => {
+    const dbUser = dbState.users.find((u) => u.id === req.user.id) || req.user;
+    const orderId = `ENCDEC-${dbUser.id}-${Date.now()}`;
+    const cfg = getNormalizedBillingConfig();
+
+    addAuditLog(
+      dbUser.id,
+      dbUser.email,
+      'Initiated NOWPayments Checkout ($500 / 3 Months)',
+      `Invoice ${cfg.nowPaymentsInvoiceId} (${orderId})`,
+      req.ip || '127.0.0.1',
+      'success',
+      dbUser.role
+    );
+
+    res.json({
+      success: true,
+      paymentUrl: NOWPAYMENTS_PAYMENT_URL,
+      invoiceId: NOWPAYMENTS_INVOICE_ID,
+      amountUsd: SUBSCRIPTION_PRICE_USD,
+      billingCycleMonths: SUBSCRIPTION_CYCLE_MONTHS,
+      billingCycleDays: SUBSCRIPTION_CYCLE_DAYS,
+      orderId,
+    });
+  });
+
+  // Submit / verify NOWPayments payment reference
+  router.post('/billing/verify-payment', authenticateToken, async (req: any, res: Response) => {
+    const parsed = verifyPaymentSubmissionSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.issues?.[0]?.message || 'Invalid payment reference.' });
+    }
+
+    const dbUser = dbState.users.find((u) => u.id === req.user.id);
+    if (!dbUser) {
+      return res.status(404).json({ error: 'Operator account not found.' });
+    }
+
+    const { paymentReference, notes } = parsed.data;
+    const cleanRef = paymentReference.trim();
+    const nowIso = new Date().toISOString();
+
+    if (!Array.isArray(dbState.payments)) {
+      dbState.payments = [];
+    }
+
+    // 1. Replay/Duplicate check — never allow an already-confirmed or another user's pending payment reference to be reused
+    const conflicting = findConflictingPaymentRecord(dbState.payments, cleanRef, dbUser.id);
+    if (conflicting) {
+      return res.status(409).json({
+        verified: false,
+        error: 'This NOWPayments payment reference has already been verified or claimed.',
+      });
+    }
+
+    // 2. Live verification against NOWPayments API when NOWPAYMENTS_API_KEY is configured
+    const nowPaymentsApiKey = (process.env.NOWPAYMENTS_API_KEY || '').trim();
+    let observedNpStatus: string | undefined;
+
+    if (nowPaymentsApiKey) {
+      const npResult = await verifyPaymentWithNowPaymentsApi(cleanRef, nowPaymentsApiKey);
+      observedNpStatus = npResult.paymentStatus;
+
+      if (npResult.outcome === 'verified' && npResult.paymentData) {
+        const canonicalPaymentId = npResult.paymentData.payment_id
+          ? String(npResult.paymentData.payment_id)
+          : cleanRef;
+
+        const canonicalConflict = findConflictingPaymentRecord(dbState.payments, canonicalPaymentId, dbUser.id);
+        if (canonicalConflict) {
+          return res.status(409).json({
+            verified: false,
+            error: `NOWPayments Payment ID ${canonicalPaymentId} has already been redeemed.`,
+          });
+        }
+
+        // Mark any earlier pending entry by this user for this ref as superseded/confirmed cleanly
+        dbState.payments = dbState.payments.filter(
+          (p) =>
+            !(
+              p.userId === dbUser.id &&
+              p.status === 'pending_verification' &&
+              ((p.paymentReference || '').toLowerCase() === cleanRef.toLowerCase() ||
+                (p.paymentReference || '').toLowerCase() === canonicalPaymentId.toLowerCase())
+            )
+        );
+
+        const paidAmt = Number(npResult.paymentData.actually_paid || npResult.paymentData.pay_amount || 0);
+        const paymentRecord = grantSubscriptionDaysToUser(
+          dbUser,
+          SUBSCRIPTION_CYCLE_MONTHS,
+          'nowpayments',
+          'nowpayments-api',
+          canonicalPaymentId,
+          notes ||
+            `Verified in NOWPayments (${npResult.paymentStatus?.toUpperCase()} — ${
+              npResult.paymentData.pay_currency ? `${paidAmt} ${String(npResult.paymentData.pay_currency).toUpperCase()}` : '$500 USD'
+            })`,
+          {
+            verifiedByNowPayments: true,
+            nowPaymentsStatus: npResult.paymentStatus,
+            payCurrency: npResult.paymentData.pay_currency ? String(npResult.paymentData.pay_currency).toUpperCase() : undefined,
+            payAmount: Number.isFinite(paidAmt) && paidAmt > 0 ? paidAmt : undefined,
+          }
+        );
+
+        saveDb();
+        addAuditLog(
+          dbUser.id,
+          dbUser.email,
+          'NOWPayments Subscription Verified & Confirmed',
+          `Payment ${canonicalPaymentId} ($${SUBSCRIPTION_PRICE_USD} / 3 Mo)`,
+          req.ip || '127.0.0.1',
+          'success',
+          dbUser.role
+        );
+        broadcastWs({ type: 'BILLING_UPDATE', payload: { userId: dbUser.id, billingConfig: getNormalizedBillingConfig() } });
+
+        return res.json({
+          verified: true,
+          verifiedByNowPayments: true,
+          status: 'confirmed',
+          nowPaymentsStatus: npResult.paymentStatus,
+          paymentRecord,
+          access: evaluateSubscriptionAccess(dbUser, getNormalizedBillingConfig()),
+          message: 'Payment successful! Verified in NOWPayments — your 3-month dashboard access is now active.',
+        });
+      }
+
+      if (npResult.outcome === 'not_found' || npResult.outcome === 'rejected') {
+        addAuditLog(
+          dbUser.id,
+          dbUser.email,
+          'NOWPayments Verification Rejected',
+          `Ref: ${cleanRef} (${npResult.reason})`,
+          req.ip || '127.0.0.1',
+          'failure',
+          dbUser.role
+        );
+        return res.status(400).json({
+          verified: false,
+          verifiedByNowPayments: false,
+          status: 'rejected',
+          nowPaymentsStatus: npResult.paymentStatus,
+          error: npResult.reason,
+        });
+      }
+    }
+
+    // 3. Not yet confirmed by NOWPayments (still confirming/waiting, API key unset, or API unreachable) — NEVER claim payment successful!
+    const existingPending = dbState.payments.find(
+      (p) =>
+        p.userId === dbUser.id &&
+        p.status === 'pending_verification' &&
+        (p.paymentReference || '').toLowerCase() === cleanRef.toLowerCase()
+    );
+
+    if (existingPending) {
+      existingPending.notes = notes || existingPending.notes;
+      existingPending.verifiedByNowPayments = false;
+      existingPending.nowPaymentsStatus = observedNpStatus || existingPending.nowPaymentsStatus || 'awaiting_verification';
+      saveDb();
+      return res.json({
+        verified: false,
+        verifiedByNowPayments: false,
+        status: 'pending_verification',
+        nowPaymentsStatus: existingPending.nowPaymentsStatus,
+        paymentRecord: existingPending,
+        access: evaluateSubscriptionAccess(dbUser, getNormalizedBillingConfig()),
+        message: observedNpStatus
+          ? `NOWPayments status is "${observedNpStatus}". Payment is NOT verified complete yet — dashboard remains locked until confirmed.`
+          : 'Your reference is still awaiting NOWPayments verification or administrator approval. Payment is not yet confirmed.',
+      });
+    }
+
+    const pendingRecord: PaymentRecord = {
+      id: 'pay_' + crypto.randomBytes(6).toString('hex'),
+      userId: dbUser.id,
+      userEmail: dbUser.email,
+      userName: dbUser.name,
+      amountUsd: SUBSCRIPTION_PRICE_USD,
+      billingCycleMonths: SUBSCRIPTION_CYCLE_MONTHS,
+      provider: 'nowpayments',
+      invoiceId: NOWPAYMENTS_INVOICE_ID,
+      paymentReference: cleanRef,
+      status: 'pending_verification',
+      verifiedByNowPayments: false,
+      nowPaymentsStatus: observedNpStatus || 'awaiting_verification',
+      createdAt: nowIso,
+      notes: notes || 'Submitted by operator — awaiting NOWPayments verification',
+    };
+
+    dbState.payments.unshift(pendingRecord);
+    dbUser.lastPaymentId = pendingRecord.id;
+    saveDb();
+
+    addAuditLog(
+      dbUser.id,
+      dbUser.email,
+      'Submitted NOWPayments Reference (Unverified)',
+      `Ref: ${cleanRef} ($${SUBSCRIPTION_PRICE_USD} / 3 Mo)`,
+      req.ip || '127.0.0.1',
+      'success',
+      dbUser.role
+    );
+    broadcastWs({ type: 'BILLING_UPDATE', payload: { userId: dbUser.id, pendingPaymentId: pendingRecord.id } });
+
+    res.json({
+      verified: false,
+      verifiedByNowPayments: false,
+      status: 'pending_verification',
+      nowPaymentsStatus: pendingRecord.nowPaymentsStatus,
+      paymentRecord: pendingRecord,
+      access: evaluateSubscriptionAccess(dbUser, getNormalizedBillingConfig()),
+      message: observedNpStatus
+        ? `NOWPayments reports status "${observedNpStatus}". Payment is not yet complete — access unlocks only after NOWPayments confirms the payment.`
+        : 'Payment reference recorded (unverified). Dashboard stays locked until verified in NOWPayments or approved by an administrator.',
+    });
+  });
+
+  // Public NOWPayments IPN Webhook (requires valid HMAC-SHA512 signature or live NOWPayments API confirmation)
+  router.post('/billing/nowpayments/ipn', async (req: Request, res: Response) => {
+    const ipnSecret = (process.env.NOWPAYMENTS_IPN_SECRET || '').trim();
+    const nowPaymentsApiKey = (process.env.NOWPAYMENTS_API_KEY || '').trim();
+    const payload = req.body || {};
+
+    if (!ipnSecret && !nowPaymentsApiKey) {
+      return res.status(503).json({
+        error: 'NOWPayments webhook verification is not configured (missing NOWPAYMENTS_IPN_SECRET and NOWPAYMENTS_API_KEY).',
+      });
+    }
+
+    if (ipnSecret) {
+      const signature = String(req.headers['x-nowpayments-sig'] || '');
+      if (!verifyNowPaymentsIpnSignature(payload, signature, ipnSecret)) {
+        return res.status(403).json({ error: 'Invalid NOWPayments IPN signature.' });
+      }
+    }
+
+    const paymentIdStr = payload.payment_id ? String(payload.payment_id).trim() : '';
+    let verifiedPayload = payload;
+
+    // If IPN secret wasn't configured (or to double-check via NOWPayments API), query NOWPayments directly
+    if (!ipnSecret && nowPaymentsApiKey) {
+      if (!paymentIdStr) {
+        return res.status(400).json({ error: 'payment_id is required for NOWPayments API verification.' });
+      }
+      const apiCheck = await verifyPaymentWithNowPaymentsApi(paymentIdStr, nowPaymentsApiKey);
+      if (apiCheck.outcome !== 'verified' || !apiCheck.paymentData) {
+        return res.status(apiCheck.outcome === 'pending' ? 202 : 403).json({
+          received: true,
+          verified: false,
+          reason: apiCheck.reason,
+        });
+      }
+      verifiedPayload = apiCheck.paymentData;
+    }
+
+    const validation = validateNowPaymentsPayload(verifiedPayload);
+    if (validation.outcome !== 'verified') {
+      return res.status(validation.outcome === 'pending' ? 200 : 400).json({
+        received: true,
+        verified: false,
+        status: validation.paymentStatus,
+        reason: validation.reason,
+      });
+    }
+
+    const canonicalId = verifiedPayload.payment_id ? String(verifiedPayload.payment_id).trim() : paymentIdStr;
+    const orderIdStr = verifiedPayload.order_id ? String(verifiedPayload.order_id) : '';
+    const payerEmail = verifiedPayload.payer_email ? String(verifiedPayload.payer_email).toLowerCase() : '';
+
+    // Prevent double-granting the same NOWPayments payment_id via replay IPN
+    if (canonicalId && Array.isArray(dbState.payments)) {
+      const alreadyConfirmed = dbState.payments.find(
+        (p) =>
+          (p.paymentReference || '').trim().toLowerCase() === canonicalId.toLowerCase() &&
+          (p.status === 'confirmed' || p.status === 'granted_by_admin')
+      );
+      if (alreadyConfirmed) {
+        return res.json({ received: true, alreadyProcessed: true });
+      }
+    }
+
+    let targetUser =
+      (payerEmail ? dbState.users.find((u) => (u.email || '').toLowerCase() === payerEmail) : undefined) ||
+      (orderIdStr ? dbState.users.find((u) => orderIdStr.includes(u.id)) : undefined);
+
+    if (!targetUser && canonicalId && Array.isArray(dbState.payments)) {
+      const matchedPayment = dbState.payments.find(
+        (p) => (p.paymentReference || '').trim().toLowerCase() === canonicalId.toLowerCase()
+      );
+      if (matchedPayment) {
+        targetUser = dbState.users.find((u) => u.id === matchedPayment.userId);
+      }
+    }
+
+    if (targetUser) {
+      const paidAmt = Number(verifiedPayload.actually_paid || verifiedPayload.pay_amount || 0);
+      const record = grantSubscriptionDaysToUser(
+        targetUser,
+        SUBSCRIPTION_CYCLE_MONTHS,
+        'nowpayments',
+        'nowpayments-ipn',
+        canonicalId || orderIdStr || undefined,
+        `Verified via NOWPayments IPN (${validation.paymentStatus?.toUpperCase()})`,
+        {
+          verifiedByNowPayments: true,
+          nowPaymentsStatus: validation.paymentStatus,
+          payCurrency: verifiedPayload.pay_currency ? String(verifiedPayload.pay_currency).toUpperCase() : undefined,
+          payAmount: Number.isFinite(paidAmt) && paidAmt > 0 ? paidAmt : undefined,
+        }
+      );
+
+      if (Array.isArray(dbState.payments)) {
+        dbState.payments = dbState.payments.filter(
+          (p) =>
+            !(
+              p.userId === targetUser!.id &&
+              p.status === 'pending_verification' &&
+              (!canonicalId || (p.paymentReference || '').trim().toLowerCase() === canonicalId.toLowerCase())
+            )
+        );
+      }
+
+      saveDb();
+      addAuditLog(
+        targetUser.id,
+        targetUser.email,
+        'NOWPayments IPN Verified Subscription',
+        `Payment ${record.paymentReference || record.id}`,
+        req.ip || '127.0.0.1',
+        'success',
+        targetUser.role
+      );
+      broadcastWs({ type: 'BILLING_UPDATE', payload: { userId: targetUser.id, billingConfig: getNormalizedBillingConfig() } });
+    }
+
+    res.json({ received: true, verified: true });
+  });
+
+  // --- ADMIN BILLING & SUBSCRIPTION GOVERNANCE ROUTES ---
+
+  router.get('/admin/billing', authenticateToken, requireRole(['admin']), (req: any, res: Response) => {
+    const secretHeader = req.headers['x-secret-passkey'] || req.query.passkey;
+    if (secretHeader !== 'VIGIL_ADMIN_77') return res.status(403).json({ error: 'Gateway Passkey Invalid.' });
+
+    const cfg = getNormalizedBillingConfig();
+    res.json({
+      billingConfig: cfg,
+      payments: dbState.payments || [],
+      users: dbState.users.map((u) => ({
+        id: u.id,
+        email: u.email,
+        name: u.name,
+        role: u.role,
+        status: u.status,
+        mfaEnabled: u.mfaEnabled,
+        subscriptionStatus: u.subscriptionStatus || (u.role === 'admin' ? 'active' : 'inactive'),
+        subscriptionExpiresAt: u.subscriptionExpiresAt || null,
+        subscriptionGrantedBy: u.subscriptionGrantedBy || null,
+        subscriptionUpdatedAt: u.subscriptionUpdatedAt || null,
+        lastPaymentId: u.lastPaymentId || null,
+        access: evaluateSubscriptionAccess(u, cfg),
+      })),
+    });
+  });
+
+  router.post('/admin/billing/toggle-paywall', authenticateToken, requireRole(['admin']), (req: any, res: Response) => {
+    const secretHeader = req.headers['x-secret-passkey'] || req.query.passkey;
+    if (secretHeader !== 'VIGIL_ADMIN_77') return res.status(403).json({ error: 'Gateway Passkey Invalid.' });
+
+    const parsed = adminBillingToggleSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.issues?.[0]?.message || 'Invalid paywall toggle payload.' });
+    }
+
+    const cfg = getNormalizedBillingConfig();
+    cfg.subscriptionRequired = parsed.data.subscriptionRequired;
+    cfg.updatedAt = new Date().toISOString();
+    cfg.updatedBy = req.user.email;
+    dbState.billingConfig = cfg;
+    saveDb();
+
+    addAuditLog(
+      req.user.id,
+      req.user.email,
+      `${cfg.subscriptionRequired ? 'Enabled' : 'Disabled'} Global Subscription Paywall`,
+      `NOWPayments ($${SUBSCRIPTION_PRICE_USD} / 3 Mo)`,
+      req.ip || '127.0.0.1',
+      'success',
+      req.user.role
+    );
+    broadcastWs({ type: 'BILLING_UPDATE', payload: { billingConfig: cfg } });
+    res.json({ success: true, billingConfig: cfg });
+  });
+
+  // Admin Telemetry direct toggle for EncDec IDS Subscription ON / OFF (authenticated admin role)
+  router.post('/admin/telemetry/subscription', authenticateToken, requireRole(['admin']), (req: any, res: Response) => {
+    const parsed = adminBillingToggleSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.issues?.[0]?.message || 'Invalid subscription toggle payload.' });
+    }
+
+    const cfg = getNormalizedBillingConfig();
+    cfg.subscriptionRequired = parsed.data.subscriptionRequired;
+    cfg.updatedAt = new Date().toISOString();
+    cfg.updatedBy = req.user.email;
+    dbState.billingConfig = cfg;
+    saveDb();
+
+    addAuditLog(
+      req.user.id,
+      req.user.email,
+      cfg.subscriptionRequired
+        ? 'Enabled EncDec IDS Subscription (Licensed Users Only)'
+        : 'Disabled EncDec IDS Subscription (Free Access for All Users)',
+      `Admin Telemetry Control ($${SUBSCRIPTION_PRICE_USD} / 3 Mo)`,
+      req.ip || '127.0.0.1',
+      'success',
+      req.user.role
+    );
+    broadcastWs({ type: 'BILLING_UPDATE', payload: { billingConfig: cfg } });
+    res.json({ success: true, billingConfig: cfg });
+  });
+
+  router.post('/admin/billing/free-access', authenticateToken, requireRole(['admin']), (req: any, res: Response) => {
+    const secretHeader = req.headers['x-secret-passkey'] || req.query.passkey;
+    if (secretHeader !== 'VIGIL_ADMIN_77') return res.status(403).json({ error: 'Gateway Passkey Invalid.' });
+
+    const parsed = adminFreeAccessSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.issues?.[0]?.message || 'Invalid free access configuration.' });
+    }
+
+    const cfg = getNormalizedBillingConfig();
+    const { enabled, durationValue, durationUnit, durationLabel } = parsed.data;
+    const nowMs = Date.now();
+
+    if (enabled) {
+      const value = durationValue && durationValue > 0 ? durationValue : 24;
+      const unit = durationUnit || 'hours';
+      const unitMsMap: Record<string, number> = {
+        minutes: 60 * 1000,
+        hours: 60 * 60 * 1000,
+        days: 24 * 60 * 60 * 1000,
+        months: 30 * 24 * 60 * 60 * 1000,
+      };
+      const durationMs = value * (unitMsMap[unit] || unitMsMap.hours);
+      const expiresAt = new Date(nowMs + durationMs).toISOString();
+      const label = durationLabel || `${value} ${unit}`;
+
+      cfg.freeAccessActive = true;
+      cfg.freeAccessExpiresAt = expiresAt;
+      cfg.freeAccessDurationLabel = label;
+      cfg.updatedAt = new Date(nowMs).toISOString();
+      cfg.updatedBy = req.user.email;
+      dbState.billingConfig = cfg;
+      saveDb();
+
+      addAuditLog(
+        req.user.id,
+        req.user.email,
+        'Activated Timed Global Free Access',
+        `Duration: ${label} (until ${expiresAt})`,
+        req.ip || '127.0.0.1',
+        'success',
+        req.user.role
+      );
+      broadcastWs({ type: 'BILLING_UPDATE', payload: { billingConfig: cfg } });
+      return res.json({ success: true, billingConfig: cfg });
+    }
+
+    cfg.freeAccessActive = false;
+    cfg.freeAccessExpiresAt = null;
+    cfg.freeAccessDurationLabel = undefined;
+    cfg.updatedAt = new Date(nowMs).toISOString();
+    cfg.updatedBy = req.user.email;
+    dbState.billingConfig = cfg;
+    saveDb();
+
+    addAuditLog(
+      req.user.id,
+      req.user.email,
+      'Ended Timed Global Free Access',
+      'Subscription Paywall Restored',
+      req.ip || '127.0.0.1',
+      'success',
+      req.user.role
+    );
+    broadcastWs({ type: 'BILLING_UPDATE', payload: { billingConfig: cfg } });
+    res.json({ success: true, billingConfig: cfg });
+  });
+
+  router.post('/admin/users/:id/subscription/grant', authenticateToken, requireRole(['admin']), (req: any, res: Response) => {
+    const secretHeader = req.headers['x-secret-passkey'] || req.query.passkey;
+    if (secretHeader !== 'VIGIL_ADMIN_77') return res.status(403).json({ error: 'Gateway Passkey Invalid.' });
+
+    const parsed = adminGrantSubscriptionSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.issues?.[0]?.message || 'Invalid subscription grant payload.' });
+    }
+
+    const targetUser = dbState.users.find((u) => u.id === req.params.id);
+    if (!targetUser) return res.status(404).json({ error: 'Operator record not found.' });
+
+    const months = parsed.data.months || SUBSCRIPTION_CYCLE_MONTHS;
+    const paymentRecord = grantSubscriptionDaysToUser(
+      targetUser,
+      months,
+      'admin',
+      req.user.email,
+      undefined,
+      parsed.data.notes
+    );
+
+    if (Array.isArray(dbState.payments)) {
+      dbState.payments.forEach((p) => {
+        if (p.userId === targetUser.id && p.status === 'pending_verification') {
+          p.status = 'confirmed';
+          p.confirmedAt = new Date().toISOString();
+          p.confirmedBy = req.user.email;
+        }
+      });
+    }
+
+    saveDb();
+    addAuditLog(
+      req.user.id,
+      req.user.email,
+      `Granted ${months}-Month Subscription`,
+      targetUser.email,
+      req.ip || '127.0.0.1',
+      'success',
+      req.user.role
+    );
+    broadcastWs({ type: 'BILLING_UPDATE', payload: { userId: targetUser.id, billingConfig: getNormalizedBillingConfig() } });
+
+    res.json({
+      success: true,
+      user: {
+        id: targetUser.id,
+        email: targetUser.email,
+        name: targetUser.name,
+        role: targetUser.role,
+        status: targetUser.status,
+        subscriptionStatus: targetUser.subscriptionStatus,
+        subscriptionExpiresAt: targetUser.subscriptionExpiresAt,
+        subscriptionGrantedBy: targetUser.subscriptionGrantedBy,
+        subscriptionUpdatedAt: targetUser.subscriptionUpdatedAt,
+      },
+      paymentRecord,
+    });
+  });
+
+  router.post('/admin/users/:id/subscription/revoke', authenticateToken, requireRole(['admin']), (req: any, res: Response) => {
+    const secretHeader = req.headers['x-secret-passkey'] || req.query.passkey;
+    if (secretHeader !== 'VIGIL_ADMIN_77') return res.status(403).json({ error: 'Gateway Passkey Invalid.' });
+
+    const targetUser = dbState.users.find((u) => u.id === req.params.id);
+    if (!targetUser) return res.status(404).json({ error: 'Operator record not found.' });
+
+    const nowIso = new Date().toISOString();
+    targetUser.subscriptionStatus = 'revoked';
+    targetUser.subscriptionExpiresAt = nowIso;
+    targetUser.subscriptionGrantedBy = req.user.email;
+    targetUser.subscriptionUpdatedAt = nowIso;
+
+    if (!Array.isArray(dbState.payments)) {
+      dbState.payments = [];
+    }
+    const revokeRecord: PaymentRecord = {
+      id: 'pay_' + crypto.randomBytes(6).toString('hex'),
+      userId: targetUser.id,
+      userEmail: targetUser.email,
+      userName: targetUser.name,
+      amountUsd: 0,
+      billingCycleMonths: 0,
+      provider: 'admin',
+      invoiceId: NOWPAYMENTS_INVOICE_ID,
+      status: 'revoked',
+      createdAt: nowIso,
+      confirmedAt: nowIso,
+      confirmedBy: req.user.email,
+      notes: 'Subscription revoked by administrator',
+    };
+    dbState.payments.unshift(revokeRecord);
+    saveDb();
+
+    addAuditLog(
+      req.user.id,
+      req.user.email,
+      'Revoked User Subscription',
+      targetUser.email,
+      req.ip || '127.0.0.1',
+      'success',
+      req.user.role
+    );
+    broadcastWs({ type: 'BILLING_UPDATE', payload: { userId: targetUser.id, billingConfig: getNormalizedBillingConfig() } });
+
+    res.json({
+      success: true,
+      user: {
+        id: targetUser.id,
+        email: targetUser.email,
+        name: targetUser.name,
+        role: targetUser.role,
+        status: targetUser.status,
+        subscriptionStatus: targetUser.subscriptionStatus,
+        subscriptionExpiresAt: targetUser.subscriptionExpiresAt,
+        subscriptionGrantedBy: targetUser.subscriptionGrantedBy,
+        subscriptionUpdatedAt: targetUser.subscriptionUpdatedAt,
+      },
+    });
+  });
+
+  router.post('/admin/payments/:paymentId/approve', authenticateToken, requireRole(['admin']), (req: any, res: Response) => {
+    const secretHeader = req.headers['x-secret-passkey'] || req.query.passkey;
+    if (secretHeader !== 'VIGIL_ADMIN_77') return res.status(403).json({ error: 'Gateway Passkey Invalid.' });
+
+    const payment = (dbState.payments || []).find((p) => p.id === req.params.paymentId);
+    if (!payment) return res.status(404).json({ error: 'Payment record not found.' });
+
+    const targetUser = dbState.users.find((u) => u.id === payment.userId);
+    if (!targetUser) return res.status(404).json({ error: 'Associated operator account not found.' });
+
+    const nowIso = new Date().toISOString();
+    payment.status = 'confirmed';
+    payment.confirmedAt = nowIso;
+    payment.confirmedBy = req.user.email;
+
+    const months = payment.billingCycleMonths || SUBSCRIPTION_CYCLE_MONTHS;
+    const nowMs = Date.now();
+    const existingExpMs = targetUser.subscriptionExpiresAt ? Date.parse(targetUser.subscriptionExpiresAt) : NaN;
+    const baseMs = !Number.isNaN(existingExpMs) && existingExpMs > nowMs ? existingExpMs : nowMs;
+    const newExpiresAt = new Date(baseMs + months * 30 * 24 * 60 * 60 * 1000).toISOString();
+
+    targetUser.subscriptionStatus = 'active';
+    targetUser.subscriptionExpiresAt = newExpiresAt;
+    targetUser.subscriptionGrantedBy = req.user.email;
+    targetUser.subscriptionUpdatedAt = nowIso;
+    targetUser.lastPaymentId = payment.id;
+
+    saveDb();
+    addAuditLog(
+      req.user.id,
+      req.user.email,
+      'Approved NOWPayments Subscription',
+      `${targetUser.email} (Ref: ${payment.paymentReference || payment.id})`,
+      req.ip || '127.0.0.1',
+      'success',
+      req.user.role
+    );
+    broadcastWs({ type: 'BILLING_UPDATE', payload: { userId: targetUser.id, billingConfig: getNormalizedBillingConfig() } });
+
+    res.json({ success: true, payment, subscriptionExpiresAt: newExpiresAt });
+  });
+
+  router.post('/admin/payments/:paymentId/reject', authenticateToken, requireRole(['admin']), (req: any, res: Response) => {
+    const secretHeader = req.headers['x-secret-passkey'] || req.query.passkey;
+    if (secretHeader !== 'VIGIL_ADMIN_77') return res.status(403).json({ error: 'Gateway Passkey Invalid.' });
+
+    const payment = (dbState.payments || []).find((p) => p.id === req.params.paymentId);
+    if (!payment) return res.status(404).json({ error: 'Payment record not found.' });
+
+    payment.status = 'rejected';
+    payment.confirmedAt = new Date().toISOString();
+    payment.confirmedBy = req.user.email;
+    if (req.body?.reason) {
+      payment.notes = String(req.body.reason);
+    }
+
+    saveDb();
+    addAuditLog(
+      req.user.id,
+      req.user.email,
+      'Rejected NOWPayments Submission',
+      `${payment.userEmail} (Ref: ${payment.paymentReference || payment.id})`,
+      req.ip || '127.0.0.1',
+      'success',
+      req.user.role
+    );
+    broadcastWs({ type: 'BILLING_UPDATE', payload: { userId: payment.userId, billingConfig: getNormalizedBillingConfig() } });
+
+    res.json({ success: true, payment });
   });
 
   return router;

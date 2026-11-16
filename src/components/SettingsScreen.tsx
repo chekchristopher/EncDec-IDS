@@ -8,18 +8,22 @@ import {
   Settings, Key, ShieldCheck, KeyRound, Eye, EyeOff, 
   Trash2, Plus, RefreshCw, Clipboard, Check, UserPen,
   MapPin, CreditCard, ExternalLink, Globe, CheckCircle2,
-  AlertTriangle, Sparkles, Server
+  AlertTriangle, Sparkles, Server, Lock, Unlock
 } from 'lucide-react';
 import { apiRequest } from '../api.js';
 import { APIKey } from '../types.js';
 import ThemeToggle from './ThemeToggle.jsx';
+import { validateSafeBoxPasskey } from '../utils/safeBoxToken.js';
 
 interface SettingsScreenProps {
   currentUser: { 
     id: string; 
     email: string; 
     name: string; 
-    mfaEnabled: boolean; 
+    mfaEnabled: boolean;
+    safeBoxEnabled?: boolean;
+    hasSafeBoxPasskey?: boolean;
+    safeBoxUpdatedAt?: string;
     avatarUrl?: string; 
     lastNameChangeDate?: string;
     customMapsApiKey?: string;
@@ -32,6 +36,11 @@ interface SettingsScreenProps {
 export default function SettingsScreen({ currentUser, onProfileUpdate, onOpenProfileModal }: SettingsScreenProps) {
   const [mfaEnabled, setMfaEnabled] = useState(currentUser?.mfaEnabled || false);
   const [loadingMfa, setLoadingMfa] = useState(false);
+  const [safeBoxEnabled, setSafeBoxEnabled] = useState(Boolean(currentUser?.safeBoxEnabled));
+  const [safeBoxPasskeyInput, setSafeBoxPasskeyInput] = useState('');
+  const [showSafeBoxPasskey, setShowSafeBoxPasskey] = useState(false);
+  const [loadingSafeBoxToggle, setLoadingSafeBoxToggle] = useState(false);
+  const [savingSafeBoxPasskey, setSavingSafeBoxPasskey] = useState(false);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
@@ -42,12 +51,16 @@ export default function SettingsScreen({ currentUser, onProfileUpdate, onOpenPro
   const [isTestingMapsKey, setIsTestingMapsKey] = useState(false);
   const [mapsKeyTestResult, setMapsKeyTestResult] = useState<{ valid: boolean; message: string } | null>(null);
 
-  // Synchronize input when currentUser updates
+  // Synchronize input and security flags when currentUser updates
   useEffect(() => {
-    if (currentUser?.customMapsApiKey) {
-      setMapsApiKeyInput(currentUser.customMapsApiKey);
+    if (currentUser?.customMapsApiKey !== undefined) {
+      setMapsApiKeyInput(currentUser.customMapsApiKey || '');
     }
-  }, [currentUser?.customMapsApiKey]);
+    if (currentUser) {
+      setMfaEnabled(Boolean(currentUser.mfaEnabled));
+      setSafeBoxEnabled(Boolean(currentUser.safeBoxEnabled));
+    }
+  }, [currentUser]);
 
   // API Keys lists state
   const [apiKeys, setApiKeys] = useState<APIKey[]>([]);
@@ -86,7 +99,7 @@ export default function SettingsScreen({ currentUser, onProfileUpdate, onOpenPro
 
     try {
       const nextState = !mfaEnabled;
-      const response = await apiRequest('/api/profile/mfa', 'POST', { enabled: nextState });
+      const response = await apiRequest('/api/profile/mfa', 'POST', { mfaEnabled: nextState });
       setMfaEnabled(response.mfaEnabled);
       setSuccessMsg(`Multi-factor authentication (MFA) successfully ${response.mfaEnabled ? 'ENABLED' : 'DISABLED'} for this operator profile.`);
       onProfileUpdate();
@@ -94,6 +107,57 @@ export default function SettingsScreen({ currentUser, onProfileUpdate, onOpenPro
       setErrorMsg(err.message || 'Failed to modify MFA profile.');
     } finally {
       setLoadingMfa(false);
+    }
+  };
+
+  const safeBoxValidation = validateSafeBoxPasskey(safeBoxPasskeyInput);
+  const quickSigns = ['!', '@', '#', '$', '%', '*'];
+  const quickEmojis = ['🔐', '🛡️', '🔥', '⚡', '💎', '🚀'];
+
+  const handleSafeBoxToggle = async () => {
+    setLoadingSafeBoxToggle(true);
+    setErrorMsg(null);
+    setSuccessMsg(null);
+
+    try {
+      const nextState = !safeBoxEnabled;
+      const response = await apiRequest('/api/profile/safebox/toggle', 'POST', { enabled: nextState });
+      setSafeBoxEnabled(Boolean(response.safeBoxEnabled));
+      if (currentUser?.email) {
+        localStorage.setItem('encdec_last_email', currentUser.email);
+      }
+      setSuccessMsg(`Admin Safe Box successfully turned ${response.safeBoxEnabled ? 'ON' : 'OFF'} (independent of MFA).`);
+      onProfileUpdate();
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Failed to toggle Admin Safe Box.');
+    } finally {
+      setLoadingSafeBoxToggle(false);
+    }
+  };
+
+  const handleSaveSafeBoxPasskey = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErrorMsg(null);
+    setSuccessMsg(null);
+
+    if (!safeBoxValidation.valid) {
+      setErrorMsg(safeBoxValidation.errors.join(' '));
+      return;
+    }
+
+    setSavingSafeBoxPasskey(true);
+    try {
+      const response = await apiRequest('/api/profile/safebox/passkey', 'POST', { passkey: safeBoxPasskeyInput });
+      if (currentUser?.email) {
+        localStorage.setItem('encdec_last_email', currentUser.email);
+      }
+      setSafeBoxPasskeyInput('');
+      setSuccessMsg(response.message || 'Admin Safe Box 6-token mixed passkey updated successfully.');
+      onProfileUpdate();
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Failed to save Admin Safe Box passkey.');
+    } finally {
+      setSavingSafeBoxPasskey(false);
     }
   };
 
@@ -293,6 +357,154 @@ export default function SettingsScreen({ currentUser, onProfileUpdate, onOpenPro
           </div>
         </div>
 
+        {/* Admin Safe Box Card (Separate from MFA) */}
+        <div className="bg-slate-900 border border-white/5 rounded-lg p-6 space-y-4" id="settings-safebox-card">
+          <div className="flex items-center justify-between border-b border-white/5 pb-3">
+            <div className="flex items-center gap-2">
+              {safeBoxEnabled ? (
+                <Unlock className="w-4 h-4 text-amber-400" />
+              ) : (
+                <Lock className="w-4 h-4 text-slate-400" />
+              )}
+              <h3 className="text-sm font-bold text-white uppercase tracking-wide">Admin Safe Box</h3>
+            </div>
+            <span
+              className={`text-[9px] font-bold px-2 py-0.5 rounded uppercase ${
+                safeBoxEnabled
+                  ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/25'
+                  : 'bg-slate-800 text-slate-400 border border-white/10'
+              }`}
+              id="safebox-status-badge"
+            >
+              {safeBoxEnabled ? 'ON' : 'OFF'}
+            </span>
+          </div>
+
+          <p className="text-[11px] text-slate-400 leading-relaxed">
+            Separate credential vault on the login screen with its own 6-token mixed passkey—completely independent from your login MFA code.
+          </p>
+
+          <div className="flex items-center justify-between text-[10px] bg-slate-950 px-3 py-2 rounded border border-white/5">
+            <span className="text-slate-400 uppercase">Vault Passkey Status</span>
+            <span className={currentUser?.hasSafeBoxPasskey ? 'text-emerald-400 font-bold' : 'text-amber-400 font-bold'}>
+              {currentUser?.hasSafeBoxPasskey ? 'Passkey Configured' : 'Not Configured'}
+            </span>
+          </div>
+
+          <button
+            type="button"
+            onClick={handleSafeBoxToggle}
+            disabled={loadingSafeBoxToggle}
+            className={`w-full py-2.5 rounded font-bold uppercase transition-all cursor-pointer ${
+              safeBoxEnabled
+                ? 'bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/25'
+                : 'bg-amber-500 hover:bg-amber-400 text-slate-950 shadow-[0_0_8px_rgba(245,158,11,0.25)]'
+            }`}
+            id="safebox-toggle-btn"
+          >
+            {loadingSafeBoxToggle
+              ? 'Updating Vault...'
+              : safeBoxEnabled
+              ? 'Turn OFF Admin Safe Box'
+              : 'Turn ON Admin Safe Box'}
+          </button>
+
+          <form onSubmit={handleSaveSafeBoxPasskey} className="space-y-3 pt-2 border-t border-white/5">
+            <div className="flex items-center justify-between">
+              <label className="text-[10px] text-slate-400 uppercase" htmlFor="safebox-passkey-settings-input">
+                Set 6-Token Mixed Passkey
+              </label>
+              <span
+                className={`text-[10px] font-bold ${
+                  safeBoxValidation.tokenCount === 6 ? 'text-emerald-400' : 'text-amber-400'
+                }`}
+              >
+                {safeBoxValidation.tokenCount} / 6 tokens
+              </span>
+            </div>
+
+            <div className="relative">
+              <input
+                id="safebox-passkey-settings-input"
+                type={showSafeBoxPasskey ? 'text' : 'password'}
+                placeholder="Any 6 tokens: number + letter + sign + emoji"
+                value={safeBoxPasskeyInput}
+                onChange={(e) => setSafeBoxPasskeyInput(e.target.value)}
+                className="w-full bg-slate-950 border border-white/10 rounded p-2.5 pr-10 text-white focus:outline-none focus:border-amber-400"
+              />
+              <button
+                type="button"
+                onClick={() => setShowSafeBoxPasskey(!showSafeBoxPasskey)}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white transition-colors"
+                title={showSafeBoxPasskey ? 'Hide passkey' : 'Reveal passkey'}
+              >
+                {showSafeBoxPasskey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+              </button>
+            </div>
+
+            {/* Requirement Checklist */}
+            <div className="grid grid-cols-2 gap-1.5 text-[10px]">
+              <div className={`px-2 py-1 rounded border ${safeBoxValidation.tokenCount === 6 ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300' : 'bg-slate-950 border-white/5 text-slate-500'}`}>
+                {safeBoxValidation.tokenCount === 6 ? '✓' : '○'} Exact 6 Tokens
+              </div>
+              <div className={`px-2 py-1 rounded border ${safeBoxValidation.hasNumber ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300' : 'bg-slate-950 border-white/5 text-slate-500'}`}>
+                {safeBoxValidation.hasNumber ? '✓' : '○'} Number (0-9)
+              </div>
+              <div className={`px-2 py-1 rounded border ${safeBoxValidation.hasAlphabet ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300' : 'bg-slate-950 border-white/5 text-slate-500'}`}>
+                {safeBoxValidation.hasAlphabet ? '✓' : '○'} Alphabet (A-z)
+              </div>
+              <div className={`px-2 py-1 rounded border ${safeBoxValidation.hasSign ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300' : 'bg-slate-950 border-white/5 text-slate-500'}`}>
+                {safeBoxValidation.hasSign ? '✓' : '○'} Sign (!@#...)
+              </div>
+              <div className={`col-span-2 px-2 py-1 rounded border ${safeBoxValidation.hasEmoji ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300' : 'bg-slate-950 border-white/5 text-slate-500'}`}>
+                {safeBoxValidation.hasEmoji ? '✓' : '○'} Emoji (any emoji, e.g. 🔐 🛡️ 🔥)
+              </div>
+            </div>
+
+            {/* Optional quick-insert helper */}
+            <div className="space-y-1.5">
+              <p className="text-[9px] text-slate-500 uppercase">Quick-Insert Signs & Emojis (or type any character freely)</p>
+              <div className="flex flex-wrap gap-1">
+                {quickSigns.map((sign) => (
+                  <button
+                    key={sign}
+                    type="button"
+                    onClick={() => setSafeBoxPasskeyInput((prev) => prev + sign)}
+                    className="px-2 py-1 rounded bg-slate-950 hover:bg-slate-800 border border-white/10 text-slate-200 text-xs cursor-pointer"
+                  >
+                    {sign}
+                  </button>
+                ))}
+                {quickEmojis.map((emoji) => (
+                  <button
+                    key={emoji}
+                    type="button"
+                    onClick={() => setSafeBoxPasskeyInput((prev) => prev + emoji)}
+                    className="px-2 py-1 rounded bg-slate-950 hover:bg-slate-800 border border-white/10 text-xs cursor-pointer"
+                  >
+                    {emoji}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {currentUser?.safeBoxUpdatedAt && (
+              <p className="text-[9px] text-slate-500">
+                Last updated: {new Date(currentUser.safeBoxUpdatedAt).toLocaleString()}
+              </p>
+            )}
+
+            <button
+              type="submit"
+              disabled={savingSafeBoxPasskey || !safeBoxValidation.valid}
+              className="w-full bg-amber-500/20 hover:bg-amber-500/30 disabled:opacity-40 text-amber-300 border border-amber-500/40 py-2.5 rounded font-bold uppercase transition-all cursor-pointer disabled:cursor-not-allowed"
+              id="safebox-save-passkey-btn"
+            >
+              {savingSafeBoxPasskey ? 'Saving Passkey...' : 'Save Safe Box Passkey'}
+            </button>
+          </form>
+        </div>
+
         {/* Theme & Visual Display Card */}
         <div className="bg-slate-900 border border-white/5 rounded-lg p-6 space-y-4">
           <div className="flex items-center gap-2 border-b border-white/5 pb-3">
@@ -388,14 +600,27 @@ export default function SettingsScreen({ currentUser, onProfileUpdate, onOpenPro
               {currentUser?.customMapsApiKey ? (
                 <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-[11px] font-bold">
                   <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-                  BYOK Active ($200/mo Free Tier)
+                  Personal Google Maps Key Active
                 </span>
               ) : (
                 <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-500/10 border border-amber-500/30 text-amber-400 text-[11px] font-bold">
                   <span className="w-2 h-2 rounded-full bg-amber-400"></span>
-                  System Shared Tier (Demo Key)
+                  Google Maps Billing Required for Deep Seek
                 </span>
               )}
+            </div>
+          </div>
+
+          {/* Paid Google Maps Subscription Notice */}
+          <div className="p-3.5 rounded-lg bg-amber-500/10 border border-amber-500/30 text-xs text-amber-100 flex items-start gap-2.5" id="settings-google-maps-billing-notice">
+            <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+            <div className="space-y-1">
+              <p className="font-bold text-amber-300 uppercase text-[11px]">
+                Google Maps Subscription Notice (Required for Deep Seek)
+              </p>
+              <p className="text-[11px] text-slate-300 leading-relaxed">
+                To view <strong className="text-white">Google Maps Satellite Aerial &amp; 360° Street View inside Deep Seek</strong>, you must have a paid <strong className="text-white">Google Cloud Billing account / Google Maps Platform subscription</strong> (Google&apos;s Pay-As-You-Go or monthly Google Maps Starter/Essentials/Pro plans; free monthly SKU caps are limited and overages or billed features require paying Google directly). Your EncDec IDS license does <strong className="text-white">not</strong> include Google Maps API billing.
+              </p>
             </div>
           </div>
 
@@ -406,7 +631,7 @@ export default function SettingsScreen({ currentUser, onProfileUpdate, onOpenPro
               <div className="space-y-1">
                 <p className="text-xs font-bold text-white">How Bring Your Own Key (BYOK) Works</p>
                 <p className="text-[11px] text-slate-400 leading-relaxed">
-                  Google gives every Google Cloud account a recurring <strong className="text-cyan-300">$200.00 free credit every month</strong> (~28,000 dynamic satellite & 360° Street View requests). By linking your personal key, your physical threat recon queries are billed directly against your personal free credit with zero cost, ensuring unlimited dedicated quota for your investigations.
+                  Link your personal Google Cloud API key with Google Maps billing enabled. Dynamic Maps &amp; Street View requests in Deep Seek are billed directly to your Google Cloud account under Google Maps Platform&apos;s Pay-As-You-Go or Subscription tiers (after Google&apos;s limited monthly per-SKU free caps).
                 </p>
               </div>
             </div>
@@ -415,32 +640,44 @@ export default function SettingsScreen({ currentUser, onProfileUpdate, onOpenPro
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-2 border-t border-white/5">
               <div className="p-2.5 bg-slate-900/60 rounded border border-white/5 space-y-1">
                 <span className="text-[10px] font-bold text-cyan-400">STEP 1</span>
-                <p className="text-[11px] font-semibold text-slate-200">Open GCP Console</p>
-                <p className="text-[10px] text-slate-400">Click the button below to navigate to your Google Cloud credentials.</p>
+                <p className="text-[11px] font-semibold text-slate-200">Enable Google Billing</p>
+                <p className="text-[10px] text-slate-400">Attach a payment method &amp; Google Maps plan in Google Cloud Billing.</p>
               </div>
               <div className="p-2.5 bg-slate-900/60 rounded border border-white/5 space-y-1">
                 <span className="text-[10px] font-bold text-cyan-400">STEP 2</span>
-                <p className="text-[11px] font-semibold text-slate-200">Generate Key</p>
-                <p className="text-[10px] text-slate-400">Click <strong>+ Create Credentials</strong> ➔ <strong>API key</strong>.</p>
+                <p className="text-[11px] font-semibold text-slate-200">Generate API Key</p>
+                <p className="text-[10px] text-slate-400">Click <strong>+ Create Credentials</strong> ➔ <strong>API key</strong> and restrict it.</p>
               </div>
               <div className="p-2.5 bg-slate-900/60 rounded border border-white/5 space-y-1">
                 <span className="text-[10px] font-bold text-cyan-400">STEP 3</span>
-                <p className="text-[11px] font-semibold text-slate-200">Enable APIs & Paste</p>
-                <p className="text-[10px] text-slate-400">Enable Maps JS & Street View APIs, then paste your <code className="text-cyan-300">AIzaSy...</code> key.</p>
+                <p className="text-[11px] font-semibold text-slate-200">Enable APIs &amp; Link</p>
+                <p className="text-[10px] text-slate-400">Enable Maps JS &amp; Street View APIs, then paste your <code className="text-cyan-300">AIzaSy...</code> key.</p>
               </div>
             </div>
 
             <div className="pt-2 flex flex-wrap items-center justify-between gap-2">
-              <a
-                href="https://console.cloud.google.com/google/maps-apis/credentials?utm_campaign=gmp_mcp_codeassist_v1_aistudio"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-400 border border-cyan-500/30 text-xs font-bold transition-all cursor-pointer"
-                id="open-gcp-console-link"
-              >
-                <ExternalLink className="w-3.5 h-3.5" />
-                <span>Open Google Cloud Credentials Console</span>
-              </a>
+              <div className="flex flex-wrap items-center gap-2">
+                <a
+                  href="https://console.cloud.google.com/google/maps-apis/credentials?utm_campaign=gmp_mcp_codeassist_v1_aistudio"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-400 border border-cyan-500/30 text-xs font-bold transition-all cursor-pointer"
+                  id="open-gcp-console-link"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  <span>Open Google Cloud Credentials Console</span>
+                </a>
+                <a
+                  href="https://mapsplatform.google.com/pricing/?utm_campaign=gmp_mcp_codeassist_v1_aistudio"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 text-xs font-bold transition-all cursor-pointer"
+                  id="open-gmp-pricing-link"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  <span>Google Maps Pricing &amp; Plans</span>
+                </a>
+              </div>
 
               <span className="text-[10px] text-slate-500">
                 Encrypted in DB • Masked in client

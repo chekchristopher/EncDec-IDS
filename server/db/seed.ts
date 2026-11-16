@@ -5,10 +5,14 @@
 
 import bcryptjs from 'bcryptjs';
 import { DbSchema } from './schema.js';
+import { DEFAULT_BILLING_CONFIG } from '../../src/utils/subscription.js';
 
 // Securely derive seed password hashes using environment variables or strong production defaults
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'Admin#2026!SecOps';
 const ANALYST_PASSWORD = process.env.ANALYST_PASSWORD || 'Analyst#2026!Tier1';
+
+// Separate initial Safe Box 6-token mixed passkey (independent of MFA)
+const DEFAULT_SAFEBOX_PASSKEY = process.env.ADMIN_SAFEBOX_PASSKEY || 'En1!🔐9';
 
 export function getInitialDatabaseState(): DbSchema {
   return {
@@ -21,6 +25,10 @@ export function getInitialDatabaseState(): DbSchema {
         role: 'admin',
         status: 'active',
         mfaEnabled: true,
+        safeBoxEnabled: true,
+        safeBoxPasskeyHash: bcryptjs.hashSync(DEFAULT_SAFEBOX_PASSKEY, 10),
+        subscriptionStatus: 'active',
+        subscriptionGrantedBy: 'admin',
         createdAt: new Date().toISOString()
       },
       {
@@ -31,6 +39,8 @@ export function getInitialDatabaseState(): DbSchema {
         role: 'analyst',
         status: 'active',
         mfaEnabled: false,
+        safeBoxEnabled: false,
+        subscriptionStatus: 'inactive',
         createdAt: new Date().toISOString()
       },
       {
@@ -41,24 +51,12 @@ export function getInitialDatabaseState(): DbSchema {
         role: 'analyst',
         status: 'active',
         mfaEnabled: false,
+        safeBoxEnabled: false,
+        subscriptionStatus: 'inactive',
         createdAt: new Date().toISOString()
       }
     ],
-    hosts: [
-      {
-        id: 'hst_1',
-        name: 'portal.coou.edu.ng',
-        os: 'linux',
-        ipAddress: '104.24.12.83',
-        status: 'online',
-        lastSeen: new Date().toISOString(),
-        agentVersion: 'v4.1.2-hids-agent',
-        cpuUsage: 24,
-        memoryUsage: 45,
-        diskUsage: 68,
-        createdAt: new Date().toISOString()
-      }
-    ],
+    hosts: [],
     rules: [
       {
         id: 'rul_1',
@@ -416,7 +414,12 @@ export function getInitialDatabaseState(): DbSchema {
       }
     ],
     workbookProgress: [],
-    certificates: []
+    certificates: [],
+    billingConfig: {
+      ...DEFAULT_BILLING_CONFIG,
+      updatedAt: new Date().toISOString(),
+    },
+    payments: []
   };
 }
 

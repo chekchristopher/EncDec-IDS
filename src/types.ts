@@ -17,7 +17,67 @@ export interface User {
   lastNameChangeDate?: string;
   customMapsApiKey?: string;
   customMapsApiKeyAddedAt?: string;
+  safeBoxEnabled?: boolean;
+  safeBoxPasskeyHash?: string;
+  hasSafeBoxPasskey?: boolean;
+  safeBoxUpdatedAt?: string;
+  subscriptionStatus?: 'active' | 'inactive' | 'revoked' | 'expired';
+  subscriptionExpiresAt?: string;
+  subscriptionGrantedBy?: string;
+  subscriptionUpdatedAt?: string;
+  lastPaymentId?: string;
   createdAt: string;
+}
+
+export interface BillingConfig {
+  subscriptionRequired: boolean;
+  nowPaymentsUrl: string;
+  nowPaymentsInvoiceId: string;
+  priceUsd: number;
+  billingCycleMonths: number;
+  billingCycleDays: number;
+  freeAccessActive: boolean;
+  freeAccessExpiresAt?: string | null;
+  freeAccessDurationLabel?: string;
+  updatedAt: string;
+  updatedBy?: string;
+}
+
+export interface PaymentRecord {
+  id: string;
+  userId: string;
+  userEmail: string;
+  userName: string;
+  amountUsd: number;
+  billingCycleMonths: number;
+  provider: 'nowpayments' | 'admin';
+  invoiceId: string;
+  paymentReference?: string;
+  status: 'pending_verification' | 'confirmed' | 'rejected' | 'granted_by_admin' | 'revoked';
+  nowPaymentsStatus?: string;
+  verifiedByNowPayments?: boolean;
+  payCurrency?: string;
+  payAmount?: number;
+  createdAt: string;
+  confirmedAt?: string;
+  confirmedBy?: string;
+  notes?: string;
+}
+
+export interface SubscriptionAccessStatus {
+  hasAccess: boolean;
+  reason:
+    | 'admin_override'
+    | 'payments_disabled'
+    | 'global_free_access'
+    | 'active_subscription'
+    | 'subscription_required'
+    | 'subscription_expired'
+    | 'subscription_revoked';
+  expiresAt?: string;
+  daysRemaining?: number;
+  freeAccessRemainingMs?: number;
+  statusLabel: string;
 }
 
 export interface Session {
@@ -33,6 +93,8 @@ export interface Session {
 // Host IDS Types
 export interface Host {
   id: string;
+  ownerId?: string;
+  ownerEmail?: string;
   name: string;
   os: 'windows' | 'linux' | 'macos' | 'darwin' | 'other';
   ipAddress: string;
@@ -125,6 +187,8 @@ export interface Rule {
 
 export interface Alert {
   id: string;
+  ownerId?: string;
+  hostId?: string;
   timestamp: string;
   severity: 'critical' | 'high' | 'medium' | 'low' | 'info';
   title: string;
@@ -139,6 +203,7 @@ export interface Alert {
 
 export interface Threat {
   id: string;
+  ownerId?: string;
   timestamp: string;
   score: number; // 0-100 risk scoring
   actor?: string;
@@ -358,6 +423,7 @@ export interface Incident {
 
 export interface RawSecurityEvent {
   id: string;
+  ownerId?: string;
   timestamp: string;
   sourceType: 'suricata' | 'zeek' | 'host_agent' | 'syslog' | 'packet_capture';
   sensorId: string;
@@ -429,4 +495,16 @@ export interface StoredCertificate {
   status: 'active' | 'revoked';
   attestationStatement: string;
 }
+
+export interface UserCertificationStatus {
+  isCertified: boolean;
+  chaptersCompleted: number;
+  totalChapters: number;
+  quizPassed: boolean;
+  quizScore: number;
+  progressPercent: number;
+  certificateId?: string;
+  nextStepLabel: string;
+}
+
 

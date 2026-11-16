@@ -9,16 +9,18 @@ import {
   CheckCircle, Award, TrendingUp, Users, ExternalLink, Calendar, CheckCircle2, 
   ShieldCheck, BarChart3, QrCode 
 } from 'lucide-react';
-import { SecurityReport } from '../types.js';
+import { SecurityReport, Host, Alert } from '../types.js';
 import { apiRequest } from '../api.js';
 import { jsPDF } from 'jspdf';
 import { generateWorkbookPdf } from '../services/workbookPdf.js';
 
 interface ReportsGeneratorProps {
   onOpenWorkbook?: () => void;
+  hosts?: Host[];
+  alerts?: Alert[];
 }
 
-export default function ReportsGenerator({ onOpenWorkbook }: ReportsGeneratorProps) {
+export default function ReportsGenerator({ onOpenWorkbook, hosts = [], alerts = [] }: ReportsGeneratorProps) {
   const [reports, setReports] = useState<SecurityReport[]>([]);
   const [loading, setLoading] = useState(false);
   const [compiling, setCompiling] = useState(false);
@@ -172,14 +174,26 @@ export default function ReportsGenerator({ onOpenWorkbook }: ReportsGeneratorPro
       doc.text('STATUS', margin + 155, curY + 5);
       curY += 7;
 
-      const dummyRows = [
-        ['portal.coou.edu.ng', 'HTTP/S Gateway Traffic', '142,890 Packets', 'NORMAL'],
-        ['104.24.12.83 (Auth)', 'Host SSH & Web Login Stream', '1,420 Attempts', 'MITIGATED'],
-        ['Workstation-FIN-09', 'File Integrity & Syscalls', '89,120 Hashes', 'VERIFIED'],
-        ['Database-SQL-Cluster', 'MSSQL Audit Log Sync', '12,450 Records', 'SYNCHRONIZED']
-      ];
+      const nodeRows = hosts.length > 0
+        ? hosts.slice(0, 12).map((h) => {
+            const nodeAlerts = alerts.filter(
+              (a) =>
+                a &&
+                a.id?.startsWith('alt_real_') &&
+                ((a.target || '').toLowerCase().includes(h.name.toLowerCase()) ||
+                  (a.target || '').toLowerCase().includes(h.ipAddress.toLowerCase()))
+            );
+            const unhandledCount = nodeAlerts.filter((a) => a.status === 'unhandled').length;
+            return [
+              `${h.name} (${h.ipAddress})`,
+              `${h.os.toUpperCase()} Agent ${h.agentVersion}`,
+              `${nodeAlerts.length} Real Events`,
+              unhandledCount > 0 ? 'ALERTING' : h.status === 'online' ? 'NORMAL' : 'OFFLINE'
+            ];
+          })
+        : [['No Enrolled Nodes', 'Host IDS Registry', '0 Events', 'IDLE']];
 
-      dummyRows.forEach((r, idx) => {
+      nodeRows.forEach((r, idx) => {
         doc.setFillColor(idx % 2 === 0 ? 255 : 248, idx % 2 === 0 ? 255 : 250, idx % 2 === 0 ? 255 : 252);
         doc.rect(margin, curY, contentWidth, 6.5, 'F');
         doc.setDrawColor(226, 232, 240);
@@ -188,10 +202,11 @@ export default function ReportsGenerator({ onOpenWorkbook }: ReportsGeneratorPro
         doc.setFont('helvetica', 'normal');
         doc.setFontSize(8);
         doc.setTextColor(51, 65, 85);
-        doc.text(r[0], margin + 3, curY + 4.5);
-        doc.text(r[1], margin + 65, curY + 4.5);
+        doc.text(r[0].substring(0, 32), margin + 3, curY + 4.5);
+        doc.text(r[1].substring(0, 28), margin + 65, curY + 4.5);
         doc.text(r[2], margin + 120, curY + 4.5);
-        doc.setTextColor(r[3] === 'MITIGATED' ? 220 : 16, r[3] === 'MITIGATED' ? 38 : 185, r[3] === 'MITIGATED' ? 38 : 129);
+        const isAlert = r[3] === 'ALERTING' || r[3] === 'OFFLINE';
+        doc.setTextColor(isAlert ? 220 : 16, isAlert ? 38 : 185, isAlert ? 38 : 129);
         doc.setFont('helvetica', 'bold');
         doc.text(r[3], margin + 155, curY + 4.5);
         curY += 6.5;
@@ -233,9 +248,13 @@ export default function ReportsGenerator({ onOpenWorkbook }: ReportsGeneratorPro
       filename += '.json';
       mimeType = 'application/json';
     } else {
-      content = `ID,Timestamp,Host,Metric,Alert_Count,Severity\r\n` +
-                `1,${new Date().toISOString()},portal.coou.edu.ng,HTTP_FLOOD,2,HIGH\r\n` +
-                `2,${new Date().toISOString()},portal.coou.edu.ng,FAILED_PORTAL_LOGINS,14,CRITICAL`;
+      const realAlerts = alerts.filter(a => a && a.id?.startsWith('alt_real_'));
+      const csvRows = realAlerts.length > 0
+        ? realAlerts.slice(0, 100).map((a, idx) =>
+            `${idx + 1},${a.timestamp},"${(a.target || hosts[0]?.name || 'Enrolled Node').replace(/"/g, '""')}",${a.category || 'INTRUSION'},1,${(a.severity || 'HIGH').toUpperCase()}`
+          )
+        : [`1,${new Date().toISOString()},"${hosts[0]?.name || 'Enrolled Node'}",SYSTEM_NOMINAL,0,INFO`];
+      content = `ID,Timestamp,Host,Category,Alert_Count,Severity\r\n` + csvRows.join('\r\n');
       filename += '.csv';
       mimeType = 'text/csv';
     }

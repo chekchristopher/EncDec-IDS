@@ -6,22 +6,26 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   ShieldCheck, ShieldAlert, Wifi, WifiOff, Bell, 
-  HelpCircle, Command, Settings as SettingsIcon, AlertOctagon, Menu 
+  HelpCircle, Command, Settings as SettingsIcon, AlertOctagon, Menu, Lock,
+  GraduationCap, ArrowUpRight, X
 } from 'lucide-react';
 
 // API and utilities
-import { apiRequest, WS_BASE, getAuthToken, setAuthToken } from './api.js';
+import { apiRequest, WS_BASE, getAuthToken, setAuthToken, getWsUrl } from './api.js';
 
 // Types
 import { 
   User, Host, Packet, Rule, Alert, Threat, APIKey, 
   AuditLog, LiveActivity, ThreatIntelFeed, MLModel, QuarantineItem, EmailLog,
-  Incident, ActiveResponseAction, SensorStatus 
+  Incident, ActiveResponseAction, SensorStatus, BillingConfig, SubscriptionAccessStatus,
+  UserCertificationStatus
 } from './types.js';
+import { evaluateSubscriptionAccess } from './utils/subscription.js';
 
 // Components
 import LandingPage from './components/LandingPage.jsx';
 import LoginScreen from './components/LoginScreen.jsx';
+import SubscriptionGate from './components/SubscriptionGate.jsx';
 import Sidebar from './components/Sidebar.jsx';
 import Overview from './components/Overview.jsx';
 import NetworkIDS from './components/NetworkIDS.jsx';
@@ -49,6 +53,12 @@ export default function App() {
   const [showLogin, setShowLogin] = useState(false);
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [selectedIncidentForEmail, setSelectedIncidentForEmail] = useState<Alert | null>(null);
+  const [billingConfig, setBillingConfig] = useState<BillingConfig | null>(null);
+  const [subscriptionAccess, setSubscriptionAccess] = useState<SubscriptionAccessStatus | null>(null);
+  const [billingSuccessBanner, setBillingSuccessBanner] = useState<string | null>(null);
+  const [certificationStatus, setCertificationStatus] = useState<UserCertificationStatus | null>(null);
+  const [certReminderText, setCertReminderText] = useState<string | null>(null);
+  const [certNoticeDismissed, setCertNoticeDismissed] = useState(false);
 
   // Core Data States
   const [metrics, setMetrics] = useState({
@@ -97,6 +107,36 @@ export default function App() {
   // Ref for WebSocket connection
   const wsRef = useRef<WebSocket | null>(null);
 
+  const effectiveBillingConfig = billingConfig || currentUser?.billingConfig || null;
+  const effectiveAccess: SubscriptionAccessStatus =
+    subscriptionAccess || evaluateSubscriptionAccess(currentUser, effectiveBillingConfig);
+  const hasDashboardAccess = Boolean(currentUser && effectiveAccess.hasAccess);
+
+  const refreshSubscriptionState = async (verifiedSuccessMessage?: string) => {
+    if (!getAuthToken()) return;
+    try {
+      const profile = await apiRequest('/api/profile');
+      setSavedProfile(profile);
+      setCurrentUser(profile);
+      if (profile?.billingConfig) {
+        setBillingConfig(profile.billingConfig);
+      }
+      if (profile?.subscriptionAccess) {
+        setSubscriptionAccess(profile.subscriptionAccess);
+      } else {
+        setSubscriptionAccess(evaluateSubscriptionAccess(profile, profile?.billingConfig || null));
+      }
+      if (verifiedSuccessMessage) {
+        setBillingSuccessBanner(verifiedSuccessMessage);
+        setTimeout(() => {
+          setBillingSuccessBanner(null);
+        }, 9000);
+      }
+    } catch (err) {
+      console.warn('Failed to refresh subscription state', err);
+    }
+  };
+
   // Verify auth on mount
   useEffect(() => {
     const checkAuth = async () => {
@@ -105,6 +145,12 @@ export default function App() {
         try {
           const profile = await apiRequest('/api/profile');
           setSavedProfile(profile);
+          if (profile?.billingConfig) {
+            setBillingConfig(profile.billingConfig);
+          }
+          if (profile?.subscriptionAccess) {
+            setSubscriptionAccess(profile.subscriptionAccess);
+          }
         } catch (err) {
           console.warn('Session expired, clearing credentials.');
           setAuthToken(null);
@@ -115,9 +161,20 @@ export default function App() {
     checkAuth();
   }, []);
 
-  // Sync metrics on data update
+  // Refresh billing status whenever a user logs in
   useEffect(() => {
     if (!currentUser) return;
+    if (currentUser.billingConfig) {
+      setBillingConfig(currentUser.billingConfig);
+    }
+    if (currentUser.subscriptionAccess) {
+      setSubscriptionAccess(currentUser.subscriptionAccess);
+    }
+  }, [currentUser]);
+
+  // Sync metrics on data update (only when unlocked)
+  useEffect(() => {
+    if (!currentUser || !hasDashboardAccess) return;
     const updateMetrics = async () => {
       try {
         const met = await apiRequest('/api/metrics');
@@ -127,16 +184,39 @@ export default function App() {
       }
     };
     updateMetrics();
-  }, [hosts, alerts, threats, currentUser]);
+  }, [hosts, alerts, threats, currentUser, hasDashboardAccess]);
 
-  // Handle WebSocket Connection
+  // Fetch workbook certification status for uncertified analyst notification
   useEffect(() => {
-    if (!currentUser) {
-      if (wsRef.current) {
-        wsRef.current.close();
-      }
+    if (!currentUser || !hasDashboardAccess) {
+      setCertificationStatus(null);
       return;
     }
+    let cancelled = false;
+    apiRequest('/api/workbook/certification-status')
+      .then((res) => {
+        if (!cancelled && res?.certificationStatus) {
+          setCertificationStatus(res.certificationStatus);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [currentUser?.id, hasDashboardAccess]);
+
+  // Handle WebSocket Connection (only when unlocked)
+  useEffect(() => {
+    if (!currentUser || !hasDashboardAccess) {
+      if (wsRef.current) {
+        wsRef.current.close();
+        wsRef.current = null;
+      }
+      setWsConnected(false);
+      return;
+    }
+
+    let cancelled = false;
 
     const dedup = <T extends { id: any }>(arr: T[]): T[] => {
       const seen = new Set();
@@ -149,7 +229,7 @@ export default function App() {
     };
 
     const connectWebSocket = () => {
-      const ws = new WebSocket(WS_BASE);
+      const ws = new WebSocket(getWsUrl());
       wsRef.current = ws;
 
       ws.onopen = () => {
@@ -180,6 +260,9 @@ export default function App() {
             }
             if (msg.payload.activeResponses) {
               setActiveResponses(msg.payload.activeResponses);
+            }
+            if (msg.payload.certificationStatus) {
+              setCertificationStatus(msg.payload.certificationStatus);
             }
             break;
 
@@ -253,6 +336,32 @@ export default function App() {
             triggerUIWarning(`Security Alert Triggered: ${msg.payload.title}`);
             break;
 
+          case 'BILLING_UPDATE':
+            if (msg.payload?.billingConfig) {
+              setBillingConfig(msg.payload.billingConfig);
+            }
+            refreshSubscriptionState();
+            break;
+
+          case 'CERTIFICATION_STATUS_UPDATE':
+            if (msg.payload?.certificationStatus) {
+              setCertificationStatus(msg.payload.certificationStatus);
+              if (msg.payload.certificationStatus.isCertified) {
+                setCertReminderText(null);
+              }
+            }
+            break;
+
+          case 'CERTIFICATION_REMINDER':
+            if (msg.payload?.certificationStatus) {
+              setCertificationStatus(msg.payload.certificationStatus);
+            }
+            if (msg.payload?.message) {
+              setCertReminderText(msg.payload.message);
+            }
+            setCertNoticeDismissed(false);
+            break;
+
           default:
             break;
         }
@@ -260,9 +369,9 @@ export default function App() {
 
       ws.onclose = () => {
         setWsConnected(false);
-        // attempt auto reconnect after 3 seconds
+        // attempt auto reconnect after 3 seconds only while still mounted & unlocked
         setTimeout(() => {
-          if (getAuthToken()) {
+          if (!cancelled && getAuthToken()) {
             connectWebSocket();
           }
         }, 3000);
@@ -272,11 +381,13 @@ export default function App() {
     connectWebSocket();
 
     return () => {
+      cancelled = true;
       if (wsRef.current) {
         wsRef.current.close();
+        wsRef.current = null;
       }
     };
-  }, [currentUser]);
+  }, [currentUser?.id, hasDashboardAccess]);
 
   // Utility to dispatch notification popups
   const triggerUIWarning = (msg: string) => {
@@ -290,6 +401,16 @@ export default function App() {
     setAuthToken(null);
     setSavedProfile(null);
     setCurrentUser(null);
+    setHosts([]);
+    setAlerts([]);
+    setThreats([]);
+    setLivePackets([]);
+    setBillingConfig(null);
+    setSubscriptionAccess(null);
+    setBillingSuccessBanner(null);
+    setCertificationStatus(null);
+    setCertReminderText(null);
+    setCertNoticeDismissed(false);
     setAdminPasskeyPassed(false);
     setActiveView('dashboard');
   };
@@ -345,17 +466,23 @@ export default function App() {
 
   const handleRegisterHost = async (hostPayload: Partial<Host>) => {
     try {
-      await apiRequest('/api/hosts/register', 'POST', hostPayload);
-    } catch (err) {
+      const created = await apiRequest('/api/hosts/register', 'POST', hostPayload);
+      if (created && created.id) {
+        setHosts(prev => [created, ...prev.filter(h => h.id !== created.id)]);
+      }
+    } catch (err: any) {
       console.warn(err);
+      triggerUIWarning(err?.message || 'Failed to enroll host node.');
     }
   };
 
   const handleDeregisterHost = async (id: string) => {
     try {
       await apiRequest(`/api/hosts/${id}`, 'DELETE');
-    } catch (err) {
+      setHosts(prev => prev.filter(h => h.id !== id));
+    } catch (err: any) {
       console.warn(err);
+      triggerUIWarning(err?.message || 'Failed to deregister host node.');
     }
   };
 
@@ -389,11 +516,15 @@ export default function App() {
 
   const refreshAllData = async () => {
     try {
-      const [fetchedIncidents, fetchedResponses, fetchedSensors] = await Promise.all([
+      const [fetchedHosts, fetchedIncidents, fetchedResponses, fetchedSensors] = await Promise.all([
+        apiRequest('/api/hosts').catch(() => null),
         apiRequest('/api/incidents').catch(() => []),
         apiRequest('/api/responses').catch(() => []),
         apiRequest('/api/sensors').catch(() => [])
       ]);
+      if (Array.isArray(fetchedHosts)) {
+        setHosts(fetchedHosts);
+      }
       setIncidents(fetchedIncidents);
       setActiveResponses(fetchedResponses);
       setSensors(fetchedSensors);
@@ -453,11 +584,11 @@ export default function App() {
   return (
     <div className="min-h-screen w-full max-w-full bg-slate-950 text-slate-300 flex overflow-x-hidden" id="main-scaffold">
       
-      {/* Sidebar navigation */}
+      {/* Sidebar navigation (every link is locked with payment until licensed) */}
       <Sidebar 
         activeView={activeView} 
         onViewChange={(v) => {
-          // If moving away from admin, let's lock passcode if they didn't finish
+          if (!hasDashboardAccess) return;
           setActiveView(v);
         }}
         currentUser={currentUser}
@@ -465,12 +596,43 @@ export default function App() {
         adminPasskeyPassed={adminPasskeyPassed}
         isOpen={mobileSidebarOpen}
         onClose={() => setMobileSidebarOpen(false)}
-        onOpenProfile={() => setShowProfileModal(true)}
+        onOpenProfile={() => {
+          if (!hasDashboardAccess) return;
+          setShowProfileModal(true);
+        }}
+        subscriptionLocked={!hasDashboardAccess}
+        certificationStatus={certificationStatus}
       />
 
       {/* Primary content hub */}
       <main className="flex-1 min-h-screen w-full max-w-full lg:pl-64 pl-0 flex flex-col relative overflow-x-hidden">
         
+        {/* Verified NOWPayments Payment Success Banner */}
+        {billingSuccessBanner && (
+          <div
+            className="bg-emerald-950/95 border-b border-emerald-500/40 text-emerald-200 px-4 py-2.5 text-xs font-mono flex items-center justify-center gap-3"
+            id="billing-verified-banner"
+          >
+            <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
+            <span>{billingSuccessBanner}</span>
+            <button
+              type="button"
+              onClick={() => setBillingSuccessBanner(null)}
+              className="text-emerald-400 hover:text-white text-[10px] underline ml-2 cursor-pointer"
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
+
+        {/* Global Free Access Banner when Admin activates free access window */}
+        {effectiveAccess.reason === 'global_free_access' && effectiveAccess.expiresAt && (
+          <div className="bg-emerald-950/90 border-b border-emerald-500/30 text-emerald-200 px-4 py-2 text-xs font-mono text-center">
+            Promotional Free Access Active — All users unlocked until{' '}
+            <strong className="text-emerald-300">{new Date(effectiveAccess.expiresAt).toLocaleString()}</strong>
+          </div>
+        )}
+
         {/* Sticky Quota Warning Banner (Google Maps Platform Case A) */}
         {gmpQuotaExceeded && (
           <div className="bg-amber-50 border-b border-amber-200 text-amber-900 px-4 py-2.5 text-xs md:text-sm text-center sticky top-0 z-50 shadow-sm">
@@ -513,35 +675,56 @@ export default function App() {
               <Menu className="w-4 h-4" />
             </button>
 
-            <span className="hidden sm:flex items-center gap-1.5 font-mono text-xs text-slate-400 bg-slate-950 px-2.5 py-1 rounded border border-white/5">
-              <span className={`w-2 h-2 rounded-full ${wsConnected ? 'bg-emerald-500 shadow-[0_0_8px_#10b981]' : 'bg-red-500 animate-pulse'}`} />
-              {wsConnected ? 'Gateway Link Online' : 'Gateway Link Disconnected'}
-            </span>
-            <span className="hidden sm:inline h-4 w-px bg-white/10" />
-            <span className="font-mono text-xs text-slate-500 truncate max-w-[150px] xs:max-w-none">
-              Scope: <strong className="text-slate-300">Enrolled Nodes ({hosts.length})</strong>
-            </span>
+            {hasDashboardAccess ? (
+              <>
+                <span className="hidden sm:flex items-center gap-1.5 font-mono text-xs text-slate-400 bg-slate-950 px-2.5 py-1 rounded border border-white/5">
+                  <span className={`w-2 h-2 rounded-full ${wsConnected ? 'bg-emerald-500 shadow-[0_0_8px_#10b981]' : 'bg-red-500 animate-pulse'}`} />
+                  {wsConnected ? 'Gateway Link Online' : 'Gateway Link Disconnected'}
+                </span>
+                <span className="hidden sm:inline h-4 w-px bg-white/10" />
+                <span className="font-mono text-xs text-slate-500 truncate max-w-[150px] xs:max-w-none">
+                  Scope: <strong className="text-slate-300">Enrolled Nodes ({hosts.length})</strong>
+                </span>
+              </>
+            ) : (
+              <span
+                className="flex items-center gap-2 font-mono text-xs text-amber-300 bg-amber-500/10 px-3 py-1 rounded border border-amber-500/30"
+                id="header-license-lock-badge"
+              >
+                <Lock className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                <span>License Required • All Navigation Locked</span>
+              </span>
+            )}
           </div>
 
           <div className="flex items-center gap-4">
-            {/* Status overview metrics in header */}
-            <div className="flex gap-4 md:gap-6 text-[11px] font-mono">
-              <span className="text-slate-500">
-                Threat index: <strong className={metrics.globalThreatScore > 75 ? 'text-red-500' : 'text-emerald-400'}>{metrics.globalThreatScore}/100</strong>
-              </span>
-              <span className="text-slate-500 hidden xs:inline">
-                Active alerts: <strong className="text-red-400">{alerts.filter(a => a.status === 'unhandled').length}</strong>
-              </span>
-            </div>
+            {/* Status overview metrics in header (hidden until licensed) */}
+            {hasDashboardAccess && (
+              <div className="flex gap-4 md:gap-6 text-[11px] font-mono">
+                <span className="text-slate-500">
+                  Threat index: <strong className={metrics.globalThreatScore > 75 ? 'text-red-500' : 'text-emerald-400'}>{metrics.globalThreatScore}/100</strong>
+                </span>
+                <span className="text-slate-500 hidden xs:inline">
+                  Active alerts: <strong className="text-red-400">{alerts.filter(a => a.status === 'unhandled').length}</strong>
+                </span>
+              </div>
+            )}
 
             {/* Light / Dark Mode Toggle */}
             <ThemeToggle variant="icon" />
 
             {/* Clickable Header Profile Button */}
             <button
-              onClick={() => setShowProfileModal(true)}
-              className="flex items-center gap-2 pl-2 pr-3 py-1.5 min-h-[40px] rounded-full bg-slate-950 border border-white/10 hover:border-cyan-500/40 hover:bg-slate-900 text-xs font-mono transition-all cursor-pointer group focus-visible:ring-2 focus-visible:ring-cyan-400 focus-visible:outline-none"
-              title="Click to view and edit profile"
+              onClick={() => {
+                if (hasDashboardAccess) setShowProfileModal(true);
+              }}
+              disabled={!hasDashboardAccess}
+              className={`flex items-center gap-2 pl-2 pr-3 py-1.5 min-h-[40px] rounded-full bg-slate-950 border border-white/10 text-xs font-mono transition-all group focus-visible:ring-2 focus-visible:ring-cyan-400 focus-visible:outline-none ${
+                hasDashboardAccess
+                  ? 'hover:border-cyan-500/40 hover:bg-slate-900 cursor-pointer'
+                  : 'opacity-70 cursor-not-allowed'
+              }`}
+              title={hasDashboardAccess ? 'Click to view and edit profile' : 'Get licensed to unlock profile management'}
               aria-label="Edit operator profile"
               id="header-profile-btn"
             >
@@ -558,8 +741,61 @@ export default function App() {
 
         </header>
 
+        {/* Uncertified Analyst Workbook Notification Banner */}
+        {hasDashboardAccess &&
+          certificationStatus &&
+          !certificationStatus.isCertified &&
+          !certNoticeDismissed &&
+          activeView !== 'workbook' && (
+            <div
+              className="bg-amber-950/75 border-b border-amber-500/35 text-amber-100 px-4 lg:px-8 py-2.5 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+              id="uncertified-analyst-banner"
+              role="status"
+            >
+              <div className="flex items-start sm:items-center gap-2.5 min-w-0">
+                <GraduationCap className="w-4 h-4 text-amber-400 shrink-0 mt-0.5 sm:mt-0" />
+                <p className="leading-snug">
+                  <span className="font-semibold text-white">Certification Notice:</span>{' '}
+                  {certReminderText ||
+                    `Scale through the EncDec Workbook (${certificationStatus.chaptersCompleted}/${certificationStatus.totalChapters} chapters · ${certificationStatus.progressPercent}%) and pass the Capstone Knowledge Check (≥ 80%) to become a Certified EncDec Analyst (CE-SOC).`}
+                </p>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setActiveView('workbook')}
+                  className="px-3 py-1.5 rounded-md bg-amber-400 hover:bg-amber-300 text-slate-950 font-semibold text-xs whitespace-nowrap shrink-0 flex items-center gap-1 cursor-pointer transition-colors"
+                  id="banner-open-workbook-btn"
+                >
+                  <span>Open EncDec Workbook</span>
+                  <ArrowUpRight className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCertNoticeDismissed(true)}
+                  className="p-1.5 rounded text-amber-300 hover:text-white hover:bg-white/10 cursor-pointer transition-colors"
+                  aria-label="Dismiss certification notice"
+                  id="dismiss-cert-banner-btn"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+          )}
+
         {/* Dynamic Inner body renders */}
         <div className="p-4 sm:p-6 lg:p-8 flex-1 max-w-7xl w-full max-w-full mx-auto overflow-x-hidden">
+          {!hasDashboardAccess ? (
+            <SubscriptionGate
+              embedded={true}
+              currentUser={currentUser}
+              billingConfig={effectiveBillingConfig}
+              accessStatus={effectiveAccess}
+              onUnlocked={refreshSubscriptionState}
+              onLogout={handleLogout}
+            />
+          ) : (
+            <>
           {activeView === 'dashboard' && (
             <Overview 
               metrics={metrics}
@@ -575,9 +811,17 @@ export default function App() {
               }}
               onNavigateToIncidents={() => setActiveView('incidents')}
               onNavigateToHosts={() => setActiveView('host')}
+              onNavigateToSettings={() => setActiveView('settings')}
+              onNavigateToWorkbook={() => setActiveView('workbook')}
               packetCount={totalPacketsCount}
               livePackets={livePackets}
               currentUser={currentUser}
+              billingConfig={effectiveBillingConfig}
+              certificationStatus={certificationStatus}
+              onBillingConfigUpdated={(cfg) => {
+                setBillingConfig(cfg);
+                refreshSubscriptionState();
+              }}
             />
           )}
 
@@ -636,11 +880,23 @@ export default function App() {
           )}
 
           {activeView === 'reports' && (
-            <ReportsGenerator onOpenWorkbook={() => setActiveView('workbook')} />
+            <ReportsGenerator
+              onOpenWorkbook={() => setActiveView('workbook')}
+              hosts={hosts}
+              alerts={alerts}
+            />
           )}
 
           {activeView === 'workbook' && (
-            <EncDecWorkbook currentUser={currentUser} />
+            <EncDecWorkbook
+              currentUser={currentUser}
+              onCertificationUpdated={(status) => {
+                setCertificationStatus(status);
+                if (status.isCertified) {
+                  setCertReminderText(null);
+                }
+              }}
+            />
           )}
 
           {activeView === 'logs' && (
@@ -684,16 +940,40 @@ export default function App() {
           )}
 
           {activeView === 'adminPortal' && (
-            <AdminPortal 
-              adminPasskeyPassed={adminPasskeyPassed}
-              onPasskeySuccess={() => setAdminPasskeyPassed(true)}
-            />
+            currentUser?.role === 'admin' ? (
+              <AdminPortal 
+                adminPasskeyPassed={adminPasskeyPassed}
+                onPasskeySuccess={() => setAdminPasskeyPassed(true)}
+                onBillingConfigUpdated={(cfg) => {
+                  setBillingConfig(cfg);
+                  refreshSubscriptionState();
+                }}
+              />
+            ) : (
+              <div className="p-8 text-center bg-slate-900 border border-red-500/20 rounded-xl max-w-lg mx-auto my-12 font-mono">
+                <div className="w-12 h-12 rounded-full bg-red-500/10 border border-red-500/30 text-red-400 flex items-center justify-center mx-auto mb-4">
+                  <ShieldAlert className="w-6 h-6" />
+                </div>
+                <h3 className="text-lg font-bold text-white mb-2">Restricted Administrator Area</h3>
+                <p className="text-xs text-slate-400 mb-6 leading-relaxed">
+                  Admin Gateway access is restricted to Administrator accounts.
+                </p>
+                <button
+                  onClick={() => setActiveView('dashboard')}
+                  className="px-4 py-2 bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold rounded-lg text-xs transition-colors cursor-pointer"
+                >
+                  Return to SOC Dashboard
+                </button>
+              </div>
+            )
+          )}
+            </>
           )}
         </div>
 
         {/* Interactive Profile Editor Modal */}
         <ProfileModal 
-          isOpen={showProfileModal}
+          isOpen={showProfileModal && hasDashboardAccess}
           onClose={() => setShowProfileModal(false)}
           currentUser={currentUser}
           onProfileUpdated={(updatedUser) => {

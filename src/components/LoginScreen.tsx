@@ -13,6 +13,7 @@ import { apiRequest, setAuthToken } from '../api.js';
 import EncDecLogo from './EncDecLogo.js';
 import { signInWithGoogle, getGoogleAccessToken } from '../services/googleAuth.js';
 import { sendDirectAuthEmailToGmail } from '../services/authNotification.js';
+import { validateSafeBoxPasskey } from '../utils/safeBoxToken.js';
 
 interface LoginScreenProps {
   onLoginSuccess: (user: any) => void;
@@ -48,10 +49,14 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
   const [mfaRequired, setMfaRequired] = useState(false);
   const [mfaCode, setMfaCode] = useState('');
 
-  // Admin Safe Box State
+  // Admin Safe Box State (Separate 6-token mixed passkey, independent of MFA)
   const [isSafeBoxUnlocked, setIsSafeBoxUnlocked] = useState(false);
-  const [safeBoxMfaInput, setSafeBoxMfaInput] = useState('');
+  const [safeBoxPasskey, setSafeBoxPasskey] = useState('');
+  const [showSafeBoxPasskey, setShowSafeBoxPasskey] = useState(false);
   const [safeBoxError, setSafeBoxError] = useState<string | null>(null);
+  const [safeBoxEnabled, setSafeBoxEnabled] = useState<boolean>(true);
+  const [safeBoxHasPasskey, setSafeBoxHasPasskey] = useState<boolean>(true);
+  const [safeBoxLoading, setSafeBoxLoading] = useState(false);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
   // Cooldown countdown effect for Resend Code
@@ -62,6 +67,33 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
     }, 1000);
     return () => clearInterval(interval);
   }, [resendCooldown]);
+
+  // Fetch whether Admin Safe Box is turned ON/OFF for the current/last operator
+  useEffect(() => {
+    let active = true;
+    const timer = setTimeout(async () => {
+      try {
+        const lookupEmail = email.trim() || localStorage.getItem('encdec_last_email') || '';
+        const query = lookupEmail ? `?email=${encodeURIComponent(lookupEmail)}` : '';
+        const status = await apiRequest(`/api/auth/safebox/status${query}`);
+        if (!active) return;
+        setSafeBoxEnabled(Boolean(status?.safeBoxEnabled));
+        setSafeBoxHasPasskey(Boolean(status?.hasPasskey));
+        if (!status?.safeBoxEnabled) {
+          setIsSafeBoxUnlocked(false);
+          setSafeBoxPasskey('');
+          setSafeBoxError(null);
+        }
+      } catch {
+        // Keep current status on transient network failure
+      }
+    }, 250);
+
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [email]);
 
   const resetFormState = () => {
     setError(null);
@@ -75,28 +107,46 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
     setForgotStep('enter_email');
   };
 
-  const handleUnlockSafeBox = (e: React.FormEvent) => {
+  const safeBoxValidation = validateSafeBoxPasskey(safeBoxPasskey);
+
+  const handleUnlockSafeBox = async (e: React.FormEvent) => {
     e.preventDefault();
     setSafeBoxError(null);
-    
-    const cleaned = safeBoxMfaInput.trim();
-    if (!cleaned) {
-      setSafeBoxError('Please enter the Admin 6-digit MFA code.');
+
+    if (!safeBoxPasskey) {
+      setSafeBoxError('Please enter your separate 6-token Admin Safe Box passkey.');
       return;
     }
 
-    if (cleaned.length !== 6 || !/^\d{6}$/.test(cleaned)) {
-      setSafeBoxError('Access Denied: Requires a valid 6-digit Admin MFA code.');
+    if (!safeBoxValidation.valid) {
+      setSafeBoxError(`Access Denied: ${safeBoxValidation.errors.join(' ')}`);
       return;
     }
 
-    setIsSafeBoxUnlocked(true);
-    setSafeBoxError(null);
+    setSafeBoxLoading(true);
+    try {
+      const lookupEmail = email.trim() || localStorage.getItem('encdec_last_email') || '';
+      const response = await apiRequest('/api/auth/safebox/verify', 'POST', {
+        email: lookupEmail || undefined,
+        passkey: safeBoxPasskey,
+      });
+
+      if (response?.unlocked) {
+        setIsSafeBoxUnlocked(true);
+        setSafeBoxError(null);
+      } else {
+        setSafeBoxError('Access Denied: Incorrect Admin Safe Box passkey.');
+      }
+    } catch (err: any) {
+      setSafeBoxError(err?.message || 'Access Denied: Failed to verify Admin Safe Box passkey.');
+    } finally {
+      setSafeBoxLoading(false);
+    }
   };
 
   const handleLockSafeBox = () => {
     setIsSafeBoxUnlocked(false);
-    setSafeBoxMfaInput('');
+    setSafeBoxPasskey('');
     setSafeBoxError(null);
   };
 
@@ -116,9 +166,9 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
     setGoogleLoading(true);
 
     try {
-      const res = await signInWithGoogle();
+      const res = await signInWithGoogle({ includeGmailScopes: false });
       const googleUser = res.user;
-      const googleAccessToken = res.accessToken;
+      const googleAccessToken = res.accessToken || undefined;
 
       if (!googleUser?.email) {
         throw new Error('Google account did not return a valid email address.');
@@ -132,19 +182,32 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
         googleAccessToken
       });
 
-      // Dispatch direct Gmail confirmation
-      sendDirectAuthEmailToGmail({
-        email: googleUser.email,
-        name: googleUser.displayName || googleUser.email.split('@')[0],
-        role: authRes.user.role,
-        eventType: authRes.isNewUser ? 'registration' : 'login'
-      }).catch(console.error);
+      // Dispatch direct Gmail confirmation when Gmail token is available
+      if (googleAccessToken) {
+        sendDirectAuthEmailToGmail({
+          email: googleUser.email,
+          name: googleUser.displayName || googleUser.email.split('@')[0],
+          role: authRes.user.role,
+          eventType: authRes.isNewUser ? 'registration' : 'login'
+        }).catch(console.error);
+      }
 
+      if (authRes.user?.email) {
+        localStorage.setItem('encdec_last_email', authRes.user.email);
+      }
       setAuthToken(authRes.token);
       onLoginSuccess(authRes.user);
     } catch (err: any) {
       if (err?.code === 'auth/popup-blocked' || err?.message?.includes('popup-blocked')) {
         setGoogleAuthNotice('Popup blocked by browser or iframe sandbox. Please allow popups or open the app in a new browser tab.');
+      } else if (
+        err?.code === 'auth/popup-closed-by-user' ||
+        err?.code === 'auth/cancelled-popup-request' ||
+        err?.message?.includes('popup-closed-by-user')
+      ) {
+        setGoogleAuthNotice(
+          'Google Sign-In popup closed before completion (auth/popup-closed-by-user). Keep the Google popup open until sign-in finishes—or if running inside an embedded preview iframe, open the Dev/App URL in a new standalone browser tab—or sign in with email & password.'
+        );
       } else if (err?.code === 'auth/unauthorized-domain' || err?.message?.includes('auth/unauthorized-domain')) {
         const currentDomain = window.location.hostname;
         setGoogleAuthNotice(
@@ -241,6 +304,9 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
 
           // Auto-login: Store token and transition immediately into dashboard
           if (response.token && response.user) {
+            if (response.user?.email) {
+              localStorage.setItem('encdec_last_email', response.user.email);
+            }
             setAuthToken(response.token);
             setTimeout(() => {
               onLoginSuccess(response.user);
@@ -273,6 +339,9 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
           eventType: 'registration'
         }).catch(console.error);
 
+        if (response.user?.email) {
+          localStorage.setItem('encdec_last_email', response.user.email);
+        }
         setAuthToken(response.token);
         onLoginSuccess(response.user);
       } else {
@@ -301,6 +370,9 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
           eventType: 'login'
         }).catch(console.error);
 
+        if (response.user?.email) {
+          localStorage.setItem('encdec_last_email', response.user.email);
+        }
         setAuthToken(response.token);
         onLoginSuccess(response.user);
       }
@@ -823,123 +895,158 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
           )}
         </div>
 
-        {/* Admin Safe Box - MFA Locked Vault */}
-        <div className={`mt-6 p-4 rounded-xl border transition-all duration-300 font-mono text-xs ${
-          isSafeBoxUnlocked 
-            ? 'bg-slate-950/95 border-emerald-500/40 shadow-[0_0_20px_rgba(16,185,129,0.15)]' 
-            : 'bg-slate-950/80 border-white/10 hover:border-amber-500/30'
-        }`} id="admin-safe-box">
-          
-          {!isSafeBoxUnlocked ? (
-            /* LOCKED VAULT VIEW */
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2 text-amber-400 font-bold">
-                  <Lock className="w-4 h-4 text-amber-400" />
-                  <span className="tracking-wider">ADMIN SAFE BOX</span>
-                </div>
-                <span className="px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 font-bold border border-amber-500/30 text-[10px] uppercase">
-                  Locked Vault
-                </span>
+        {/* Admin Safe Box - Independent 6-Token Mixed Passkey Vault */}
+        {!safeBoxEnabled ? (
+          <div className="mt-6 p-4 rounded-xl border bg-slate-950/60 border-white/10 font-mono text-xs space-y-2" id="admin-safe-box-disabled">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 text-slate-400 font-bold">
+                <Lock className="w-4 h-4 text-slate-500" />
+                <span className="tracking-wider">ADMIN SAFE BOX</span>
               </div>
-
-              <p className="text-[11px] text-slate-400 font-mono">
-                Enter Admin hardware MFA (6-digit token) to unlock credential vault:
-              </p>
-
-              <form onSubmit={handleUnlockSafeBox} className="space-y-2">
-                <div className="flex items-center gap-2">
-                  <div className="relative flex-1 bg-slate-900 rounded-lg border border-white/15 focus-within:border-amber-400 transition-colors">
-                    <Key className="absolute left-3 w-3.5 h-3.5 text-amber-400/60" />
-                    <input
-                      id="safebox-mfa-input"
-                      type="password"
-                      maxLength={6}
-                      placeholder="Admin Safe Box"
-                      value={safeBoxMfaInput}
-                      onChange={(e) => setSafeBoxMfaInput(e.target.value.replace(/\D/g, ''))}
-                      className="w-full bg-transparent border-none py-2 pl-9 pr-3 text-xs text-white placeholder-slate-500 focus:outline-none focus:ring-0 tracking-widest font-mono"
-                    />
+              <span className="px-2 py-0.5 rounded bg-slate-800 text-slate-400 font-bold border border-white/10 text-[10px] uppercase">
+                OFF
+              </span>
+            </div>
+            <p className="text-[11px] text-slate-500 leading-relaxed">
+              Disabled in operator settings. Sign in and turn ON Admin Safe Box in Settings to access or configure your separate vault passkey.
+            </p>
+          </div>
+        ) : (
+          <div className={`mt-6 p-4 rounded-xl border transition-all duration-300 font-mono text-xs ${
+            isSafeBoxUnlocked 
+              ? 'bg-slate-950/95 border-emerald-500/40 shadow-[0_0_20px_rgba(16,185,129,0.15)]' 
+              : 'bg-slate-950/80 border-white/10 hover:border-amber-500/30'
+          }`} id="admin-safe-box">
+            
+            {!isSafeBoxUnlocked ? (
+              /* LOCKED VAULT VIEW */
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 text-amber-400 font-bold">
+                    <Lock className="w-4 h-4 text-amber-400" />
+                    <span className="tracking-wider">ADMIN SAFE BOX</span>
                   </div>
-                  <button
-                    type="submit"
-                    className="px-3.5 py-2 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 rounded-lg font-bold text-xs transition-all cursor-pointer shrink-0"
-                  >
-                    Unlock
-                  </button>
+                  <span className="px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 font-bold border border-amber-500/30 text-[10px] uppercase">
+                    Locked Vault
+                  </span>
                 </div>
-                {safeBoxError && (
-                  <p className="text-[10px] text-red-400 font-mono">
-                    {safeBoxError}
+
+                <p className="text-[11px] text-slate-400 font-mono leading-relaxed">
+                  Enter your separate 6-token Admin Safe Box passkey (numbers, alphabet, signs & emoji):
+                </p>
+
+                {!safeBoxHasPasskey && (
+                  <p className="text-[10px] text-amber-300 bg-amber-500/10 border border-amber-500/25 rounded px-2.5 py-1.5">
+                    No Safe Box passkey is set for this operator yet. Sign in and set your 6-token mixed passkey in Settings.
                   </p>
                 )}
-              </form>
-            </div>
-          ) : (
-            /* UNLOCKED VAULT VIEW */
-            <div className="space-y-3 animate-fadeIn">
-              <div className="flex items-center justify-between border-b border-emerald-500/20 pb-2">
-                <div className="flex items-center gap-2 text-emerald-400 font-bold">
-                  <Unlock className="w-4 h-4 text-emerald-400" />
-                  <span className="tracking-wider">ADMIN VAULT UNLOCKED</span>
+
+                <form onSubmit={handleUnlockSafeBox} className="space-y-2">
+                  <div className="flex items-center gap-2">
+                    <div className="relative flex-1 bg-slate-900 rounded-lg border border-white/15 focus-within:border-amber-400 transition-colors">
+                      <Key className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-amber-400/60" />
+                      <input
+                        id="safebox-passkey-input"
+                        type={showSafeBoxPasskey ? 'text' : 'password'}
+                        placeholder="6-token mixed passkey"
+                        value={safeBoxPasskey}
+                        onChange={(e) => setSafeBoxPasskey(e.target.value)}
+                        className="w-full bg-transparent border-none py-2 pl-9 pr-16 text-xs text-white placeholder-slate-500 focus:outline-none focus:ring-0 font-mono"
+                      />
+                      <span className={`absolute right-8 top-1/2 -translate-y-1/2 text-[10px] font-bold ${safeBoxValidation.tokenCount === 6 ? 'text-emerald-400' : 'text-slate-400'}`}>
+                        {safeBoxValidation.tokenCount}/6
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setShowSafeBoxPasskey(!showSafeBoxPasskey)}
+                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-500 hover:text-white cursor-pointer"
+                        title={showSafeBoxPasskey ? 'Hide passkey' : 'Reveal passkey'}
+                      >
+                        {showSafeBoxPasskey ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                      </button>
+                    </div>
+                    <button
+                      type="submit"
+                      disabled={safeBoxLoading}
+                      className="px-3.5 py-2 bg-amber-500/20 hover:bg-amber-500/30 disabled:opacity-50 text-amber-300 border border-amber-500/40 rounded-lg font-bold text-xs transition-all cursor-pointer shrink-0"
+                      id="safebox-unlock-btn"
+                    >
+                      {safeBoxLoading ? 'Checking...' : 'Unlock'}
+                    </button>
+                  </div>
+                  {safeBoxError && (
+                    <p className="text-[10px] text-red-400 font-mono" id="safebox-error-text">
+                      {safeBoxError}
+                    </p>
+                  )}
+                </form>
+              </div>
+            ) : (
+              /* UNLOCKED VAULT VIEW */
+              <div className="space-y-3 animate-fadeIn">
+                <div className="flex items-center justify-between border-b border-emerald-500/20 pb-2">
+                  <div className="flex items-center gap-2 text-emerald-400 font-bold">
+                    <Unlock className="w-4 h-4 text-emerald-400" />
+                    <span className="tracking-wider">ADMIN VAULT UNLOCKED</span>
+                  </div>
+                  <button
+                    onClick={handleLockSafeBox}
+                    className="text-[10px] text-slate-400 hover:text-white underline cursor-pointer"
+                  >
+                    Lock Safe Box
+                  </button>
                 </div>
-                <button
-                  onClick={handleLockSafeBox}
-                  className="text-[10px] text-slate-400 hover:text-white underline cursor-pointer"
-                >
-                  Lock Safe Box
-                </button>
-              </div>
 
-              <p className="text-[11px] text-slate-300 leading-relaxed">
-                Click any credential below to auto-fill into authentication fields:
-              </p>
+                <p className="text-[11px] text-slate-300 leading-relaxed">
+                  Click any credential below to auto-fill into authentication fields:
+                </p>
 
-              <div className="space-y-2">
-                {/* Admin credentials */}
-                <button
-                  type="button"
-                  onClick={() => handleFillCredentials('chekchris85@gmail.com', 'admin123')}
-                  className="w-full text-left p-2.5 rounded bg-slate-900/90 border border-emerald-500/30 hover:border-emerald-400/80 hover:bg-emerald-950/20 transition-all flex items-center justify-between group cursor-pointer"
-                >
-                  <div>
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-[9px] font-bold uppercase px-1.5 py-0.2 rounded bg-red-500/20 text-red-300 border border-red-500/30">
-                        Admin Role
-                      </span>
-                      <span className="text-white font-bold text-xs">chekchris85@gmail.com</span>
+                <div className="space-y-2">
+                  {/* Admin credentials */}
+                  <button
+                    type="button"
+                    onClick={() => handleFillCredentials('chekchris85@gmail.com', 'admin123')}
+                    className="w-full text-left p-2.5 rounded bg-slate-900/90 border border-emerald-500/30 hover:border-emerald-400/80 hover:bg-emerald-950/20 transition-all flex items-center justify-between group cursor-pointer"
+                  >
+                    <div>
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-[9px] font-bold uppercase px-1.5 py-0.2 rounded bg-red-500/20 text-red-300 border border-red-500/30">
+                          Admin Role
+                        </span>
+                        <span className="text-white font-bold text-xs">chekchris85@gmail.com</span>
+                      </div>
+                      <span className="text-[10px] text-slate-400">Password: admin123 • Login MFA: 123456</span>
                     </div>
-                    <span className="text-[10px] text-slate-400">Password: admin123 • MFA: 123456</span>
-                  </div>
-                  <span className="text-[10px] text-emerald-400 opacity-0 group-hover:opacity-100 transition-opacity">
-                    {copiedKey === 'chekchris85@gmail.com' ? '✓ Filled' : 'Click to Fill'}
-                  </span>
-                </button>
+                    <span className="text-[10px] text-emerald-400 opacity-0 group-hover:opacity-100 transition-opacity">
+                      {copiedKey === 'chekchris85@gmail.com' ? '✓ Filled' : 'Click to Fill'}
+                    </span>
+                  </button>
 
-                {/* Analyst credentials */}
-                <button
-                  type="button"
-                  onClick={() => handleFillCredentials('analyst@enterprise.sec', 'analyst123')}
-                  className="w-full text-left p-2.5 rounded bg-slate-900/90 border border-cyan-500/30 hover:border-cyan-400/80 hover:bg-cyan-950/20 transition-all flex items-center justify-between group cursor-pointer"
-                >
-                  <div>
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-[9px] font-bold uppercase px-1.5 py-0.2 rounded bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">
-                        Analyst Role
-                      </span>
-                      <span className="text-white font-bold text-xs">analyst@enterprise.sec</span>
+                  {/* Analyst credentials */}
+                  <button
+                    type="button"
+                    onClick={() => handleFillCredentials('analyst@enterprise.sec', 'analyst123')}
+                    className="w-full text-left p-2.5 rounded bg-slate-900/90 border border-cyan-500/30 hover:border-cyan-400/80 hover:bg-cyan-950/20 transition-all flex items-center justify-between group cursor-pointer"
+                  >
+                    <div>
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-[9px] font-bold uppercase px-1.5 py-0.2 rounded bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">
+                          Analyst Role
+                        </span>
+                        <span className="text-white font-bold text-xs">analyst@enterprise.sec</span>
+                      </div>
+                      <span className="text-[10px] text-slate-400">Password: analyst123</span>
                     </div>
-                    <span className="text-[10px] text-slate-400">Password: analyst123</span>
-                  </div>
-                  <span className="text-[10px] text-cyan-400 opacity-0 group-hover:opacity-100 transition-opacity">
-                    {copiedKey === 'analyst@enterprise.sec' ? '✓ Filled' : 'Click to Fill'}
-                  </span>
-                </button>
+                    <span className="text-[10px] text-cyan-400 opacity-0 group-hover:opacity-100 transition-opacity">
+                      {copiedKey === 'analyst@enterprise.sec' ? '✓ Filled' : 'Click to Fill'}
+                    </span>
+                  </button>
+                </div>
               </div>
-            </div>
-          )}
+            )}
 
-        </div>
+          </div>
+        )}
 
       </div>
     </div>
