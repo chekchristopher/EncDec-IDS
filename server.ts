@@ -31,6 +31,7 @@ import {
 } from './src/utils/hostOwnership.js';
 import { inspectHttpIngressPayload } from './server/services/dpiSignatures.js';
 import { evaluateUserCertificationStatus } from './src/utils/certificationStatus.js';
+import { setAdminGmailRefreshMode, setAdminGmailLastEmail } from './server/services/adminGmailSender.js';
 
 function isFalsePositiveAlert(a: any): boolean {
   if (!a || !a.id) return true;
@@ -92,6 +93,19 @@ function loadDb() {
         billingCycleDays: DEFAULT_BILLING_CONFIG.billingCycleDays,
       };
       dbState.payments = Array.isArray(parsed.payments) ? parsed.payments : [];
+      dbState.adminGmailRefreshMode = parsed.adminGmailRefreshMode === 'manual' ? 'manual' : 'auto';
+      setAdminGmailRefreshMode(dbState.adminGmailRefreshMode);
+      if (parsed.adminGmailLastEmail === null) {
+        dbState.adminGmailLastEmail = null;
+      } else if (typeof parsed.adminGmailLastEmail === 'string' && parsed.adminGmailLastEmail.trim()) {
+        dbState.adminGmailLastEmail = parsed.adminGmailLastEmail.trim();
+      } else {
+        const gmailAdmin = (dbState.users || []).find(
+          (u) => u.role === 'admin' && typeof u.email === 'string' && u.email.toLowerCase().endsWith('@gmail.com')
+        );
+        dbState.adminGmailLastEmail = gmailAdmin ? gmailAdmin.email : null;
+      }
+      setAdminGmailLastEmail(dbState.adminGmailLastEmail);
 
       // Ensure admin user has separate Safe Box defaults and active subscription initialized
       const ensureAdminSafeBoxDefaults = () => {
@@ -158,6 +172,19 @@ function loadDb() {
         billingCycleDays: DEFAULT_BILLING_CONFIG.billingCycleDays,
       };
       dbState.payments = Array.isArray(dbState.payments) ? dbState.payments : [];
+      dbState.adminGmailRefreshMode = dbState.adminGmailRefreshMode === 'manual' ? 'manual' : 'auto';
+      setAdminGmailRefreshMode(dbState.adminGmailRefreshMode);
+      if (dbState.adminGmailLastEmail === null) {
+        dbState.adminGmailLastEmail = null;
+      } else if (typeof dbState.adminGmailLastEmail === 'string' && dbState.adminGmailLastEmail.trim()) {
+        dbState.adminGmailLastEmail = dbState.adminGmailLastEmail.trim();
+      } else {
+        const gmailAdmin = (dbState.users || []).find(
+          (u) => u.role === 'admin' && typeof u.email === 'string' && u.email.toLowerCase().endsWith('@gmail.com')
+        );
+        dbState.adminGmailLastEmail = gmailAdmin ? gmailAdmin.email : null;
+      }
+      setAdminGmailLastEmail(dbState.adminGmailLastEmail);
       saveDb();
     }).catch(err => {
       console.error('[Persistence] Failed initial sync from Firestore:', err);

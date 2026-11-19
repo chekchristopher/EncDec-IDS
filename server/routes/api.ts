@@ -9,19 +9,46 @@ import fs from 'fs';
 import QRCode from 'qrcode';
 import { GoogleGenAI, Type } from '@google/genai';
 import { 
-  Host, Rule, Alert, Threat, APIKey, QuarantineItem, SecurityReport, DualDatabaseStatus, MssqlConfig, EmailLog, StoredCertificate, PaymentRecord
+  Host, Rule, Alert, Threat, APIKey, QuarantineItem, SecurityReport, DualDatabaseStatus, MssqlConfig, EmailLog, StoredCertificate, PaymentRecord, WorkbookProgress, ExamQuestion, ExamQuestionResult
 } from '../../src/types.js';
 import { DbSchema } from '../db/schema.js';
 import { firestoreSyncService } from '../db/firestore.js';
 import { mssqlSyncService } from '../db/mssql.js';
-import { sendEmail, getGmailAppConfig, verifyGmailAppConnection } from '../services/emailService.js';
+import { sendEmail, getGmailAppConfig, verifyGmailAppConnection, verifyGmailOAuthToken } from '../services/emailService.js';
+import {
+  setAdminGmailSenderSession,
+  getAdminGmailSenderStatus,
+  getActiveAdminGmailSender,
+  clearAdminGmailSenderSession,
+  markAdminGmailSessionExpired,
+  setAdminGmailRefreshMode,
+  getAdminGmailRefreshMode,
+  recordAdminGmailAutoRefreshFailure,
+} from '../services/adminGmailSender.js';
 import { 
   hostRegisterSchema, ruleCreateSchema, reportGenerateSchema, 
   apiKeyCreateSchema, quarantineSchema, emailTestSchema,
   aiEmailGenerateSchema, mssqlConfigureSchema, mssqlQuerySchema,
   verifyPaymentSubmissionSchema, adminGrantSubscriptionSchema,
-  adminBillingToggleSchema, adminFreeAccessSchema
+  adminBillingToggleSchema, adminFreeAccessSchema,
+  adminGmailRefreshModeSchema,
+  workbookExamSubmitSchema, workbookExamTimeoutSchema, adminExamQuestionCreateSchema
 } from '../schemas/validation.js';
+import {
+  EXAM_QUESTIONS_COUNT,
+  EXAM_DURATION_SECONDS,
+  EXAM_DURATION_MS,
+  EXAM_PASS_THRESHOLD_PERCENT,
+  getMergedExamBank,
+  selectUniqueExamQuestions,
+  sanitizeQuestionForCandidate,
+} from '../data/examQuestionBank.js';
+import {
+  COMMERCIAL_SCENES,
+  ALLOWED_COMMERCIAL_VOICES,
+  DEFAULT_COMMERCIAL_VOICE,
+  synthesizeCommercialVoiceover,
+} from '../services/commercialVoiceover.js';
 import {
   evaluateSubscriptionAccess,
   DEFAULT_BILLING_CONFIG,
@@ -704,6 +731,185 @@ export function createApiRouter(
     res.json({ success: true });
   });
 
+  // Admin Gmail OTP Sender Governance (allows Admin to authorize their Gmail account via OAuth instead of an App Password)
+  router.get('/admin/gmail-sender/status', authenticateToken, requireRole(['admin']), (req: any, res: Response) => {
+    const secretHeader = req.headers['x-secret-passkey'] || req.query.passkey;
+    if (secretHeader !== 'VIGIL_ADMIN_77') return res.status(403).json({ error: 'Gateway Passkey Invalid.' });
+
+    const gmailApp = getGmailAppConfig();
+    res.json({
+      ...getAdminGmailSenderStatus(),
+      gmailAppConfigured: Boolean(gmailApp),
+      gmailAppEmail: gmailApp ? gmailApp.email : null,
+    });
+  });
+
+  // Lightweight heartbeat for background auto-refresh manager (admin JWT only, no secrets returned)
+  router.get('/admin/gmail-sender/heartbeat', authenticateToken, requireRole(['admin']), (_req: any, res: Response) => {
+    const gmailApp = getGmailAppConfig();
+    res.json({
+      ...getAdminGmailSenderStatus(),
+      gmailAppConfigured: Boolean(gmailApp),
+      gmailAppEmail: gmailApp ? gmailApp.email : null,
+    });
+  });
+
+  // Switch between Automatic and Manual session refresh mode (persisted in DB)
+  router.post('/admin/gmail-sender/mode', authenticateToken, requireRole(['admin']), (req: any, res: Response) => {
+    const secretHeader = req.headers['x-secret-passkey'] || req.query.passkey;
+    if (secretHeader !== 'VIGIL_ADMIN_77') return res.status(403).json({ error: 'Gateway Passkey Invalid.' });
+
+    const parsed = adminGmailRefreshModeSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.issues?.[0]?.message || 'Invalid refresh mode.' });
+    }
+
+    const mode = parsed.data.refreshMode;
+    dbState.adminGmailRefreshMode = mode;
+    const status = setAdminGmailRefreshMode(mode);
+    saveDb();
+
+    addAuditLog(
+      req.user.id,
+      req.user.email,
+      `Set Admin Gmail Session Refresh Mode to ${mode.toUpperCase()}`,
+      'Admin Gmail OTP Sender',
+      req.ip || '127.0.0.1',
+      'success',
+      req.user.role
+    );
+    broadcastWs({ type: 'ADMIN_GMAIL_SENDER_UPDATE', payload: status });
+
+    res.json({
+      success: true,
+      status,
+      message:
+        mode === 'auto'
+          ? 'Automatic refresh enabled — Admin Gmail OTP session will renew silently before expiration.'
+          : 'Manual refresh enabled — click Refresh Admin Gmail Session whenever the session expires.',
+    });
+  });
+
+  router.post('/admin/gmail-sender/connect', authenticateToken, requireRole(['admin']), async (req: any, res: Response) => {
+    const secretHeader = req.headers['x-secret-passkey'] || req.query.passkey;
+    if (secretHeader !== 'VIGIL_ADMIN_77') return res.status(403).json({ error: 'Gateway Passkey Invalid.' });
+
+    const accessToken = String(req.body?.googleAccessToken || req.headers['x-google-access-token'] || '').trim();
+    if (!accessToken) {
+      return res.status(400).json({ error: 'Google OAuth access token is required. Sign in with Google and grant Gmail permissions.' });
+    }
+
+    const verification = await verifyGmailOAuthToken(accessToken);
+    if (!verification.ok || !verification.email) {
+      return res.status(401).json({ error: verification.error || 'Could not verify Admin Gmail permissions.' });
+    }
+
+    const silentRefresh = Boolean(req.body?.silentRefresh);
+    const status = setAdminGmailSenderSession({
+      accessToken,
+      email: verification.email,
+      userId: req.user.id,
+      silentRefresh,
+    });
+    dbState.adminGmailLastEmail = verification.email;
+    saveDb();
+
+    addAuditLog(req.user.id, req.user.email, 'Connected Admin Gmail OTP Sender', verification.email, req.ip || '127.0.0.1', 'success', req.user.role);
+    broadcastWs({ type: 'ADMIN_GMAIL_SENDER_UPDATE', payload: status });
+
+    res.json({
+      success: true,
+      status,
+      message: `Admin Gmail (${verification.email}) is now active for sending Forgot Password OTP emails (~${status.remainingMinutes} min session).`
+    });
+  });
+
+  // Background silent refresh endpoint (admin JWT only, requires refreshMode === 'auto')
+  router.post('/admin/gmail-sender/auto-refresh', authenticateToken, requireRole(['admin']), async (req: any, res: Response) => {
+    if (getAdminGmailRefreshMode() !== 'auto') {
+      return res.status(409).json({
+        error: 'Admin Gmail session refresh mode is currently set to Manual.',
+        status: getAdminGmailSenderStatus(),
+      });
+    }
+
+    const accessToken = String(req.body?.googleAccessToken || req.headers['x-google-access-token'] || '').trim();
+    if (!accessToken) {
+      return res.status(400).json({ error: 'Google OAuth access token is required for automatic refresh.' });
+    }
+
+    const verification = await verifyGmailOAuthToken(accessToken);
+    if (!verification.ok || !verification.email) {
+      const errMsg = verification.error || 'Google silent token verification failed.';
+      const status = recordAdminGmailAutoRefreshFailure(errMsg);
+      broadcastWs({ type: 'ADMIN_GMAIL_SENDER_UPDATE', payload: status });
+      return res.status(401).json({ error: errMsg, status });
+    }
+
+    const currentStatus = getAdminGmailSenderStatus();
+    if (
+      currentStatus.lastConnectedEmail &&
+      currentStatus.lastConnectedEmail.toLowerCase() !== verification.email.toLowerCase()
+    ) {
+      const mismatchMsg = `Silent refresh returned ${verification.email}, which does not match configured sender ${currentStatus.lastConnectedEmail}. Please reconnect manually.`;
+      const status = recordAdminGmailAutoRefreshFailure(mismatchMsg);
+      broadcastWs({ type: 'ADMIN_GMAIL_SENDER_UPDATE', payload: status });
+      return res.status(409).json({ error: mismatchMsg, status });
+    }
+
+    const status = setAdminGmailSenderSession({
+      accessToken,
+      email: verification.email,
+      userId: req.user.id,
+      silentRefresh: true,
+    });
+    dbState.adminGmailLastEmail = verification.email;
+    saveDb();
+
+    addAuditLog(
+      req.user.id,
+      req.user.email,
+      'Auto-Refreshed Admin Gmail OTP Sender',
+      verification.email,
+      req.ip || '127.0.0.1',
+      'success',
+      req.user.role
+    );
+    broadcastWs({ type: 'ADMIN_GMAIL_SENDER_UPDATE', payload: status });
+
+    res.json({
+      success: true,
+      status,
+      message: `Admin Gmail (${verification.email}) automatically refreshed (~${status.remainingMinutes} min remaining).`,
+    });
+  });
+
+  // Record when browser silent refresh requires interactive re-authorization
+  router.post('/admin/gmail-sender/auto-refresh-error', authenticateToken, requireRole(['admin']), (req: any, res: Response) => {
+    const errText = String(req.body?.error || 'Google requires interactive sign-in to renew the Gmail session.').slice(0, 300);
+    const status = recordAdminGmailAutoRefreshFailure(errText);
+    broadcastWs({ type: 'ADMIN_GMAIL_SENDER_UPDATE', payload: status });
+    res.json({ success: true, status });
+  });
+
+  router.post('/admin/gmail-sender/disconnect', authenticateToken, requireRole(['admin']), (req: any, res: Response) => {
+    const secretHeader = req.headers['x-secret-passkey'] || req.query.passkey;
+    if (secretHeader !== 'VIGIL_ADMIN_77') return res.status(403).json({ error: 'Gateway Passkey Invalid.' });
+
+    clearAdminGmailSenderSession({ preserveMode: true });
+    dbState.adminGmailLastEmail = null;
+    saveDb();
+    const status = getAdminGmailSenderStatus();
+    addAuditLog(req.user.id, req.user.email, 'Disconnected Admin Gmail OTP Sender', 'Admin Gateway', req.ip || '127.0.0.1', 'success', req.user.role);
+    broadcastWs({ type: 'ADMIN_GMAIL_SENDER_UPDATE', payload: status });
+
+    res.json({
+      success: true,
+      status,
+      message: 'Admin Gmail OTP sender disconnected.'
+    });
+  });
+
   // Audit Logs
   router.get('/audit-logs', authenticateToken, requireActiveSubscription, (req: any, res: Response) => {
     const allLogs = dbState.auditLogs || [];
@@ -839,12 +1045,71 @@ export function createApiRouter(
       eventType,
       type: eventType,
       role: targetRole,
-      status: 'sent',
+      status: 'queued',
       timestamp: isoTimestamp,
       previewSnippet: finalText.substring(0, 110) + '...',
       bodyText: finalText,
       htmlBody: finalHtml
     };
+
+    // Send via prioritized email pipeline (User OAuth, connected Admin Gmail OAuth, Gmail App Password, SMTP)
+    const googleAccessToken = req.body.googleAccessToken || req.headers['x-google-access-token'];
+    const adminSender = getActiveAdminGmailSender();
+    const initialToken = googleAccessToken || adminSender?.accessToken;
+    const usingAdminInitially = !googleAccessToken && Boolean(adminSender);
+    let dispatchResult: any = { success: true, channel: 'audit_log_only' };
+    
+    try {
+      dispatchResult = await sendEmail({
+        to: targetRecipient,
+        subject: finalSubject,
+        text: finalText,
+        html: finalHtml,
+        fromName: req.user.name || 'EncDec IDS SOC Security',
+        fromEmail: usingAdminInitially ? adminSender?.email : req.user.email,
+        googleAccessToken: initialToken,
+        preferOAuth: Boolean(initialToken),
+      });
+
+      if (
+        dispatchResult.channel === 'audit_log_only' &&
+        adminSender?.accessToken &&
+        googleAccessToken &&
+        adminSender.accessToken !== googleAccessToken
+      ) {
+        dispatchResult = await sendEmail({
+          to: targetRecipient,
+          subject: finalSubject,
+          text: finalText,
+          html: finalHtml,
+          fromName: 'EncDec IDS SOC Security',
+          fromEmail: adminSender.email,
+          googleAccessToken: adminSender.accessToken,
+          preferOAuth: true,
+        });
+        if (dispatchResult.channel === 'gmail_oauth_api') {
+          logEntry.senderEmail = adminSender.email;
+          logEntry.senderUserId = adminSender.connectedByUserId;
+        }
+      } else if (usingAdminInitially && adminSender && dispatchResult.channel === 'gmail_oauth_api') {
+        logEntry.senderEmail = adminSender.email;
+        logEntry.senderUserId = adminSender.connectedByUserId;
+      }
+
+      if (dispatchResult.oauthExpired && (!googleAccessToken || usingAdminInitially)) {
+        markAdminGmailSessionExpired('Admin Gmail OAuth session expired. Reconnect Admin Gmail to resume delivery.');
+      }
+    } catch (err: any) {
+      console.warn(`[EMAIL DISPATCH NOTICE] ${err?.message || err}`);
+      dispatchResult = { success: false, channel: 'audit_log_only', error: err?.message };
+    }
+
+    const deliveredToGmail =
+      dispatchResult.channel === 'gmail_oauth_api' ||
+      dispatchResult.channel === 'gmail_app_password' ||
+      dispatchResult.channel === 'smtp';
+
+    logEntry.status = deliveredToGmail ? 'delivered' : 'queued';
 
     if (!dbState.emailLogs) {
       dbState.emailLogs = [];
@@ -858,34 +1123,16 @@ export function createApiRouter(
     addAuditLog(req.user.id, req.user.email, 'Dispatched System Email', `${targetRecipient} [${targetRole.toUpperCase()}]`, req.ip || '127.0.0.1', 'success');
     broadcastWs({ type: 'EMAIL_LOG_UPDATE', payload: logEntry });
 
-    // Send via prioritized email pipeline (Gmail App Password, OAuth, SMTP)
-    const googleAccessToken = req.body.googleAccessToken || req.headers['x-google-access-token'];
-    let dispatchResult: any = { success: true, channel: 'audit_log_only' };
-    
-    try {
-      dispatchResult = await sendEmail({
-        to: targetRecipient,
-        subject: finalSubject,
-        text: finalText,
-        html: finalHtml,
-        fromName: req.user.name || 'EncDec IDS SOC Security',
-        fromEmail: req.user.email,
-        googleAccessToken
-      });
-    } catch (err: any) {
-      console.warn(`[EMAIL DISPATCH NOTICE] ${err?.message || err}`);
-      dispatchResult = { success: false, channel: 'audit_log_only', error: err?.message };
-    }
-
     const channelDescriptions: Record<string, string> = {
       gmail_app_password: '✅ Delivered directly to Gmail inbox via Gmail App Password.',
       gmail_oauth_api: '✅ Delivered directly to Gmail inbox via Google Workspace OAuth.',
       smtp: '✅ Delivered via SMTP Relay Server.',
-      audit_log_only: 'ℹ️ Dispatched and recorded to SOC Audit Trail.'
+      audit_log_only: 'ℹ️ Recorded in SOC Audit Trail (no active Gmail sender session yet).'
     };
 
     res.status(200).json({
       success: true,
+      deliveredToGmail,
       message: channelDescriptions[dispatchResult.channel] || `System email dispatched to ${targetRecipient}`,
       channel: dispatchResult.channel,
       deliveryDetails: dispatchResult.details,
@@ -1384,8 +1631,235 @@ Respond with a JSON object conforming to this schema:
     });
   });
 
-  // --- WORKBOOK READING & CERTIFICATION PROGRESS PERSISTENCE ---
+  // --- WORKBOOK READING, ANTI-MALPRACTICE TIMED EXAM & CERTIFICATION ---
+  const TOTAL_CHAPTERS_COUNT = 10;
+  const recentIssuedQuestionSets: string[][] = [];
+
+  const getExamBank = (): ExamQuestion[] => {
+    return getMergedExamBank(dbState.customExamQuestions);
+  };
+
+  const findWorkbookProgressRecord = (userId: string, userEmail?: string): WorkbookProgress | null => {
+    if (!dbState.workbookProgress) {
+      dbState.workbookProgress = [];
+    }
+    const emailLower = (userEmail || '').trim().toLowerCase();
+    return (
+      dbState.workbookProgress.find(
+        (p) => p.userId === userId || (emailLower && p.email && p.email.toLowerCase() === emailLower)
+      ) || null
+    );
+  };
+
+  const getOrCreateWorkbookProgress = (userId: string, userEmail: string): WorkbookProgress => {
+    let record = findWorkbookProgressRecord(userId, userEmail);
+    if (!record) {
+      record = {
+        id: `wp_${userId}`,
+        userId,
+        email: userEmail,
+        chapterIndex: 0,
+        paragraphIndex: 0,
+        chapterTitle: 'System Architecture & Core Philosophy',
+        readChapters: [],
+        completed: false,
+        quizScore: 0,
+        quizPassed: false,
+        lastReadAt: new Date().toISOString(),
+        activeExam: null,
+        seenQuestionIds: [],
+        lastResetReason: null,
+        lastResetAt: null,
+        lastExamScore: null,
+        examAttemptsCount: 0,
+      };
+      dbState.workbookProgress!.push(record);
+    }
+    return record;
+  };
+
+  const recordSeenQuestionIds = (record: WorkbookProgress, questionIds: string[], totalBankSize: number) => {
+    const existing = Array.isArray(record.seenQuestionIds) ? [...record.seenQuestionIds] : [];
+    for (const qId of questionIds) {
+      if (!existing.includes(qId)) {
+        existing.push(qId);
+      }
+    }
+    // Keep at most totalBankSize - EXAM_QUESTIONS_COUNT so candidate rotates cleanly through entire 220+ pool
+    const maxHistory = Math.max(0, totalBankSize - EXAM_QUESTIONS_COUNT);
+    record.seenQuestionIds = existing.length > maxHistory ? existing.slice(existing.length - maxHistory) : existing;
+  };
+
+  const resetWorkbookToChapterOne = (
+    record: WorkbookProgress,
+    reason: 'timeout' | 'score_below_80',
+    lastScore: number | null
+  ) => {
+    const nowIso = new Date().toISOString();
+    record.chapterIndex = 0;
+    record.paragraphIndex = 0;
+    record.chapterTitle = 'System Architecture & Core Philosophy';
+    record.readChapters = [];
+    record.completed = false;
+    record.quizPassed = false;
+    record.quizScore = 0;
+    record.activeExam = null;
+    record.lastResetReason = reason;
+    record.lastResetAt = nowIso;
+    record.lastExamScore = lastScore;
+    record.lastReadAt = nowIso;
+  };
+
+  const sanitizeProgressForClient = (record: WorkbookProgress | null) => {
+    if (!record) return null;
+    const { activeExam, ...rest } = record;
+    return {
+      ...rest,
+      hasActiveExam: Boolean(activeExam),
+      activeExamMeta: activeExam
+        ? {
+            attemptId: activeExam.attemptId,
+            startedAt: activeExam.startedAt,
+            expiresAt: activeExam.expiresAt,
+            totalSeconds: activeExam.totalSeconds,
+            remainingSeconds: Math.max(0, Math.ceil((activeExam.expiresAt - Date.now()) / 1000)),
+          }
+        : null,
+    };
+  };
+
+  const enforceActiveExamExpiration = (
+    record: WorkbookProgress | null,
+    user: { id: string; email: string; role?: string },
+    ipAddress: string
+  ): { expired: boolean; reason?: 'timeout' } => {
+    if (!record?.activeExam) {
+      return { expired: false };
+    }
+    if (Date.now() <= record.activeExam.expiresAt) {
+      return { expired: false };
+    }
+
+    const bank = getExamBank();
+    recordSeenQuestionIds(record, record.activeExam.questionIds || [], bank.length);
+    resetWorkbookToChapterOne(record, 'timeout', 0);
+    saveDb();
+
+    addAuditLog(
+      user.id,
+      user.email,
+      'Certification Exam Timed Out (>10m) — Workbook Reset to Chapter 1',
+      'CE-SOC Examination Policy Enforcement',
+      ipAddress,
+      'failure',
+      user.role
+    );
+
+    const certificationStatus = getUserCertificationStatus(user.id, user.email);
+    broadcastWs({
+      type: 'CERTIFICATION_STATUS_UPDATE',
+      payload: {
+        userId: user.id,
+        certificationStatus,
+      },
+    });
+
+    return { expired: true, reason: 'timeout' };
+  };
+
+  // Admin Question Bank Governance Endpoints (200+ tough questions with answers)
+  router.get('/admin/workbook/question-bank', authenticateToken, requireRole(['admin']), (req: any, res: Response) => {
+    const secretHeader = req.headers['x-secret-passkey'] || req.query.passkey;
+    if (secretHeader !== 'VIGIL_ADMIN_77') return res.status(403).json({ error: 'Gateway Passkey Invalid.' });
+
+    const bank = getExamBank();
+    const chapterCounts: Record<number, number> = {};
+    for (let ch = 1; ch <= TOTAL_CHAPTERS_COUNT; ch++) chapterCounts[ch] = 0;
+    for (const q of bank) {
+      chapterCounts[q.chapterNumber] = (chapterCounts[q.chapterNumber] || 0) + 1;
+    }
+
+    res.json({
+      success: true,
+      totalQuestions: bank.length,
+      builtInCount: bank.filter((q) => !q.isCustom).length,
+      customCount: bank.filter((q) => Boolean(q.isCustom)).length,
+      questionsPerExam: EXAM_QUESTIONS_COUNT,
+      durationSeconds: EXAM_DURATION_SECONDS,
+      passThresholdPercent: EXAM_PASS_THRESHOLD_PERCENT,
+      chapterBreakdown: chapterCounts,
+      questions: bank,
+    });
+  });
+
+  router.post('/admin/workbook/question-bank', authenticateToken, requireRole(['admin']), (req: any, res: Response) => {
+    const secretHeader = req.headers['x-secret-passkey'] || req.query.passkey;
+    if (secretHeader !== 'VIGIL_ADMIN_77') return res.status(403).json({ error: 'Gateway Passkey Invalid.' });
+
+    const parsed = adminExamQuestionCreateSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.issues?.[0]?.message || 'Invalid exam question payload.' });
+    }
+
+    if (!Array.isArray(dbState.customExamQuestions)) {
+      dbState.customExamQuestions = [];
+    }
+
+    const chapterTitles: Record<number, string> = {
+      1: 'Chapter 1: System Architecture & Core Philosophy',
+      2: 'Chapter 2: SOC Overview Dashboard & Executive Telemetry',
+      3: 'Chapter 3: Network IDS (NIDS) Operations & Packet Sniffer',
+      4: 'Chapter 4: Host IDS (HIDS) & Endpoint Security',
+      5: 'Chapter 5: Threat Intelligence & MITRE ATT&CK Matrix',
+      6: 'Chapter 6: Real-Time TopoJSON Geodesic Incursion Telemetry',
+      7: 'Chapter 7: Distributed Sensor Fabric & Autonomous Containment',
+      8: 'Chapter 8: Dual Database Architecture (Firestore + MSSQL)',
+      9: 'Chapter 9: Google Workspace & RFC 2822 Gmail Security Dispatch',
+      10: 'Chapter 10: Console Usability, Dual-Theme Engine & Certification',
+    };
+
+    const nextNum = dbState.customExamQuestions.length + 1;
+    const newQuestion: ExamQuestion = {
+      id: `Q-CUSTOM-${String(nextNum).padStart(3, '0')}-${crypto.randomBytes(2).toString('hex').toUpperCase()}`,
+      chapterNumber: parsed.data.chapterNumber,
+      topic: chapterTitles[parsed.data.chapterNumber] || `Chapter ${parsed.data.chapterNumber}`,
+      difficulty: parsed.data.difficulty,
+      question: parsed.data.question,
+      options: [
+        parsed.data.options[0],
+        parsed.data.options[1],
+        parsed.data.options[2],
+        parsed.data.options[3],
+      ],
+      correctIndex: parsed.data.correctIndex,
+      explanation: parsed.data.explanation,
+      isCustom: true,
+    };
+
+    dbState.customExamQuestions.unshift(newQuestion);
+    saveDb();
+
+    addAuditLog(
+      req.user.id,
+      req.user.email,
+      'Added Custom Certification Exam Question',
+      `${newQuestion.id} (Chapter ${newQuestion.chapterNumber})`,
+      req.ip || '127.0.0.1',
+      'success',
+      req.user.role
+    );
+
+    const bank = getExamBank();
+    res.status(201).json({
+      success: true,
+      question: newQuestion,
+      totalQuestions: bank.length,
+    });
+  });
+
   router.get('/workbook/certification-status', authenticateToken, requireActiveSubscription, (req: any, res: Response) => {
+    const record = findWorkbookProgressRecord(req.user.id, req.user.email);
+    enforceActiveExamExpiration(record, req.user, req.ip || '127.0.0.1');
     const certificationStatus = getUserCertificationStatus(req.user.id, req.user.email);
     res.json({
       success: true,
@@ -1394,20 +1868,13 @@ Respond with a JSON object conforming to this schema:
   });
 
   router.get('/workbook/progress', authenticateToken, requireActiveSubscription, (req: any, res: Response) => {
-    if (!dbState.workbookProgress) {
-      dbState.workbookProgress = [];
-    }
-
-    const userId = req.user.id;
-    const userEmail = (req.user.email || '').toLowerCase();
-
-    const progress = dbState.workbookProgress.find(
-      p => p.userId === userId || (p.email && p.email.toLowerCase() === userEmail)
-    );
+    const progress = findWorkbookProgressRecord(req.user.id, req.user.email);
+    const expiryCheck = enforceActiveExamExpiration(progress, req.user, req.ip || '127.0.0.1');
 
     res.json({
-      progress: progress || null,
-      certificationStatus: getUserCertificationStatus(userId, req.user.email),
+      progress: sanitizeProgressForClient(progress),
+      examTimedOutReset: expiryCheck.expired,
+      certificationStatus: getUserCertificationStatus(req.user.id, req.user.email),
     });
   });
 
@@ -1418,39 +1885,70 @@ Respond with a JSON object conforming to this schema:
 
     const userId = req.user.id;
     const userEmail = (req.user.email || '').toLowerCase();
-    const { 
-      chapterIndex, 
-      paragraphIndex, 
-      chapterTitle, 
-      readChapters, 
-      completed,
-      quizScore,
-      quizPassed
-    } = req.body;
+    const {
+      chapterIndex,
+      paragraphIndex,
+      chapterTitle,
+      readChapters,
+    } = req.body || {};
 
     const existingIdx = dbState.workbookProgress.findIndex(
-      p => p.userId === userId || (p.email && p.email.toLowerCase() === userEmail)
+      (p) => p.userId === userId || (p.email && p.email.toLowerCase() === userEmail)
     );
-
-    const safeChapterIndex = typeof chapterIndex === 'number' ? Math.max(0, chapterIndex) : 0;
-    const safeParagraphIndex = typeof paragraphIndex === 'number' ? Math.max(0, paragraphIndex) : 0;
-    const safeReadChapters = Array.isArray(readChapters) ? readChapters : [0];
-    const isCompleted = !!completed && (quizPassed !== undefined ? quizPassed : true);
-
     const prevRecord = existingIdx >= 0 ? dbState.workbookProgress[existingIdx] : null;
 
-    const record = {
-      id: existingIdx >= 0 ? dbState.workbookProgress[existingIdx].id : `wp_${userId}`,
+    if (prevRecord) {
+      const expiryCheck = enforceActiveExamExpiration(prevRecord, req.user, req.ip || '127.0.0.1');
+      if (expiryCheck.expired) {
+        return res.json({
+          success: true,
+          examTimedOutReset: true,
+          progress: sanitizeProgressForClient(prevRecord),
+          certificationStatus: getUserCertificationStatus(userId, req.user.email),
+        });
+      }
+    }
+
+    const safeChapterIndex =
+      typeof chapterIndex === 'number'
+        ? Math.min(TOTAL_CHAPTERS_COUNT - 1, Math.max(0, Math.floor(chapterIndex)))
+        : 0;
+    const safeParagraphIndex =
+      typeof paragraphIndex === 'number' ? Math.max(0, Math.floor(paragraphIndex)) : 0;
+
+    const validChapterSet = new Set<number>();
+    if (Array.isArray(readChapters)) {
+      for (const ch of readChapters) {
+        if (typeof ch === 'number' && Number.isInteger(ch) && ch >= 0 && ch < TOTAL_CHAPTERS_COUNT) {
+          validChapterSet.add(ch);
+        }
+      }
+    }
+    const safeReadChapters = Array.from(validChapterSet).sort((a, b) => a - b);
+
+    // Server-authoritative certification guard: client cannot self-grant quizPassed/completed here
+    const authoritativeQuizPassed = prevRecord?.quizPassed ?? false;
+    const authoritativeQuizScore = prevRecord?.quizScore ?? 0;
+    const authoritativeCompleted = Boolean((prevRecord?.completed ?? false) && authoritativeQuizPassed);
+
+    const record: WorkbookProgress = {
+      id: prevRecord ? prevRecord.id : `wp_${userId}`,
       userId,
       email: req.user.email,
       chapterIndex: safeChapterIndex,
       paragraphIndex: safeParagraphIndex,
       chapterTitle: chapterTitle || `Chapter ${safeChapterIndex + 1}`,
       readChapters: safeReadChapters,
-      completed: isCompleted || (prevRecord?.completed ?? false),
-      quizScore: typeof quizScore === 'number' ? quizScore : (prevRecord?.quizScore ?? 0),
-      quizPassed: typeof quizPassed === 'boolean' ? quizPassed : (prevRecord?.quizPassed ?? false),
-      lastReadAt: new Date().toISOString()
+      completed: authoritativeCompleted,
+      quizScore: authoritativeQuizScore,
+      quizPassed: authoritativeQuizPassed,
+      lastReadAt: new Date().toISOString(),
+      activeExam: prevRecord?.activeExam ?? null,
+      seenQuestionIds: prevRecord?.seenQuestionIds ?? [],
+      lastResetReason: prevRecord?.lastResetReason ?? null,
+      lastResetAt: prevRecord?.lastResetAt ?? null,
+      lastExamScore: prevRecord?.lastExamScore ?? null,
+      examAttemptsCount: prevRecord?.examAttemptsCount ?? 0,
     };
 
     if (existingIdx >= 0) {
@@ -1460,18 +1958,6 @@ Respond with a JSON object conforming to this schema:
     }
 
     saveDb();
-
-    if (isCompleted) {
-      addAuditLog(
-        userId,
-        req.user.email,
-        'Workbook Certification Completed',
-        'Certified EncDec IDS SOC Specialist (CE-SOC)',
-        req.ip || '127.0.0.1',
-        'success',
-        req.user.role
-      );
-    }
 
     const certificationStatus = getUserCertificationStatus(userId, req.user.email);
     broadcastWs({
@@ -1484,7 +1970,367 @@ Respond with a JSON object conforming to this schema:
 
     res.json({
       success: true,
-      progress: record,
+      progress: sanitizeProgressForClient(record),
+      certificationStatus,
+    });
+  });
+
+  // Check if user currently has an active timed exam (or if an unexpired/expired session exists)
+  router.get('/workbook/exam/active', authenticateToken, requireActiveSubscription, (req: any, res: Response) => {
+    const record = findWorkbookProgressRecord(req.user.id, req.user.email);
+    const expiryCheck = enforceActiveExamExpiration(record, req.user, req.ip || '127.0.0.1');
+
+    if (expiryCheck.expired) {
+      return res.json({
+        active: false,
+        expired: true,
+        resetToChapterOne: true,
+        resetReason: 'timeout',
+        progress: sanitizeProgressForClient(record),
+        certificationStatus: getUserCertificationStatus(req.user.id, req.user.email),
+      });
+    }
+
+    if (!record?.activeExam) {
+      return res.json({
+        active: false,
+        expired: false,
+        progress: sanitizeProgressForClient(record),
+        certificationStatus: getUserCertificationStatus(req.user.id, req.user.email),
+      });
+    }
+
+    const bank = getExamBank();
+    const bankMap = new Map(bank.map((q) => [q.id, q]));
+    const questions = record.activeExam.questionIds
+      .map((id) => bankMap.get(id))
+      .filter((q): q is ExamQuestion => Boolean(q))
+      .map(sanitizeQuestionForCandidate);
+
+    const serverNowMs = Date.now();
+    const remainingSeconds = Math.max(0, Math.ceil((record.activeExam.expiresAt - serverNowMs) / 1000));
+
+    res.json({
+      active: true,
+      expired: false,
+      attemptId: record.activeExam.attemptId,
+      startedAt: record.activeExam.startedAt,
+      expiresAt: record.activeExam.expiresAt,
+      serverNowMs,
+      remainingSeconds,
+      totalSeconds: record.activeExam.totalSeconds || EXAM_DURATION_SECONDS,
+      questions,
+    });
+  });
+
+  // Start or resume a unique randomized 6-question timed exam (10 minutes)
+  router.post('/workbook/exam/start', authenticateToken, requireActiveSubscription, (req: any, res: Response) => {
+    const record = getOrCreateWorkbookProgress(req.user.id, req.user.email);
+
+    // If an old session already expired, enforce full reset to Chapter 1 first
+    const expiryCheck = enforceActiveExamExpiration(record, req.user, req.ip || '127.0.0.1');
+    if (expiryCheck.expired) {
+      return res.status(409).json({
+        error: 'Your previous 10-minute examination timer expired. All workbook progress has been reset to Chapter 1. Please re-study Chapters 1–10 before re-attempting.',
+        code: 'EXAM_TIMED_OUT_RESET',
+        resetToChapterOne: true,
+        progress: sanitizeProgressForClient(record),
+        certificationStatus: getUserCertificationStatus(req.user.id, req.user.email),
+      });
+    }
+
+    const validChapters = new Set(
+      (record.readChapters || []).filter((ch) => typeof ch === 'number' && Number.isInteger(ch) && ch >= 0 && ch < TOTAL_CHAPTERS_COUNT)
+    );
+
+    if (validChapters.size < TOTAL_CHAPTERS_COUNT) {
+      return res.status(403).json({
+        error: `Prerequisite incomplete: Please read all 10 workbook chapters (${validChapters.size}/${TOTAL_CHAPTERS_COUNT} completed) before starting the timed certification exam.`,
+        code: 'WORKBOOK_PREREQUISITES_INCOMPLETE',
+        chaptersCompleted: validChapters.size,
+        totalChapters: TOTAL_CHAPTERS_COUNT,
+      });
+    }
+
+    const bank = getExamBank();
+    const bankMap = new Map(bank.map((q) => [q.id, q]));
+
+    // Resume existing unexpired attempt with exact same questions & deadline (prevents refresh cheating)
+    if (record.activeExam && Date.now() <= record.activeExam.expiresAt) {
+      const resumedQuestions = record.activeExam.questionIds
+        .map((id) => bankMap.get(id))
+        .filter((q): q is ExamQuestion => Boolean(q));
+
+      if (resumedQuestions.length === EXAM_QUESTIONS_COUNT) {
+        const serverNowMs = Date.now();
+        return res.json({
+          success: true,
+          resumed: true,
+          attemptId: record.activeExam.attemptId,
+          startedAt: record.activeExam.startedAt,
+          expiresAt: record.activeExam.expiresAt,
+          serverNowMs,
+          remainingSeconds: Math.max(0, Math.ceil((record.activeExam.expiresAt - serverNowMs) / 1000)),
+          totalSeconds: record.activeExam.totalSeconds || EXAM_DURATION_SECONDS,
+          passThresholdPercent: EXAM_PASS_THRESHOLD_PERCENT,
+          bankTotalCount: bank.length,
+          questions: resumedQuestions.map(sanitizeQuestionForCandidate),
+        });
+      }
+    }
+
+    // Select 6 unique tough questions avoiding this user's previously seen questions and recent global sets
+    const selectedQuestions = selectUniqueExamQuestions({
+      bank,
+      seenIds: record.seenQuestionIds || [],
+      count: EXAM_QUESTIONS_COUNT,
+      recentGlobalSets: recentIssuedQuestionSets,
+    });
+
+    const selectedIds = selectedQuestions.map((q) => q.id);
+    recentIssuedQuestionSets.push(selectedIds);
+    if (recentIssuedQuestionSets.length > 25) {
+      recentIssuedQuestionSets.shift();
+    }
+
+    const startedAt = Date.now();
+    const expiresAt = startedAt + EXAM_DURATION_MS;
+    const attemptId = `exam_${crypto.randomBytes(8).toString('hex')}`;
+
+    record.activeExam = {
+      attemptId,
+      questionIds: selectedIds,
+      startedAt,
+      expiresAt,
+      totalSeconds: EXAM_DURATION_SECONDS,
+    };
+    record.examAttemptsCount = (record.examAttemptsCount || 0) + 1;
+    recordSeenQuestionIds(record, selectedIds, bank.length);
+    saveDb();
+
+    addAuditLog(
+      req.user.id,
+      req.user.email,
+      'Started Timed CE-SOC Certification Exam',
+      `Attempt ${attemptId} (6 unique questions, 10m limit)`,
+      req.ip || '127.0.0.1',
+      'success',
+      req.user.role
+    );
+
+    res.json({
+      success: true,
+      resumed: false,
+      attemptId,
+      startedAt,
+      expiresAt,
+      serverNowMs: startedAt,
+      remainingSeconds: EXAM_DURATION_SECONDS,
+      totalSeconds: EXAM_DURATION_SECONDS,
+      passThresholdPercent: EXAM_PASS_THRESHOLD_PERCENT,
+      bankTotalCount: bank.length,
+      questions: selectedQuestions.map(sanitizeQuestionForCandidate),
+    });
+  });
+
+  // Grade timed exam attempt; enforce strict <80% and >10m reset back to Chapter 1
+  router.post('/workbook/exam/submit', authenticateToken, requireActiveSubscription, (req: any, res: Response) => {
+    const parsed = workbookExamSubmitSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.issues?.[0]?.message || 'Invalid exam submission.' });
+    }
+
+    const record = findWorkbookProgressRecord(req.user.id, req.user.email);
+    if (!record || !record.activeExam) {
+      return res.status(400).json({
+        error: 'No active examination session found. Your attempt may have already expired and reset to Chapter 1.',
+        code: 'NO_ACTIVE_EXAM',
+      });
+    }
+
+    if (record.activeExam.attemptId !== parsed.data.attemptId) {
+      return res.status(409).json({
+        error: 'Submitted Attempt ID does not match your current active examination session.',
+        code: 'ATTEMPT_MISMATCH',
+      });
+    }
+
+    const nowMs = Date.now();
+    const timedOut = nowMs > record.activeExam.expiresAt;
+
+    const bank = getExamBank();
+    const bankMap = new Map(bank.map((q) => [q.id, q]));
+    const assignedQuestions = record.activeExam.questionIds
+      .map((id) => bankMap.get(id))
+      .filter((q): q is ExamQuestion => Boolean(q));
+
+    if (assignedQuestions.length === 0) {
+      return res.status(500).json({ error: 'Exam questions could not be resolved from bank.' });
+    }
+
+    let correctCount = 0;
+    const results: ExamQuestionResult[] = assignedQuestions.map((q) => {
+      const rawAns = parsed.data.answers[q.id];
+      const selectedIndex = typeof rawAns === 'number' && Number.isInteger(rawAns) ? rawAns : null;
+      const isCorrect = selectedIndex === q.correctIndex;
+      if (isCorrect) correctCount += 1;
+      return {
+        questionId: q.id,
+        chapterNumber: q.chapterNumber,
+        topic: q.topic,
+        difficulty: q.difficulty,
+        question: q.question,
+        options: [...q.options] as [string, string, string, string],
+        selectedIndex,
+        correctIndex: q.correctIndex,
+        isCorrect,
+        explanation: q.explanation,
+      };
+    });
+
+    const calculatedScore = Math.round((correctCount / assignedQuestions.length) * 100);
+    const passed = !timedOut && calculatedScore >= EXAM_PASS_THRESHOLD_PERCENT;
+
+    recordSeenQuestionIds(record, record.activeExam.questionIds, bank.length);
+
+    if (!passed) {
+      const resetReason: 'timeout' | 'score_below_80' = timedOut ? 'timeout' : 'score_below_80';
+      resetWorkbookToChapterOne(record, resetReason, calculatedScore);
+      saveDb();
+
+      addAuditLog(
+        req.user.id,
+        req.user.email,
+        timedOut
+          ? 'Certification Exam Expired on Submit — Workbook Reset to Chapter 1'
+          : `Certification Exam Failed (${calculatedScore}% < 80%) — Workbook Reset to Chapter 1`,
+        `Attempt ${parsed.data.attemptId}: ${correctCount}/${assignedQuestions.length} correct (${calculatedScore}%)`,
+        req.ip || '127.0.0.1',
+        'failure',
+        req.user.role
+      );
+
+      const certificationStatus = getUserCertificationStatus(req.user.id, req.user.email);
+      broadcastWs({
+        type: 'CERTIFICATION_STATUS_UPDATE',
+        payload: {
+          userId: req.user.id,
+          certificationStatus,
+        },
+      });
+
+      return res.json({
+        success: true,
+        passed: false,
+        timedOut,
+        resetToChapterOne: true,
+        resetReason,
+        score: calculatedScore,
+        correctCount,
+        totalQuestions: assignedQuestions.length,
+        passThresholdPercent: EXAM_PASS_THRESHOLD_PERCENT,
+        results,
+        progress: sanitizeProgressForClient(record),
+        certificationStatus,
+      });
+    }
+
+    // Passed >= 80% within the 10-minute window!
+    record.quizPassed = true;
+    record.quizScore = calculatedScore;
+    record.completed = true;
+    record.activeExam = null;
+    record.lastResetReason = null;
+    record.lastExamScore = calculatedScore;
+    record.lastReadAt = new Date().toISOString();
+    saveDb();
+
+    addAuditLog(
+      req.user.id,
+      req.user.email,
+      'Workbook Certification Completed',
+      `Certified EncDec IDS SOC Specialist (CE-SOC) • Score: ${calculatedScore}%`,
+      req.ip || '127.0.0.1',
+      'success',
+      req.user.role
+    );
+
+    const certificationStatus = getUserCertificationStatus(req.user.id, req.user.email);
+    broadcastWs({
+      type: 'CERTIFICATION_STATUS_UPDATE',
+      payload: {
+        userId: req.user.id,
+        certificationStatus,
+      },
+    });
+
+    res.json({
+      success: true,
+      passed: true,
+      timedOut: false,
+      resetToChapterOne: false,
+      score: calculatedScore,
+      correctCount,
+      totalQuestions: assignedQuestions.length,
+      passThresholdPercent: EXAM_PASS_THRESHOLD_PERCENT,
+      results,
+      progress: sanitizeProgressForClient(record),
+      certificationStatus,
+    });
+  });
+
+  // Explicit timeout trigger when countdown hits 00:00 — resets entire workbook back to Chapter 1
+  router.post('/workbook/exam/timeout', authenticateToken, requireActiveSubscription, (req: any, res: Response) => {
+    const parsed = workbookExamTimeoutSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: 'Invalid timeout payload.' });
+    }
+
+    const record = findWorkbookProgressRecord(req.user.id, req.user.email);
+    if (!record) {
+      return res.json({
+        success: true,
+        timedOut: true,
+        resetToChapterOne: true,
+        resetReason: 'timeout',
+        progress: null,
+        certificationStatus: getUserCertificationStatus(req.user.id, req.user.email),
+      });
+    }
+
+    if (record.activeExam) {
+      const bank = getExamBank();
+      recordSeenQuestionIds(record, record.activeExam.questionIds || [], bank.length);
+    }
+
+    resetWorkbookToChapterOne(record, 'timeout', 0);
+    saveDb();
+
+    addAuditLog(
+      req.user.id,
+      req.user.email,
+      'Certification Exam Timer Expired (10:00) — Workbook Reset to Chapter 1',
+      parsed.data.attemptId ? `Attempt ${parsed.data.attemptId}` : '10-minute deadline elapsed',
+      req.ip || '127.0.0.1',
+      'failure',
+      req.user.role
+    );
+
+    const certificationStatus = getUserCertificationStatus(req.user.id, req.user.email);
+    broadcastWs({
+      type: 'CERTIFICATION_STATUS_UPDATE',
+      payload: {
+        userId: req.user.id,
+        certificationStatus,
+      },
+    });
+
+    res.json({
+      success: true,
+      timedOut: true,
+      resetToChapterOne: true,
+      resetReason: 'timeout',
+      progress: sanitizeProgressForClient(record),
       certificationStatus,
     });
   });
@@ -1511,6 +2357,27 @@ Respond with a JSON object conforming to this schema:
       if (!certificateId) {
         return res.status(400).json({ error: 'Certificate ID is required' });
       }
+
+      // Enforce authoritative certification eligibility before registering an official certificate
+      const userProgress = findWorkbookProgressRecord(req.user.id, req.user.email);
+      const existingCert = (dbState.certificates || []).find(
+        (c) =>
+          c.status !== 'revoked' &&
+          (c.userId === req.user.id || (req.user.email && c.recipientEmail?.toLowerCase() === req.user.email.toLowerCase()))
+      );
+      if (req.user?.role !== 'admin' && !userProgress?.quizPassed && !existingCert) {
+        return res.status(403).json({
+          error: 'You must complete all 10 workbook chapters and pass the 10-minute certification exam (>= 80%) before generating an official CE-SOC certificate.',
+          code: 'CERTIFICATION_REQUIRED',
+        });
+      }
+
+      const authoritativeScore =
+        typeof userProgress?.quizScore === 'number' && userProgress.quizScore >= EXAM_PASS_THRESHOLD_PERCENT
+          ? userProgress.quizScore
+          : typeof quizScore === 'number'
+          ? quizScore
+          : 100;
 
       const safeFirstName = (firstName || 'Security').trim();
       const safeMiddleName = (middleName || '').trim();
@@ -1546,8 +2413,8 @@ Respond with a JSON object conforming to this schema:
         recipientEmail: (recipientEmail || req.user?.email || 'operator@enterprise.sec').trim(),
         courseTitle: courseTitle || 'Certified EncDec IDS SOC Specialist (CE-SOC)',
         accreditationLevel: accreditationLevel || 'Tier-III Cyber Operations • Comprehensive Defense Mastery',
-        quizScore: typeof quizScore === 'number' ? quizScore : 100,
-        quizPassed: quizPassed !== undefined ? !!quizPassed : true,
+        quizScore: authoritativeScore,
+        quizPassed: req.user?.role === 'admin' ? (quizPassed !== undefined ? !!quizPassed : true) : true,
         issueDate: issueDate || new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }),
         verificationCode: verificationCode || `SHA256: ${Math.random().toString(36).substring(2, 10)}${Math.random().toString(36).substring(2, 10)}${Math.random().toString(36).substring(2, 10)}`.toUpperCase(),
         verifiedAt: new Date().toISOString(),
@@ -2409,6 +3276,46 @@ Respond with a JSON object conforming to this schema:
     broadcastWs({ type: 'BILLING_UPDATE', payload: { userId: payment.userId, billingConfig: getNormalizedBillingConfig() } });
 
     res.json({ success: true, payment });
+  });
+
+  // =========================================================================
+  // PUBLIC LANDING COMMERCIAL SCRIPT & STUDIO VOICEOVER (GEMINI 3.8 TTS)
+  // =========================================================================
+
+  router.get('/landing/commercial-script', (_req: Request, res: Response) => {
+    res.json({
+      success: true,
+      scenes: COMMERCIAL_SCENES,
+      voices: ALLOWED_COMMERCIAL_VOICES,
+      defaultVoice: DEFAULT_COMMERCIAL_VOICE,
+      studioTtsConfigured: Boolean(process.env.GEMINI_API_KEY?.trim()),
+    });
+  });
+
+  router.get('/landing/commercial-voiceover/:sceneId', async (req: Request, res: Response) => {
+    const sceneId = String(req.params.sceneId || '').trim();
+    const requestedVoice = typeof req.query.voice === 'string' ? req.query.voice : undefined;
+
+    try {
+      const { wavBuffer, voice, cached, model } = await synthesizeCommercialVoiceover(
+        sceneId,
+        requestedVoice
+      );
+      res.setHeader('Content-Type', 'audio/wav');
+      res.setHeader('Content-Length', String(wavBuffer.length));
+      res.setHeader('Cache-Control', 'public, max-age=86400');
+      res.setHeader('X-Voice-Name', voice);
+      res.setHeader('X-TTS-Model', model);
+      res.setHeader('X-TTS-Cache', cached ? 'HIT' : 'MISS');
+      return res.status(200).send(wavBuffer);
+    } catch (err: any) {
+      const status = typeof err?.statusCode === 'number' ? err.statusCode : 502;
+      return res.status(status).json({
+        success: false,
+        code: err?.code || 'TTS_ERROR',
+        error: err?.message || 'Unable to synthesize studio voiceover audio.',
+      });
+    }
   });
 
   return router;

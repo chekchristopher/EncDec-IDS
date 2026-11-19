@@ -23,14 +23,26 @@ export const forgotPasswordSchema = z.object({
 
 export const verifyResetCodeSchema = z.object({
   email: z.string().email('Invalid email address format'),
-  code: z.string().length(6, 'Verification code must be 6 digits'),
+  code: z.string().trim().regex(/^\d{6}$/, 'Verification OTP must be exactly 6 numeric digits'),
 });
 
 export const resetPasswordSchema = z.object({
   email: z.string().email('Invalid email address format'),
-  code: z.string().length(6, 'Verification code must be 6 digits'),
+  code: z.string().trim().regex(/^\d{6}$/, 'Verification OTP must be exactly 6 numeric digits'),
   newPassword: z.string().min(6, 'New password must be at least 6 characters'),
-  confirmPassword: z.string().min(6, 'Confirm password must be at least 6 characters').optional(),
+  confirmPassword: z.string().min(6, 'Confirm password must be at least 6 characters'),
+}).refine((data) => data.newPassword === data.confirmPassword, {
+  message: 'Passwords do not match. Please enter the same new password twice.',
+  path: ['confirmPassword'],
+});
+
+export const changePasswordSchema = z.object({
+  currentPassword: z.string().min(1, 'Current password is required'),
+  newPassword: z.string().min(6, 'New password must be at least 6 characters'),
+  confirmPassword: z.string().optional(),
+}).refine((data) => !data.confirmPassword || data.newPassword === data.confirmPassword, {
+  message: 'Passwords do not match.',
+  path: ['confirmPassword'],
 });
 
 export const profileUpdateSchema = z.object({
@@ -150,4 +162,31 @@ export const adminFreeAccessSchema = z.object({
   durationValue: z.number().positive().max(8760).optional(),
   durationUnit: z.enum(['minutes', 'hours', 'days', 'months']).optional(),
   durationLabel: z.string().trim().max(60).optional(),
+});
+
+export const adminGmailRefreshModeSchema = z.object({
+  refreshMode: z.enum(['auto', 'manual']),
+});
+
+export const workbookExamSubmitSchema = z.object({
+  attemptId: z.string().trim().min(1, 'Attempt ID is required'),
+  answers: z.record(z.string(), z.number().int().min(0).max(3)),
+});
+
+export const workbookExamTimeoutSchema = z.object({
+  attemptId: z.string().trim().optional(),
+});
+
+export const adminExamQuestionCreateSchema = z.object({
+  chapterNumber: z.number().int().min(1).max(10),
+  difficulty: z.enum(['Hard', 'Advanced']).default('Hard'),
+  question: z.string().trim().min(15, 'Question prompt must be at least 15 characters'),
+  options: z.tuple([
+    z.string().trim().min(1, 'Option A is required'),
+    z.string().trim().min(1, 'Option B is required'),
+    z.string().trim().min(1, 'Option C is required'),
+    z.string().trim().min(1, 'Option D is required'),
+  ]),
+  correctIndex: z.number().int().min(0).max(3),
+  explanation: z.string().trim().min(15, 'Academic explanation must be at least 15 characters'),
 });

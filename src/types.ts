@@ -4,6 +4,16 @@
  */
 
 // User System Types
+export interface PasswordResetOtpChallenge {
+  codeHash: string;
+  salt: string;
+  expiresAt: number;
+  verified: boolean;
+  verifiedAt?: number;
+  attempts: number;
+  requestedAt: string;
+}
+
 export interface User {
   id: string;
   email: string;
@@ -26,6 +36,8 @@ export interface User {
   subscriptionGrantedBy?: string;
   subscriptionUpdatedAt?: string;
   lastPaymentId?: string;
+  passwordResetOtp?: PasswordResetOtpChallenge;
+  passwordUpdatedAt?: string;
   createdAt: string;
 }
 
@@ -304,6 +316,43 @@ export interface EmailLog {
   status: 'sent' | 'queued' | 'delivered';
 }
 
+export type ExamDifficulty = 'Hard' | 'Advanced';
+
+export interface ExamQuestion {
+  id: string;
+  chapterNumber: number;
+  topic: string;
+  difficulty: ExamDifficulty;
+  question: string;
+  options: [string, string, string, string];
+  correctIndex: number;
+  explanation: string;
+  isCustom?: boolean;
+}
+
+export type SanitizedExamQuestion = Omit<ExamQuestion, 'correctIndex' | 'explanation'>;
+
+export interface ActiveExamSession {
+  attemptId: string;
+  questionIds: string[];
+  startedAt: number;
+  expiresAt: number;
+  totalSeconds: number;
+}
+
+export interface ExamQuestionResult {
+  questionId: string;
+  chapterNumber: number;
+  topic: string;
+  difficulty: ExamDifficulty;
+  question: string;
+  options: [string, string, string, string];
+  selectedIndex: number | null;
+  correctIndex: number;
+  isCorrect: boolean;
+  explanation: string;
+}
+
 export interface WorkbookProgress {
   id: string;
   userId: string;
@@ -316,6 +365,12 @@ export interface WorkbookProgress {
   quizScore?: number;
   quizPassed?: boolean;
   lastReadAt: string;
+  activeExam?: ActiveExamSession | null;
+  seenQuestionIds?: string[];
+  lastResetReason?: 'timeout' | 'score_below_80' | null;
+  lastResetAt?: string | null;
+  lastExamScore?: number | null;
+  examAttemptsCount?: number;
 }
 
 export interface MssqlConfig {

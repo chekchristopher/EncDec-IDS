@@ -11,7 +11,7 @@ import {
   CheckCircle2, Eye, RotateCcw, X, Share2, Printer, Star,
   Bookmark, Cloud, MapPin, Check, AlertCircle, HelpCircle as QuizIcon,
   RefreshCw, CheckSquare, Copy, FileCheck, ShieldAlert, Award as CertIcon,
-  User, CheckCheck, SlidersHorizontal, QrCode
+  User, CheckCheck, SlidersHorizontal, QrCode, Clock, ShieldCheck, AlertTriangle
 } from 'lucide-react';
 import { apiRequest } from '../api.js';
 import { WORKBOOK_DATA, generateWorkbookPdf } from '../services/workbookPdf.js';
@@ -22,7 +22,11 @@ import {
   createCertificatePdfDoc, 
   CertificateData 
 } from '../services/certificatePdf.js';
-import type { UserCertificationStatus } from '../types.js';
+import type {
+  UserCertificationStatus,
+  SanitizedExamQuestion,
+  ExamQuestionResult,
+} from '../types.js';
 
 interface EncDecWorkbookProps {
   currentUser?: {
@@ -34,95 +38,33 @@ interface EncDecWorkbookProps {
   onCertificationUpdated?: (status: UserCertificationStatus) => void;
 }
 
-interface QuizQuestion {
-  id: number;
-  question: string;
-  topic: string;
-  options: string[];
-  correctIndex: number;
-  explanation: string;
+const EXAM_DURATION_SECONDS = 600; // 10 minutes
+const EXAM_QUESTIONS_PER_ATTEMPT = 6;
+const EXAM_PASS_THRESHOLD_PERCENT = 80;
+
+interface ActiveExamClientState {
+  attemptId: string;
+  questions: SanitizedExamQuestion[];
+  startedAt: number;
+  expiresAt: number;
+  totalSeconds: number;
+  clockOffsetMs: number; // serverNowMs - clientNowMs
 }
 
-const QUIZ_QUESTIONS: QuizQuestion[] = [
-  {
-    id: 1,
-    topic: 'Chapter 3: Network IDS & DPI',
-    question: "What distinguishes EncDec's Deep Packet Inspection (DPI) engine from standard layer-3/4 packet filters?",
-    options: [
-      "It only inspects TCP/UDP headers and source/destination port numbers.",
-      "It reassembles Application Layer-7 payloads to detect shellcode, SQL injections, and malicious strings.",
-      "It converts all incoming network traffic into cleartext files on the local disk.",
-      "It completely replaces physical network switches with unmonitored software routers."
-    ],
-    correctIndex: 1,
-    explanation: "DPI reconstructs application protocols (HTTP, DNS, SSH, TLS) and analyzes hex payloads for known attack signatures beyond basic IP/port filtering."
-  },
-  {
-    id: 2,
-    topic: 'Chapter 4: Host IDS & FIM',
-    question: "How does EncDec's File Integrity Monitoring (FIM) identify unauthorized tampering with critical system files (e.g., /etc/passwd)?",
-    options: [
-      "By continuously computing and diffing cryptographic SHA-256 hashes against verified baselines.",
-      "By manually prompting SOC operators every hour to verify file byte lengths.",
-      "By permanently preventing all administrators from modifying server configuration files.",
-      "By deleting any file that has been modified within the last 30 days."
-    ],
-    correctIndex: 0,
-    explanation: "FIM calculates SHA-256 hashes of critical system directories and instantly alerts when a hash diverges from the authorized baseline benchmark."
-  },
-  {
-    id: 3,
-    topic: 'Chapter 6: TopoJSON Geodesic Incursion Telemetry',
-    question: "Which mathematical model is utilized by EncDec's D3.js engine to render smooth incursion trajectories from attacking IPs to the protected node?",
-    options: [
-      "Linear point-to-point scatterplots without geographic projection.",
-      "Quadratic Bézier curves computed across D3 Natural Earth geographic coordinates.",
-      "Static satellite bitmap overlays without real-time animation.",
-      "Unanchored random noise generators."
-    ],
-    correctIndex: 1,
-    explanation: "Quadratic Bézier curves (M sx sy Q mx my tx ty) animate curved geodesic arcs from origin threat coordinates to the defended portal."
-  },
-  {
-    id: 4,
-    topic: 'Chapter 5: Threat Intelligence & MITRE ATT&CK',
-    question: "What is the primary operational advantage of mapping intrusion alerts to the MITRE ATT&CK framework?",
-    options: [
-      "It automatically purges raw alert logs to reduce database storage.",
-      "It standardizes adversary Tactics, Techniques, and Procedures (TTPs) for faster containment and threat attribution.",
-      "It disables endpoint security software during recognized penetration tests.",
-      "It guarantees that attackers cannot spoof their IP addresses."
-    ],
-    correctIndex: 1,
-    explanation: "MITRE ATT&CK classifies detected anomalies into standardized tactics (e.g., T1110 brute force, T1498 DoS) to guide incident response playbooks."
-  },
-  {
-    id: 5,
-    topic: 'Chapter 8: Dual Database Architecture',
-    question: "In EncDec's dual-database resilience architecture, how do Google Cloud Firestore and Microsoft SQL Server collaborate?",
-    options: [
-      "Firestore acts as the sub-millisecond real-time WebSocket stream layer, while MSSQL provides immutable relational ACID auditing.",
-      "Firestore is used only for image storage, while MSSQL handles all network packet captures.",
-      "Both databases are shut down during active cyberattacks to preserve computing power.",
-      "MSSQL replaces Firestore entirely and disables all real-time notifications."
-    ],
-    correctIndex: 0,
-    explanation: "Firestore broadcasts live sub-millisecond events to analyst consoles, while MSSQL maintains relational integrity and long-term regulatory compliance."
-  },
-  {
-    id: 6,
-    topic: 'Chapter 7: Distributed Sensor Fabric & Containment',
-    question: "When multi-stage incident correlation (e.g. INC-1042) exceeds critical confidence thresholds, what autonomous response can EncDec initiate?",
-    options: [
-      "IP border null-routing, rogue daemon SIGKILL termination, and network interface isolation.",
-      "Dispatching promotional marketing surveys to the attacking subnet.",
-      "Erasing the SOC audit logs to hide that an intrusion occurred.",
-      "Shutting down all university campus electrical power grids immediately."
-    ],
-    correctIndex: 0,
-    explanation: "The automated active response engine executes perimeter null-routing, kernel process termination, and host quarantine in sub-second windows."
-  }
-];
+interface ResetEvaluationReport {
+  reason: 'timeout' | 'score_below_80';
+  score: number;
+  correctCount: number;
+  totalQuestions: number;
+  results: ExamQuestionResult[];
+}
+
+function formatCountdownClock(seconds: number): string {
+  const safe = Math.max(0, Math.floor(seconds));
+  const mins = Math.floor(safe / 60);
+  const secs = safe % 60;
+  return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+}
 
 const STORAGE_READ_KEY = 'encdec_workbook_read_chapters';
 const STORAGE_POS_KEY = 'encdec_workbook_last_position';
@@ -159,20 +101,26 @@ export default function EncDecWorkbook({ currentUser, onCertificationUpdated }: 
   const [resumeNotification, setResumeNotification] = useState<string | null>(null);
   const [justSavedIndex, setJustSavedIndex] = useState<number | null>(null);
 
-  // Knowledge Check Quiz States
-  const [quizAnswers, setQuizAnswers] = useState<Record<number, number>>({});
+  // Knowledge Check Timed Exam States (Server-Driven Anti-Malpractice)
+  const [quizAnswers, setQuizAnswers] = useState<Record<string, number>>({});
   const [quizSubmitted, setQuizSubmitted] = useState(false);
   const [quizScore, setQuizScore] = useState<number | null>(null);
   const [quizPassed, setQuizPassed] = useState(false);
   const [quizError, setQuizError] = useState<string | null>(null);
+  const [examSession, setExamSession] = useState<ActiveExamClientState | null>(null);
+  const [remainingSeconds, setRemainingSeconds] = useState<number>(EXAM_DURATION_SECONDS);
+  const [examBusy, setExamBusy] = useState(false);
+  const [examResults, setExamResults] = useState<ExamQuestionResult[]>([]);
+  const [resetReport, setResetReport] = useState<ResetEvaluationReport | null>(null);
+  const timeoutTriggeredRef = useRef<boolean>(false);
 
   // Chapter Reading Progress State
   const [readChapters, setReadChapters] = useState<number[]>(() => {
     try {
       const stored = localStorage.getItem(STORAGE_READ_KEY);
-      return stored ? JSON.parse(stored) : [0];
+      return stored ? JSON.parse(stored) : [];
     } catch {
-      return [0];
+      return [];
     }
   });
 
@@ -211,11 +159,68 @@ export default function EncDecWorkbook({ currentUser, onCertificationUpdated }: 
     if (currentUser?.email) setRecipientEmail(currentUser.email);
   }, [currentUser]);
 
-  // Load progress and quiz status from Database on initial mount
+  const applyResetStateToClient = (
+    reason: 'timeout' | 'score_below_80',
+    score: number,
+    correctCount: number,
+    totalQuestions: number,
+    results: ExamQuestionResult[],
+    certStatus?: UserCertificationStatus
+  ) => {
+    setReadChapters([]);
+    setActiveChapterIndex(0);
+    setLastReadParagraphIndex(0);
+    setQuizAnswers({});
+    setQuizScore(null);
+    setQuizPassed(false);
+    setQuizSubmitted(false);
+    setExamSession(null);
+    setRemainingSeconds(EXAM_DURATION_SECONDS);
+    setExamResults(results);
+    setResetReport({
+      reason,
+      score,
+      correctCount,
+      totalQuestions,
+      results,
+    });
+    timeoutTriggeredRef.current = false;
+
+    try {
+      localStorage.removeItem(STORAGE_READ_KEY);
+      localStorage.removeItem(STORAGE_POS_KEY);
+      localStorage.removeItem(STORAGE_QUIZ_KEY);
+    } catch {
+      // ignore
+    }
+
+    if (certStatus && onCertificationUpdated) {
+      onCertificationUpdated(certStatus);
+    }
+  };
+
+  // Load progress, check expired attempts, and resume active timed exam from Database on initial mount
   useEffect(() => {
     const fetchProgressFromDatabase = async () => {
       try {
-        const res = await apiRequest('/api/workbook/progress');
+        const [res, activeExamRes] = await Promise.all([
+          apiRequest('/api/workbook/progress'),
+          apiRequest('/api/workbook/exam/active').catch(() => null),
+        ]);
+
+        if (activeExamRes?.expired || res?.examTimedOutReset) {
+          applyResetStateToClient(
+            'timeout',
+            0,
+            0,
+            EXAM_QUESTIONS_PER_ATTEMPT,
+            [],
+            activeExamRes?.certificationStatus || res?.certificationStatus
+          );
+          setActiveView('quiz');
+          return;
+        }
+
         if (res && res.progress) {
           const p = res.progress;
           if (typeof p.chapterIndex === 'number' && p.chapterIndex >= 0 && p.chapterIndex < WORKBOOK_DATA.length) {
@@ -224,23 +229,39 @@ export default function EncDecWorkbook({ currentUser, onCertificationUpdated }: 
           if (typeof p.paragraphIndex === 'number' && p.paragraphIndex >= 0) {
             setLastReadParagraphIndex(p.paragraphIndex);
           }
-          if (Array.isArray(p.readChapters) && p.readChapters.length > 0) {
+          if (Array.isArray(p.readChapters)) {
             setReadChapters(p.readChapters);
           }
           if (typeof p.quizPassed === 'boolean') {
             setQuizPassed(p.quizPassed);
-            if (typeof p.quizScore === 'number') {
+            if (p.quizPassed && typeof p.quizScore === 'number') {
               setQuizScore(p.quizScore);
               setQuizSubmitted(true);
             }
           }
-          if (p.lastReadAt) {
+          if (p.lastReadAt && Array.isArray(p.readChapters) && p.readChapters.length > 0) {
             const timeStr = new Date(p.lastReadAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
             setDbLastSavedTime(p.lastReadAt);
             setResumeNotification(`Resumed from database: Chapter ${p.chapterIndex + 1}, Section ${p.paragraphIndex + 1} (${timeStr})`);
             setTimeout(() => setResumeNotification(null), 6000);
           }
         }
+
+        if (activeExamRes?.active && Array.isArray(activeExamRes.questions) && activeExamRes.questions.length > 0) {
+          const offsetMs = typeof activeExamRes.serverNowMs === 'number' ? activeExamRes.serverNowMs - Date.now() : 0;
+          timeoutTriggeredRef.current = false;
+          setExamSession({
+            attemptId: activeExamRes.attemptId,
+            questions: activeExamRes.questions,
+            startedAt: activeExamRes.startedAt,
+            expiresAt: activeExamRes.expiresAt,
+            totalSeconds: activeExamRes.totalSeconds || EXAM_DURATION_SECONDS,
+            clockOffsetMs: offsetMs,
+          });
+          setRemainingSeconds(activeExamRes.remainingSeconds ?? EXAM_DURATION_SECONDS);
+          setActiveView('quiz');
+        }
+
         if (res?.certificationStatus && onCertificationUpdated) {
           onCertificationUpdated(res.certificationStatus);
         }
@@ -252,6 +273,26 @@ export default function EncDecWorkbook({ currentUser, onCertificationUpdated }: 
     fetchProgressFromDatabase();
   }, []);
 
+  // Strict 10-minute Exam Countdown Timer synced with server expiresAt
+  useEffect(() => {
+    if (!examSession) return;
+
+    const tick = () => {
+      const alignedNow = Date.now() + examSession.clockOffsetMs;
+      const secs = Math.max(0, Math.ceil((examSession.expiresAt - alignedNow) / 1000));
+      setRemainingSeconds(secs);
+
+      if (secs <= 0 && !timeoutTriggeredRef.current) {
+        timeoutTriggeredRef.current = true;
+        handleExamTimeout(examSession.attemptId);
+      }
+    };
+
+    tick();
+    const interval = window.setInterval(tick, 500);
+    return () => window.clearInterval(interval);
+  }, [examSession]);
+
   // Persist read chapters to localStorage
   useEffect(() => {
     try {
@@ -262,12 +303,13 @@ export default function EncDecWorkbook({ currentUser, onCertificationUpdated }: 
   }, [readChapters]);
 
   // Save progress & last read position to Database and localStorage
-  const persistProgressToDb = async (chIdx: number, pIdx: number, markCompleted = false, passed = quizPassed, score = quizScore) => {
+  const persistProgressToDb = async (chIdx: number, pIdx: number, explicitReadChapters?: number[]) => {
     setIsSyncingWithDb(true);
     setJustSavedIndex(pIdx);
     setTimeout(() => setJustSavedIndex(null), 2500);
 
-    const safeReadChapters = readChapters.includes(chIdx) ? readChapters : [...readChapters, chIdx];
+    const baseChapters = explicitReadChapters ?? readChapters;
+    const safeReadChapters = baseChapters.includes(chIdx) ? baseChapters : [...baseChapters, chIdx];
 
     try {
       localStorage.setItem(STORAGE_POS_KEY, JSON.stringify({ chapterIndex: chIdx, paragraphIndex: pIdx }));
@@ -281,10 +323,13 @@ export default function EncDecWorkbook({ currentUser, onCertificationUpdated }: 
         paragraphIndex: pIdx,
         chapterTitle: WORKBOOK_DATA[chIdx]?.title || `Chapter ${chIdx + 1}`,
         readChapters: safeReadChapters,
-        completed: markCompleted,
-        quizPassed: passed,
-        quizScore: score
       });
+
+      if (res?.examTimedOutReset) {
+        applyResetStateToClient('timeout', 0, 0, EXAM_QUESTIONS_PER_ATTEMPT, [], res.certificationStatus);
+        setActiveView('quiz');
+        return;
+      }
 
       if (res && res.progress) {
         setDbLastSavedTime(res.progress.lastReadAt);
@@ -321,22 +366,24 @@ export default function EncDecWorkbook({ currentUser, onCertificationUpdated }: 
   };
 
   // Handler to mark chapter read and advance
-  const handleMarkAsRead = (index: number) => {
+  const handleMarkAsRead = (index: number): number[] => {
     if (!readChapters.includes(index)) {
       const nextRead = [...readChapters, index];
       setReadChapters(nextRead);
-      persistProgressToDb(index, 0, false);
+      persistProgressToDb(index, 0, nextRead);
+      return nextRead;
     }
+    return readChapters;
   };
 
   const handleNextChapter = () => {
-    handleMarkAsRead(activeChapterIndex);
+    const updatedRead = handleMarkAsRead(activeChapterIndex);
     if (activeChapterIndex < totalChapters - 1) {
       const nextIdx = activeChapterIndex + 1;
       setActiveChapterIndex(nextIdx);
       setLastReadParagraphIndex(0);
       setActiveView('reader');
-      persistProgressToDb(nextIdx, 0);
+      persistProgressToDb(nextIdx, 0, updatedRead);
       window.scrollTo({ top: 120, behavior: 'smooth' });
     } else {
       setActiveView('quiz');
@@ -377,54 +424,125 @@ export default function EncDecWorkbook({ currentUser, onCertificationUpdated }: 
     }
   };
 
-  // Quiz Handling
-  const handleOptionSelect = (qId: number, optIdx: number) => {
-    if (quizSubmitted && quizPassed) return;
-    setQuizAnswers(prev => ({ ...prev, [qId]: optIdx }));
+  // Proctored Exam Lifecycle Handlers
+  const handleStartExam = async () => {
+    setExamBusy(true);
     setQuizError(null);
+    setResetReport(null);
+    setExamResults([]);
+    try {
+      const res = await apiRequest('/api/workbook/exam/start', 'POST', {});
+      if (res?.resetToChapterOne) {
+        applyResetStateToClient('timeout', 0, 0, EXAM_QUESTIONS_PER_ATTEMPT, [], res.certificationStatus);
+        return;
+      }
+      const offsetMs = typeof res.serverNowMs === 'number' ? res.serverNowMs - Date.now() : 0;
+      timeoutTriggeredRef.current = false;
+      setQuizAnswers({});
+      setQuizSubmitted(false);
+      setExamSession({
+        attemptId: res.attemptId,
+        questions: res.questions || [],
+        startedAt: res.startedAt,
+        expiresAt: res.expiresAt,
+        totalSeconds: res.totalSeconds || EXAM_DURATION_SECONDS,
+        clockOffsetMs: offsetMs,
+      });
+      setRemainingSeconds(res.remainingSeconds ?? EXAM_DURATION_SECONDS);
+    } catch (err: any) {
+      if (err?.message?.includes('reset to Chapter 1')) {
+        applyResetStateToClient('timeout', 0, 0, EXAM_QUESTIONS_PER_ATTEMPT, []);
+      }
+      setQuizError(err?.message || 'Unable to initialize certification examination session.');
+    } finally {
+      setExamBusy(false);
+    }
+  };
+
+  const handleOptionSelect = (qId: string, optIdx: number) => {
+    if (!examSession || quizSubmitted) return;
+    setQuizAnswers((prev) => ({ ...prev, [qId]: optIdx }));
+    setQuizError(null);
+  };
+
+  const handleExamTimeout = async (attemptId?: string) => {
+    setExamBusy(true);
+    setQuizError(null);
+    try {
+      const res = await apiRequest('/api/workbook/exam/timeout', 'POST', { attemptId });
+      applyResetStateToClient(
+        'timeout',
+        0,
+        0,
+        EXAM_QUESTIONS_PER_ATTEMPT,
+        [],
+        res?.certificationStatus
+      );
+    } catch {
+      applyResetStateToClient('timeout', 0, 0, EXAM_QUESTIONS_PER_ATTEMPT, []);
+    } finally {
+      setExamBusy(false);
+    }
   };
 
   const handleSubmitQuiz = async () => {
+    if (!examSession) return;
     const answeredCount = Object.keys(quizAnswers).length;
-    if (answeredCount < QUIZ_QUESTIONS.length) {
-      setQuizError(`Please answer all ${QUIZ_QUESTIONS.length} questions before submitting.`);
+    if (answeredCount < examSession.questions.length) {
+      setQuizError(`Please answer all ${examSession.questions.length} examination questions before final submission.`);
       return;
     }
 
-    let correctCount = 0;
-    QUIZ_QUESTIONS.forEach((q) => {
-      if (quizAnswers[q.id] === q.correctIndex) {
-        correctCount += 1;
-      }
-    });
-
-    const calculatedScore = Math.round((correctCount / QUIZ_QUESTIONS.length) * 100);
-    const passed = calculatedScore >= 80;
-
-    setQuizScore(calculatedScore);
-    setQuizPassed(passed);
-    setQuizSubmitted(true);
+    setExamBusy(true);
     setQuizError(null);
+    try {
+      const res = await apiRequest('/api/workbook/exam/submit', 'POST', {
+        attemptId: examSession.attemptId,
+        answers: quizAnswers,
+      });
 
-    await persistProgressToDb(
-      activeChapterIndex, 
-      lastReadParagraphIndex, 
-      passed && isChaptersFinished, 
-      passed, 
-      calculatedScore
-    );
+      if (res?.resetToChapterOne || !res?.passed) {
+        applyResetStateToClient(
+          res?.resetReason || (res?.timedOut ? 'timeout' : 'score_below_80'),
+          typeof res?.score === 'number' ? res.score : 0,
+          typeof res?.correctCount === 'number' ? res.correctCount : 0,
+          typeof res?.totalQuestions === 'number' ? res.totalQuestions : EXAM_QUESTIONS_PER_ATTEMPT,
+          Array.isArray(res?.results) ? res.results : [],
+          res?.certificationStatus
+        );
+        return;
+      }
 
-    if (passed) {
+      // Passed >= 80% within 10 minutes
+      setQuizScore(res.score);
+      setQuizPassed(true);
+      setQuizSubmitted(true);
+      setExamResults(Array.isArray(res.results) ? res.results : []);
+      setExamSession(null);
+      setResetReport(null);
+
+      if (res?.certificationStatus && onCertificationUpdated) {
+        onCertificationUpdated(res.certificationStatus);
+      }
+
       setTimeout(() => {
         setShowEarnedCertModal(true);
-      }, 700);
+      }, 650);
+    } catch (err: any) {
+      setQuizError(err?.message || 'Failed to grade examination submission.');
+    } finally {
+      setExamBusy(false);
     }
   };
 
-  const handleRetakeQuiz = () => {
-    setQuizAnswers({});
-    setQuizSubmitted(false);
+  const handleRestartFromChapterOne = () => {
+    setResetReport(null);
+    setExamResults([]);
     setQuizError(null);
+    setActiveChapterIndex(0);
+    setLastReadParagraphIndex(0);
+    setActiveView('reader');
+    window.scrollTo({ top: 120, behavior: 'smooth' });
   };
 
   // Computes the arranged full name based on candidate's First, Middle, Last and format
@@ -821,24 +939,28 @@ export default function EncDecWorkbook({ currentUser, onCertificationUpdated }: 
                   setActiveView('quiz');
                   window.scrollTo({ top: 220, behavior: 'smooth' });
                 }}
-                title="Capstone Knowledge Check Quiz"
+                title="Proctored Certification Exam (10m • 80%+ Required)"
                 className={`py-2 px-1 rounded-lg text-center font-mono text-xs transition-all cursor-pointer border flex flex-col items-center justify-center gap-1 ${
                   activeView === 'quiz'
                     ? 'bg-amber-500/20 border-amber-400 text-amber-300 shadow-[0_0_12px_rgba(245,158,11,0.3)] ring-1 ring-amber-400'
                     : quizPassed
                     ? 'bg-emerald-950/50 border-emerald-400 text-emerald-300'
+                    : examSession
+                    ? 'bg-red-950/50 border-red-400 text-red-300 animate-pulse'
                     : 'bg-slate-950 border-amber-500/40 text-amber-400 hover:bg-amber-950/30'
                 }`}
               >
                 <div className="flex items-center justify-center">
                   {quizPassed ? (
                     <Award className="w-3.5 h-3.5 text-emerald-400" />
+                  ) : examSession ? (
+                    <Clock className="w-3.5 h-3.5 text-amber-300" />
                   ) : (
                     <QuizIcon className="w-3.5 h-3.5 text-amber-400 animate-pulse" />
                   )}
                 </div>
-                <span className="text-[9px] font-bold tracking-tighter truncate w-full block">
-                  Exam
+                <span className="text-[9px] font-bold tracking-tighter truncate w-full block tabular-nums">
+                  {examSession ? formatCountdownClock(remainingSeconds) : 'Exam'}
                 </span>
               </button>
 
@@ -1021,8 +1143,8 @@ export default function EncDecWorkbook({ currentUser, onCertificationUpdated }: 
                 <div className="flex items-center gap-2">
                   <Award className="w-4 h-4 text-amber-400 shrink-0" />
                   <div>
-                    <span className="text-[10px] uppercase font-bold block">Final Assessment</span>
-                    <span className="text-xs font-bold text-white">Knowledge Check Quiz</span>
+                    <span className="text-[10px] uppercase font-bold block">Proctored Assessment</span>
+                    <span className="text-xs font-bold text-white">Certification Exam (10m)</span>
                   </div>
                 </div>
 
@@ -1030,9 +1152,13 @@ export default function EncDecWorkbook({ currentUser, onCertificationUpdated }: 
                   <span className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 text-[10px] font-bold">
                     Passed {quizScore}%
                   </span>
+                ) : examSession ? (
+                  <span className="px-2 py-0.5 rounded bg-red-500/20 text-red-300 border border-red-500/40 text-[10px] font-bold tabular-nums">
+                    {formatCountdownClock(remainingSeconds)}
+                  </span>
                 ) : (
                   <span className="px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 text-[10px] font-bold">
-                    80% to Pass
+                    80% • 10m
                   </span>
                 )}
               </button>
@@ -1507,35 +1633,40 @@ export default function EncDecWorkbook({ currentUser, onCertificationUpdated }: 
           )}
 
           {/* ================================================================ */}
-          {/* VIEW 2: CAPSTONE KNOWLEDGE CHECK QUIZ COMPONENT                  */}
+          {/* VIEW 2: PROCTORED TIMED CERTIFICATION EXAMINATION                */}
           {/* ================================================================ */}
           {activeView === 'quiz' && (
             <div className="bg-slate-900 border-2 border-amber-500/40 rounded-2xl p-6 sm:p-8 space-y-6 shadow-2xl relative font-mono" id="knowledge-check-quiz">
               
-              {/* Quiz Header */}
-              <div className="border-b border-white/10 pb-5 space-y-2">
+              {/* Exam Header */}
+              <div className="border-b border-white/10 pb-5 space-y-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <span className="px-3 py-1 rounded bg-amber-500/10 border border-amber-500/30 text-amber-400 text-xs font-bold uppercase flex items-center gap-1.5">
-                    <Award className="w-4 h-4" />
-                    Capstone Certification Assessment
+                    <ShieldCheck className="w-4 h-4" />
+                    Proctored CE-SOC Certification Examination
                   </span>
 
-                  <span className="text-xs text-slate-400">
-                    Passing Threshold: <strong className="text-emerald-400">80% or Higher</strong>
-                  </span>
+                  <div className="flex items-center gap-3 text-xs text-slate-400">
+                    <span>
+                      Duration: <strong className="text-cyan-300">10:00 Strict</strong>
+                    </span>
+                    <span>•</span>
+                    <span>
+                      Passing Grade: <strong className="text-emerald-400">{EXAM_PASS_THRESHOLD_PERCENT}%+ (&ge;5/6)</strong>
+                    </span>
+                  </div>
                 </div>
 
                 <h2 className="text-xl sm:text-2xl font-bold text-white font-sans tracking-tight">
-                  Certified EncDec IDS SOC Specialist (CE-SOC) Knowledge Check
+                  Certified EncDec IDS SOC Specialist (CE-SOC) Academic Assessment
                 </h2>
 
                 <p className="text-xs text-slate-300 leading-relaxed bg-slate-950/80 p-3.5 rounded-xl border border-white/5">
-                  Complete this 6-question operational assessment covering all modules from the EncDec IDS curriculum: Deep Packet Inspection, File Integrity Monitoring, TopoJSON Geodesic Telemetry, Threat Intelligence, Dual Databases, and Autonomous Containment. 
-                  Passing this assessment immediately grants your verified credential and unlocks your personalized Certificate of Operational Mastery.
+                  Each candidate is dynamically issued <strong>6 unique advanced questions</strong> drawn server-side from our 220+ item cybersecurity bank to uphold academic integrity. Exceeding the <strong>10-minute timer</strong> or scoring below <strong>80%</strong> resets your entire workbook progress back to <strong>Chapter 1</strong> for mandatory re-study.
                 </p>
               </div>
 
-              {/* Status Banner */}
+              {/* Error Notice */}
               {quizError && (
                 <div className="p-3.5 rounded-xl bg-red-950/30 border border-red-500/40 text-red-300 text-xs flex items-center gap-2">
                   <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
@@ -1543,194 +1674,340 @@ export default function EncDecWorkbook({ currentUser, onCertificationUpdated }: 
                 </div>
               )}
 
-              {quizSubmitted && (
-                <div className={`p-4 rounded-xl border flex flex-col sm:flex-row sm:items-center justify-between gap-4 ${
-                  quizPassed 
-                    ? 'bg-emerald-950/30 border-emerald-500/50 text-emerald-300' 
-                    : 'bg-amber-950/30 border-amber-500/50 text-amber-300'
-                }`}>
-                  <div className="space-y-1">
-                    <div className="flex items-center gap-2">
-                      {quizPassed ? (
-                        <CheckCircle2 className="w-5 h-5 text-emerald-400" />
-                      ) : (
-                        <AlertCircle className="w-5 h-5 text-amber-400" />
-                      )}
-                      <h4 className="text-sm font-bold uppercase font-sans">
-                        {quizPassed ? 'Congratulations! Assessment Passed' : 'Assessment Not Passed (Retake Available)'}
-                      </h4>
+              {/* RESET EVALUATION NOTICE (Timeout OR Score < 80%) */}
+              {resetReport && (
+                <div className="space-y-5" id="exam-reset-evaluation-report">
+                  <div className="p-5 rounded-xl bg-red-950/35 border-2 border-red-500/50 space-y-3">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                      <div className="flex items-center gap-2.5">
+                        <AlertTriangle className="w-6 h-6 text-red-400 shrink-0" />
+                        <div>
+                          <h3 className="text-base font-bold text-white font-sans uppercase">
+                            {resetReport.reason === 'timeout'
+                              ? 'Examination Time Limit Exceeded (10:00) — Curriculum Reset to Chapter 1'
+                              : `Score ${resetReport.score}% Below 80% Standard — Curriculum Reset to Chapter 1`}
+                          </h3>
+                          <p className="text-xs text-red-200 mt-0.5">
+                            {resetReport.reason === 'timeout'
+                              ? 'The 10-minute examination countdown elapsed before final grading completed. Per academic policy, all chapter completions have been cleared.'
+                              : `You answered ${resetReport.correctCount} of ${resetReport.totalQuestions} questions correctly (${resetReport.score}%). Because 80% is required, all workbook progress has reset to Chapter 1.`}
+                          </p>
+                        </div>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={handleRestartFromChapterOne}
+                        className="px-4 py-2.5 rounded-xl bg-red-500 hover:bg-red-400 text-slate-950 font-bold text-xs flex items-center gap-2 shrink-0 cursor-pointer transition-all"
+                        id="btn-restart-chapter-1"
+                      >
+                        <RotateCcw className="w-4 h-4" />
+                        <span>Restart from Chapter 1 →</span>
+                      </button>
                     </div>
-                    <p className="text-xs text-slate-300">
-                      {quizPassed 
-                        ? `You achieved ${quizScore}% on the Capstone Knowledge Check. Your official CE-SOC certificate has been accredited to your database record.`
-                        : `You scored ${quizScore}%. A minimum of 80% is required for official certification. Review the rationales below and retake the test.`}
-                    </p>
                   </div>
 
-                  <div className="shrink-0 flex items-center gap-3">
-                    {quizPassed ? (
-                      <button
-                        onClick={() => {
-                          setActiveView('certificate_download');
-                          window.scrollTo({ top: 120, behavior: 'smooth' });
-                        }}
-                        className="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs flex items-center gap-1.5 transition-all shadow-[0_0_15px_rgba(16,185,129,0.3)] cursor-pointer"
-                        id="btn-quiz-view-cert"
-                      >
-                        <Download className="w-4 h-4" />
-                        <span>Download Certificate (PDF)</span>
-                      </button>
-                    ) : (
-                      <button
-                        onClick={handleRetakeQuiz}
-                        className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs flex items-center gap-1.5 transition-all cursor-pointer"
-                      >
-                        <RefreshCw className="w-4 h-4" />
-                        <span>Retake Quiz</span>
-                      </button>
-                    )}
-                  </div>
+                  {/* Academic Post-Attempt Review (if submitted with answers) */}
+                  {resetReport.results.length > 0 && (
+                    <div className="space-y-3">
+                      <h4 className="text-xs font-bold uppercase text-cyan-400 tracking-wider">
+                        Retired Attempt Academic Review ({resetReport.correctCount}/{resetReport.totalQuestions} Correct):
+                      </h4>
+                      {resetReport.results.map((item, idx) => (
+                        <div
+                          key={item.questionId}
+                          className={`p-4 rounded-xl border space-y-2 ${
+                            item.isCorrect
+                              ? 'bg-emerald-950/20 border-emerald-500/30'
+                              : 'bg-red-950/20 border-red-500/30'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between gap-2 text-[10px] uppercase font-bold">
+                            <span className="text-cyan-400">
+                              Q{idx + 1} ({item.questionId}) • {item.topic}
+                            </span>
+                            <span className={item.isCorrect ? 'text-emerald-400' : 'text-red-400'}>
+                              {item.isCorrect ? '✓ Correct' : '✕ Incorrect'}
+                            </span>
+                          </div>
+                          <p className="text-xs text-white font-semibold font-sans">{item.question}</p>
+                          <p className="text-[11px] text-emerald-300">
+                            Correct Answer: {String.fromCharCode(65 + item.correctIndex)}. {item.options[item.correctIndex]}
+                          </p>
+                          <p className="text-[11px] text-slate-300 leading-relaxed bg-slate-950/70 p-2.5 rounded-lg border border-white/5">
+                            <strong className="text-cyan-400">Rationale:</strong> {item.explanation}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
 
-              {/* Questions List */}
-              <div className="space-y-6">
-                {QUIZ_QUESTIONS.map((q, qIdx) => {
-                  const selectedOpt = quizAnswers[q.id];
-                  const isCorrect = selectedOpt === q.correctIndex;
-                  const showFeedback = quizSubmitted;
-
-                  return (
-                    <div 
-                      key={q.id} 
-                      className={`p-5 rounded-xl border transition-all ${
-                        showFeedback 
-                          ? isCorrect 
-                            ? 'bg-emerald-950/20 border-emerald-500/30' 
-                            : 'bg-red-950/20 border-red-500/30'
-                          : selectedOpt !== undefined
-                          ? 'bg-slate-950/80 border-cyan-500/30'
-                          : 'bg-slate-950/40 border-white/5'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between gap-2 mb-2">
-                        <span className="text-[10px] uppercase font-bold text-cyan-400">
-                          Question {qIdx + 1} of {QUIZ_QUESTIONS.length} • {q.topic}
-                        </span>
-
-                        {showFeedback && (
-                          <span className={`text-[10px] font-bold uppercase flex items-center gap-1 ${
-                            isCorrect ? 'text-emerald-400' : 'text-red-400'
-                          }`}>
-                            {isCorrect ? <CheckCircle2 className="w-3.5 h-3.5" /> : <AlertCircle className="w-3.5 h-3.5" />}
-                            <span>{isCorrect ? 'Correct' : 'Incorrect'}</span>
-                          </span>
-                        )}
+              {/* PASSED STATE */}
+              {quizPassed && !examSession && !resetReport && (
+                <div className="space-y-5">
+                  <div className="p-5 rounded-xl bg-emerald-950/30 border border-emerald-500/50 text-emerald-300 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2">
+                        <CheckCircle2 className="w-5 h-5 text-emerald-400" />
+                        <h4 className="text-sm font-bold uppercase font-sans text-white">
+                          Official Accreditation Granted — {quizScore || 100}% Mastery
+                        </h4>
                       </div>
-
-                      <h3 className="text-sm font-bold text-white mb-4 leading-relaxed font-sans">
-                        {q.question}
-                      </h3>
-
-                      {/* Options */}
-                      <div className="space-y-2">
-                        {q.options.map((opt, optIdx) => {
-                          const isOptionSelected = selectedOpt === optIdx;
-                          const isOptionTheCorrectOne = optIdx === q.correctIndex;
-
-                          let optionStyles = 'bg-slate-900 border-white/10 text-slate-300 hover:border-white/25 hover:bg-slate-800';
-
-                          if (showFeedback) {
-                            if (isOptionTheCorrectOne) {
-                              optionStyles = 'bg-emerald-950/50 border-emerald-400 text-emerald-200 font-bold';
-                            } else if (isOptionSelected && !isCorrect) {
-                              optionStyles = 'bg-red-950/50 border-red-500 text-red-200';
-                            } else {
-                              optionStyles = 'bg-slate-900/40 border-white/5 text-slate-500';
-                            }
-                          } else if (isOptionSelected) {
-                            optionStyles = 'bg-cyan-950/60 border-cyan-400 text-white font-semibold ring-1 ring-cyan-400';
-                          }
-
-                          return (
-                            <button
-                              key={optIdx}
-                              type="button"
-                              onClick={() => handleOptionSelect(q.id, optIdx)}
-                              disabled={quizSubmitted && quizPassed}
-                              className={`w-full text-left p-3 rounded-lg border text-xs transition-all flex items-start gap-3 cursor-pointer ${optionStyles}`}
-                            >
-                              <div className={`w-4 h-4 rounded-full border flex items-center justify-center shrink-0 mt-0.5 text-[9px] ${
-                                isOptionSelected ? 'border-cyan-400 bg-cyan-500 text-slate-950 font-bold' : 'border-slate-600 text-slate-400'
-                              }`}>
-                                {String.fromCharCode(65 + optIdx)}
-                              </div>
-                              <span className="leading-relaxed">{opt}</span>
-                            </button>
-                          );
-                        })}
-                      </div>
-
-                      {showFeedback && (
-                        <div className="mt-3 p-3 rounded-lg bg-slate-950 border border-white/10 text-[11px] text-slate-300 space-y-1">
-                          <span className="text-cyan-400 font-bold uppercase text-[9px] block">
-                            Operational Rationale:
-                          </span>
-                          <p>{q.explanation}</p>
-                        </div>
-                      )}
+                      <p className="text-xs text-slate-300">
+                        You passed the proctored CE-SOC certification examination within the 10-minute window. Your credential record is active and ready for PDF/print issuance.
+                      </p>
                     </div>
-                  );
-                })}
-              </div>
-
-              {/* Bottom Action Footer */}
-              <div className="border-t border-white/10 pt-5 flex flex-col sm:flex-row items-center justify-between gap-4">
-                <button
-                  onClick={() => {
-                    setActiveView('reader');
-                    setActiveChapterIndex(totalChapters - 1);
-                    window.scrollTo({ top: 120, behavior: 'smooth' });
-                  }}
-                  className="w-full sm:w-auto px-4 py-2.5 rounded-xl bg-slate-950 hover:bg-slate-800 border border-white/10 text-slate-300 font-bold cursor-pointer text-xs"
-                >
-                  ← Return to Chapter 10
-                </button>
-
-                <div className="flex items-center gap-3 w-full sm:w-auto">
-                  {quizSubmitted && !quizPassed && (
-                    <button
-                      onClick={handleRetakeQuiz}
-                      className="w-full sm:w-auto px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-bold cursor-pointer text-xs"
-                    >
-                      Reset Answers
-                    </button>
-                  )}
-
-                  {!quizPassed ? (
-                    <button
-                      onClick={handleSubmitQuiz}
-                      className="w-full sm:w-auto px-6 py-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 font-bold cursor-pointer text-xs transition-all shadow-[0_0_20px_rgba(245,158,11,0.3)] flex items-center justify-center gap-2 hover:scale-105 active:scale-95"
-                      id="btn-submit-quiz"
-                    >
-                      <CheckSquare className="w-4 h-4" />
-                      <span>Submit Knowledge Check & Verify</span>
-                    </button>
-                  ) : (
                     <button
                       onClick={() => {
                         setActiveView('certificate_download');
                         window.scrollTo({ top: 120, behavior: 'smooth' });
                       }}
-                      className="w-full sm:w-auto px-6 py-2.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-500 text-slate-950 font-bold cursor-pointer text-xs transition-all shadow-[0_0_20px_rgba(16,185,129,0.3)] flex items-center justify-center gap-2 animate-bounce"
-                      id="btn-quiz-claim-cert"
+                      className="px-4 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs flex items-center gap-1.5 transition-all shadow-[0_0_15px_rgba(16,185,129,0.3)] cursor-pointer shrink-0"
+                      id="btn-quiz-view-cert"
                     >
                       <Download className="w-4 h-4" />
-                      <span>Go to Certificate Download Station →</span>
+                      <span>Download Certificate (PDF)</span>
                     </button>
+                  </div>
+
+                  {examResults.length > 0 && (
+                    <div className="space-y-3">
+                      <h4 className="text-xs font-bold uppercase text-emerald-400 tracking-wider">
+                        Verified Examination Transcript:
+                      </h4>
+                      {examResults.map((item, idx) => (
+                        <div key={item.questionId} className="p-4 rounded-xl bg-slate-950/60 border border-white/10 space-y-1.5">
+                          <div className="flex items-center justify-between text-[10px] font-bold uppercase">
+                            <span className="text-cyan-400">Q{idx + 1} ({item.questionId}) • {item.topic}</span>
+                            <span className={item.isCorrect ? 'text-emerald-400' : 'text-red-400'}>
+                              {item.isCorrect ? 'Correct' : 'Incorrect'}
+                            </span>
+                          </div>
+                          <p className="text-xs text-white font-sans font-semibold">{item.question}</p>
+                          <p className="text-[11px] text-slate-300">{item.explanation}</p>
+                        </div>
+                      ))}
+                    </div>
                   )}
                 </div>
-              </div>
+              )}
+
+              {/* PREREQUISITE LOCKED STATE (< 10 CHAPTERS READ) */}
+              {!isChaptersFinished && !examSession && !quizPassed && !resetReport && (
+                <div className="p-6 rounded-xl bg-slate-950/90 border border-amber-500/40 space-y-4 text-center" id="exam-prerequisite-locked">
+                  <div className="w-12 h-12 rounded-2xl bg-amber-500/15 border border-amber-500/40 flex items-center justify-center mx-auto text-amber-400">
+                    <Lock className="w-6 h-6" />
+                  </div>
+                  <div className="space-y-1.5 max-w-lg mx-auto">
+                    <h3 className="text-base font-bold text-white font-sans">
+                      Curriculum Reading Prerequisite Incomplete ({readChapters.length}/10 Modules)
+                    </h3>
+                    <p className="text-xs text-slate-300 leading-relaxed">
+                      Per academic examination regulations, candidates must complete Chapters 1 through 10 before starting the 10-minute randomized CE-SOC assessment.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const nextUnread = WORKBOOK_DATA.findIndex((_, idx) => !readChapters.includes(idx));
+                      setActiveChapterIndex(nextUnread >= 0 ? nextUnread : 0);
+                      setActiveView('reader');
+                      window.scrollTo({ top: 120, behavior: 'smooth' });
+                    }}
+                    className="px-5 py-2.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs inline-flex items-center gap-2 cursor-pointer"
+                    id="btn-goto-unread-chapter"
+                  >
+                    <BookOpen className="w-4 h-4" />
+                    <span>Continue Study from Chapter {(WORKBOOK_DATA.findIndex((_, idx) => !readChapters.includes(idx)) + 1) || 1} →</span>
+                  </button>
+                </div>
+              )}
+
+              {/* PRE-EXAM BRIEFING (ALL 10 CHAPTERS COMPLETE, NO ACTIVE SESSION YET) */}
+              {isChaptersFinished && !examSession && !quizPassed && !resetReport && (
+                <div className="space-y-5 bg-slate-950/90 border border-cyan-500/30 rounded-xl p-6" id="exam-prebrief-panel">
+                  <div className="flex items-center gap-2 text-cyan-400 text-xs font-bold uppercase tracking-wider">
+                    <ShieldCheck className="w-4 h-4" />
+                    <span>Candidate Examination Briefing & Integrity Pledge</span>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
+                    <div className="p-3 rounded-lg bg-slate-900 border border-white/10">
+                      <span className="text-[10px] text-slate-400 uppercase block">Question Selection</span>
+                      <span className="text-white font-bold">6 Unique Tough Items</span>
+                      <span className="text-[10px] text-cyan-400 block mt-0.5">Randomized per user</span>
+                    </div>
+                    <div className="p-3 rounded-lg bg-slate-900 border border-white/10">
+                      <span className="text-[10px] text-slate-400 uppercase block">Countdown Timer</span>
+                      <span className="text-amber-300 font-bold">10 Minutes (600s)</span>
+                      <span className="text-[10px] text-slate-400 block mt-0.5">Server-authoritative</span>
+                    </div>
+                    <div className="p-3 rounded-lg bg-slate-900 border border-white/10">
+                      <span className="text-[10px] text-slate-400 uppercase block">Passing Standard</span>
+                      <span className="text-emerald-400 font-bold">80% or Higher</span>
+                      <span className="text-[10px] text-slate-400 block mt-0.5">At least 5 of 6 correct</span>
+                    </div>
+                    <div className="p-3 rounded-lg bg-slate-900 border border-red-500/20">
+                      <span className="text-[10px] text-red-300 uppercase block">Timeout / &lt;80% Policy</span>
+                      <span className="text-red-400 font-bold">Reset to Chapter 1</span>
+                      <span className="text-[10px] text-slate-400 block mt-0.5">Mandatory re-study</span>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-col sm:flex-row items-center justify-between gap-4 pt-2 border-t border-white/10">
+                    <p className="text-[11px] text-slate-400 leading-relaxed">
+                      The 10:00 countdown begins immediately upon clicking start and continues even if you reload the page.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={handleStartExam}
+                      disabled={examBusy}
+                      className="w-full sm:w-auto px-6 py-3 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 font-bold text-xs flex items-center justify-center gap-2 cursor-pointer shadow-[0_0_20px_rgba(245,158,11,0.3)] shrink-0 disabled:opacity-50"
+                      id="btn-start-timed-exam"
+                    >
+                      <Clock className="w-4 h-4" />
+                      <span>{examBusy ? 'Allocating Unique Exam...' : 'Start 10-Minute Certification Exam →'}</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* ACTIVE TIMED EXAM SESSION */}
+              {examSession && (
+                <div className="space-y-6" id="active-timed-exam-session">
+                  {/* Live Proctored Timer Banner */}
+                  <div
+                    className={`sticky top-2 z-20 p-4 rounded-xl border-2 backdrop-blur-md flex flex-wrap items-center justify-between gap-3 shadow-lg ${
+                      remainingSeconds <= 30
+                        ? 'bg-red-950/90 border-red-500 text-red-200 animate-pulse'
+                        : remainingSeconds <= 120
+                        ? 'bg-amber-950/90 border-amber-400 text-amber-200'
+                        : 'bg-slate-950/95 border-cyan-500/50 text-cyan-200'
+                    }`}
+                    id="exam-countdown-banner"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className={`w-10 h-10 rounded-xl flex items-center justify-center border ${
+                        remainingSeconds <= 30
+                          ? 'bg-red-500/20 border-red-400 text-red-300'
+                          : remainingSeconds <= 120
+                          ? 'bg-amber-500/20 border-amber-400 text-amber-300'
+                          : 'bg-cyan-500/15 border-cyan-400/50 text-cyan-300'
+                      }`}>
+                        <Clock className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <span className="text-[10px] uppercase font-bold block tracking-wider opacity-80">
+                          Time Remaining (Reset to Ch. 1 on 00:00)
+                        </span>
+                        <span className="text-2xl font-extrabold tabular-nums tracking-tight text-white" id="exam-timer-clock">
+                          {formatCountdownClock(remainingSeconds)}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2 text-xs">
+                      <span className="px-2.5 py-1 rounded bg-slate-900 border border-white/10 text-slate-300">
+                        Attempt: <strong className="text-white">{examSession.attemptId}</strong>
+                      </span>
+                      <span className="px-2.5 py-1 rounded bg-slate-900 border border-white/10 text-slate-300">
+                        Answered: <strong className="text-cyan-300">{Object.keys(quizAnswers).length}/{examSession.questions.length}</strong>
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* 6 Randomized Tough Questions (No Answer Keys Client-Side) */}
+                  <div className="space-y-5">
+                    {examSession.questions.map((q, qIdx) => {
+                      const selectedOpt = quizAnswers[q.id];
+
+                      return (
+                        <div
+                          key={q.id}
+                          className={`p-5 rounded-xl border transition-all ${
+                            selectedOpt !== undefined
+                              ? 'bg-slate-950/85 border-cyan-500/40'
+                              : 'bg-slate-950/45 border-white/10'
+                          }`}
+                        >
+                          <div className="flex flex-wrap items-center justify-between gap-2 mb-2.5">
+                            <span className="text-[10px] uppercase font-bold text-cyan-400">
+                              Question {qIdx + 1} of {examSession.questions.length} ({q.id}) • {q.topic}
+                            </span>
+                            <span className="px-2 py-0.5 rounded bg-amber-500/15 border border-amber-500/30 text-amber-300 text-[9px] font-bold uppercase">
+                              {q.difficulty}
+                            </span>
+                          </div>
+
+                          <h3 className="text-sm font-bold text-white mb-4 leading-relaxed font-sans">
+                            {q.question}
+                          </h3>
+
+                          <div className="space-y-2">
+                            {q.options.map((opt, optIdx) => {
+                              const isOptionSelected = selectedOpt === optIdx;
+                              return (
+                                <button
+                                  key={optIdx}
+                                  type="button"
+                                  onClick={() => handleOptionSelect(q.id, optIdx)}
+                                  className={`w-full text-left p-3 rounded-lg border text-xs transition-all flex items-start gap-3 cursor-pointer ${
+                                    isOptionSelected
+                                      ? 'bg-cyan-950/60 border-cyan-400 text-white font-semibold ring-1 ring-cyan-400'
+                                      : 'bg-slate-900 border-white/10 text-slate-300 hover:border-white/25 hover:bg-slate-800'
+                                  }`}
+                                >
+                                  <div className={`w-4 h-4 rounded-full border flex items-center justify-center shrink-0 mt-0.5 text-[9px] ${
+                                    isOptionSelected ? 'border-cyan-400 bg-cyan-500 text-slate-950 font-bold' : 'border-slate-600 text-slate-400'
+                                  }`}>
+                                    {String.fromCharCode(65 + optIdx)}
+                                  </div>
+                                  <span className="leading-relaxed">{opt}</span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* Active Exam Action Footer */}
+                  <div className="border-t border-white/10 pt-5 flex flex-col sm:flex-row items-center justify-between gap-4">
+                    <span className="text-[11px] text-amber-300/90">
+                      Reminder: Submitting &lt;80% (&lt;5/6) or letting 10:00 expire resets your curriculum to Chapter 1.
+                    </span>
+
+                    <button
+                      onClick={handleSubmitQuiz}
+                      disabled={examBusy}
+                      className="w-full sm:w-auto px-6 py-3 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 font-bold cursor-pointer text-xs transition-all shadow-[0_0_20px_rgba(245,158,11,0.3)] flex items-center justify-center gap-2 disabled:opacity-50"
+                      id="btn-submit-quiz"
+                    >
+                      <CheckSquare className="w-4 h-4" />
+                      <span>{examBusy ? 'Grading Examination...' : 'Submit Final Examination Answers'}</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Bottom Return Navigation when not in active timed exam */}
+              {!examSession && (
+                <div className="border-t border-white/10 pt-4 flex items-center justify-between">
+                  <button
+                    onClick={() => {
+                      setActiveView('reader');
+                      setActiveChapterIndex(isChaptersFinished ? totalChapters - 1 : 0);
+                      window.scrollTo({ top: 120, behavior: 'smooth' });
+                    }}
+                    className="px-4 py-2 rounded-xl bg-slate-950 hover:bg-slate-800 border border-white/10 text-slate-300 font-bold cursor-pointer text-xs"
+                  >
+                    {isChaptersFinished ? '← Return to Chapter 10' : '← Go to Chapter 1'}
+                  </button>
+                </div>
+              )}
 
             </div>
           )}

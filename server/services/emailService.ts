@@ -13,6 +13,7 @@ export interface SendEmailOptions {
   fromName?: string;
   fromEmail?: string;
   googleAccessToken?: string;
+  preferOAuth?: boolean;
 }
 
 export interface EmailDispatchResult {
@@ -21,6 +22,7 @@ export interface EmailDispatchResult {
   messageId?: string;
   error?: string;
   details?: string;
+  oauthExpired?: boolean;
 }
 
 /**
@@ -130,18 +132,75 @@ export async function verifyGmailAppConnection(): Promise<{ ok: boolean; message
   }
 }
 
+function formatGoogleApiError(status: number, rawBody: string): string {
+  try {
+    const parsed: any = JSON.parse(rawBody);
+    const msg = parsed?.error?.message || `HTTP ${status}`;
+    const rpcInfo = Array.isArray(parsed?.error?.details)
+      ? parsed.error.details.find((d: any) => d?.reason)?.reason
+      : undefined;
+    const errReason = rpcInfo || parsed?.error?.errors?.[0]?.reason || parsed?.error?.status;
+    return errReason ? `Gmail API HTTP ${status} (${errReason}): ${msg}` : `Gmail API HTTP ${status}: ${msg}`;
+  } catch {
+    const singleLine = rawBody.replace(/\s+/g, ' ').trim().slice(0, 220);
+    return `Gmail API HTTP ${status}: ${singleLine || 'Request rejected'}`;
+  }
+}
+
+/**
+ * Verifies a Google OAuth access token against Gmail API and returns the authenticated Gmail address.
+ */
+export async function verifyGmailOAuthToken(accessToken: string): Promise<{ ok: boolean; email?: string; error?: string }> {
+  try {
+    const res = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/profile', {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (!res.ok) {
+      const body = await res.text();
+      return {
+        ok: false,
+        error: res.status === 401 || res.status === 403
+          ? 'Google token is invalid or missing Gmail permissions. Re-authorize with Gmail access enabled.'
+          : formatGoogleApiError(res.status, body),
+      };
+    }
+    const profile: any = await res.json();
+    if (!profile?.emailAddress) {
+      return { ok: false, error: 'Gmail profile did not return an email address.' };
+    }
+    return { ok: true, email: profile.emailAddress };
+  } catch (err: any) {
+    return { ok: false, error: err?.message || 'Unable to verify Gmail OAuth session.' };
+  }
+}
+
 /**
  * Transmits an email via Google Gmail API using an OAuth Access Token
  */
-async function sendViaGmailApi(accessToken: string, to: string, subject: string, htmlBody: string, textBody?: string): Promise<boolean> {
+async function sendViaGmailApi(
+  accessToken: string,
+  to: string,
+  subject: string,
+  htmlBody: string,
+  textBody?: string,
+  fromName?: string,
+  fromEmail?: string
+): Promise<{ messageId?: string }> {
+  const rawBody = htmlBody || textBody || '';
+  const base64Body = Buffer.from(rawBody, 'utf-8')
+    .toString('base64')
+    .replace(/(.{76})/g, '$1\r\n');
+
+  const safeFromName = (fromName || 'EncDec IDS Security').replace(/["\r\n]/g, '').trim() || 'EncDec IDS Security';
   const emailLines = [
+    ...(fromEmail ? [`From: "${safeFromName}" <${fromEmail}>`] : []),
     `To: ${to}`,
     `Subject: =?utf-8?B?${Buffer.from(subject, 'utf-8').toString('base64')}?=`,
     'MIME-Version: 1.0',
-    'Content-Type: text/html; charset=UTF-8',
-    'Content-Transfer-Encoding: 7bit',
+    htmlBody ? 'Content-Type: text/html; charset=UTF-8' : 'Content-Type: text/plain; charset=UTF-8',
+    'Content-Transfer-Encoding: base64',
     '',
-    htmlBody || textBody || ''
+    base64Body
   ];
   const rawMime = emailLines.join('\r\n');
   const encodedRaw = Buffer.from(rawMime, 'utf-8')
@@ -161,23 +220,66 @@ async function sendViaGmailApi(accessToken: string, to: string, subject: string,
 
   if (!response.ok) {
     const errText = await response.text();
-    throw new Error(`Gmail API HTTP ${response.status}: ${errText}`);
+    const err: any = new Error(formatGoogleApiError(response.status, errText));
+    err.status = response.status;
+    throw err;
   }
-  return true;
+  const data: any = await response.json().catch(() => ({}));
+  return { messageId: data?.id };
 }
 
 /**
  * Sends an email using the prioritized direct dispatch pipeline:
- * 1. Direct Gmail using GMAIL_APP and GMAIL_APP_PASSWORD (Nodemailer Gmail Transport with multi-port fallback)
- * 2. Direct Gmail using OAuth Access Token (Gmail REST API)
- * 3. Generic SMTP Transport (SMTP_HOST, SMTP_USER, SMTP_PASS)
- * 4. Audit Log recording fallback
+ * 1. Direct Gmail OAuth API Delivery (when preferOAuth is true and googleAccessToken is present)
+ * 2. Direct Gmail using GMAIL_APP and GMAIL_APP_PASSWORD (Nodemailer Gmail Transport with multi-port fallback)
+ * 3. Direct Gmail using OAuth Access Token (fallback if not preferOAuth)
+ * 4. Generic SMTP Transport (SMTP_HOST, SMTP_USER, SMTP_PASS)
+ * 5. Audit Log recording fallback
  */
 export async function sendEmail(options: SendEmailOptions): Promise<EmailDispatchResult> {
-  const { to, subject, text = '', html = '', fromName = 'EncDec IDS Security', fromEmail, googleAccessToken } = options;
+  const {
+    to,
+    subject,
+    text = '',
+    html = '',
+    fromName = 'EncDec IDS Security',
+    fromEmail,
+    googleAccessToken,
+    preferOAuth = false
+  } = options;
   const gmailApp = getGmailAppConfig();
+  let lastDispatchError: string | undefined;
+  let oauthExpired = false;
 
-  // 1. Direct Gmail App Password Delivery (Highest priority for server-driven automation)
+  const tryOAuthDispatch = async (): Promise<EmailDispatchResult | null> => {
+    if (!googleAccessToken) return null;
+    try {
+      const sent = await sendViaGmailApi(googleAccessToken, to, subject, html, text, fromName, fromEmail);
+      console.log(`[GMAIL OAUTH SUCCESS] Transmitted to ${to} (Id: ${sent.messageId || 'n/a'})`);
+      return {
+        success: true,
+        channel: 'gmail_oauth_api',
+        messageId: sent.messageId,
+        details: `Delivered directly via Gmail OAuth API (${fromEmail || 'Admin Gmail'}) to ${to}`
+      };
+    } catch (oauthErr: any) {
+      if (oauthErr?.status === 401) {
+        oauthExpired = true;
+        lastDispatchError = 'Admin Gmail OAuth session expired. Reconnect Admin Gmail in Admin Gateway.';
+      } else {
+        lastDispatchError = oauthErr?.message || lastDispatchError;
+      }
+      console.log(`[GMAIL OAUTH INFO] OAuth delivery unavailable (${oauthErr?.message || oauthErr}). Falling back cleanly.`);
+      return null;
+    }
+  };
+
+  if (preferOAuth && googleAccessToken) {
+    const oauthResult = await tryOAuthDispatch();
+    if (oauthResult) return oauthResult;
+  }
+
+  // Direct Gmail App Password Delivery
   if (gmailApp) {
     let lastError: any = null;
     const senderFrom = `"${fromName}" <${gmailApp.email}>`;
@@ -231,6 +333,9 @@ export async function sendEmail(options: SendEmailOptions): Promise<EmailDispatc
       const isAuth535 = String(err587?.message || '').includes('535') || 
                         err587?.code === 'EAUTH' || 
                         String(lastError?.message || '').includes('535');
+      lastDispatchError = isAuth535
+        ? 'Gmail App Password credentials were rejected by Google (535-5.7.8). Verify GMAIL_APP and your 16-character Google App Password.'
+        : `Gmail SMTP delivery failed: ${err587?.message || 'network unavailable'}`;
       if (isAuth535) {
         console.log(`[GMAIL DISPATCH INFO] Gmail App Password credentials not accepted by Google (535-5.7.8). Smoothly falling back to OAuth/Audit Log delivery.`);
       } else {
@@ -239,19 +344,10 @@ export async function sendEmail(options: SendEmailOptions): Promise<EmailDispatc
     }
   }
 
-  // 2. Direct Gmail OAuth API Delivery
-  if (googleAccessToken) {
-    try {
-      await sendViaGmailApi(googleAccessToken, to, subject, html, text);
-      console.log(`[GMAIL OAUTH SUCCESS] Transmitted to ${to}`);
-      return {
-        success: true,
-        channel: 'gmail_oauth_api',
-        details: `Delivered directly via Google Workspace Gmail API to ${to}`
-      };
-    } catch (oauthErr: any) {
-      console.log(`[GMAIL OAUTH INFO] OAuth delivery unavailable (${oauthErr?.message || oauthErr}). Falling back cleanly.`);
-    }
+  // Fallback Gmail OAuth API Delivery (when preferOAuth wasn't set)
+  if (!preferOAuth && googleAccessToken) {
+    const oauthResult = await tryOAuthDispatch();
+    if (oauthResult) return oauthResult;
   }
 
   // 3. Generic SMTP Transport Delivery
@@ -298,6 +394,9 @@ export async function sendEmail(options: SendEmailOptions): Promise<EmailDispatc
     } catch (smtpErr: any) {
       const errMsg = String(smtpErr?.message || smtpErr || '');
       const isAuth535 = errMsg.includes('535') || smtpErr?.code === 'EAUTH';
+      lastDispatchError = isAuth535
+        ? 'SMTP credentials rejected (535-5.7.8; Gmail requires a 16-character App Password).'
+        : `SMTP delivery failed (${errMsg || 'offline'}).`;
       if (isAuth535) {
         console.log('[SMTP DISPATCH INFO] SMTP credentials not accepted (535-5.7.8; Gmail requires a 16-char App Password). Smoothly falling back to Audit Log delivery.');
       } else {
@@ -310,7 +409,9 @@ export async function sendEmail(options: SendEmailOptions): Promise<EmailDispatc
   return {
     success: true,
     channel: 'audit_log_only',
-    details: 'Notification logged to SOC audit trail.'
+    error: lastDispatchError,
+    oauthExpired,
+    details: lastDispatchError || 'Gmail App Password (GMAIL_APP / GMAIL_APP_PASSWORD) and SMTP transport are not configured.'
   };
 }
 

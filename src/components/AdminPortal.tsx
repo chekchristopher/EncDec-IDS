@@ -9,11 +9,13 @@ import {
   Ban, RefreshCw, Trash2, Database, Radio,
   Search, Award, CheckCircle2, AlertCircle, ExternalLink,
   QrCode, FileCheck, Copy, Check, CreditCard, Clock, Power,
-  Mail, GraduationCap
+  Mail, GraduationCap, ShieldCheck
 } from 'lucide-react';
 import { apiRequest } from '../api.js';
+import { signInWithGoogle } from '../services/googleAuth.js';
 import { BillingConfig, PaymentRecord } from '../types.js';
 import { NOWPAYMENTS_PAYMENT_URL, SUBSCRIPTION_PRICE_USD, SUBSCRIPTION_CYCLE_MONTHS } from '../utils/subscription.js';
+import AdminExamQuestionBank from './AdminExamQuestionBank.js';
 
 interface AdminPortalProps {
   adminPasskeyPassed: boolean;
@@ -54,6 +56,24 @@ export default function AdminPortal({ adminPasskeyPassed, onPasskeySuccess, onBi
   const [notifyBusy, setNotifyBusy] = useState(false);
   const [notifyMessage, setNotifyMessage] = useState<string | null>(null);
 
+  // Admin Gmail OTP Sender States
+  const [gmailSenderStatus, setGmailSenderStatus] = useState<{
+    connected: boolean;
+    email: string | null;
+    connectedAt: string | null;
+    expiresAt: number | null;
+    remainingMinutes: number;
+    refreshMode: 'auto' | 'manual';
+    autoRefreshWindowMinutes?: number;
+    lastConnectedEmail?: string | null;
+    lastAutoRefreshAt?: string | null;
+    lastAutoRefreshError?: string | null;
+    gmailAppConfigured?: boolean;
+  } | null>(null);
+  const [gmailSenderBusy, setGmailSenderBusy] = useState(false);
+  const [gmailSenderNotice, setGmailSenderNotice] = useState<string | null>(null);
+  const [showGmailSenderConfirm, setShowGmailSenderConfirm] = useState(false);
+
   useEffect(() => {
     if (adminPasskeyPassed) {
       loadAdminDashboard();
@@ -61,6 +81,19 @@ export default function AdminPortal({ adminPasskeyPassed, onPasskeySuccess, onBi
       handleSearchCertificate('CERT-ENCDEC-2026-X892A');
     }
   }, [adminPasskeyPassed]);
+
+  useEffect(() => {
+    const handleLiveGmailSenderUpdate = (evt: Event) => {
+      const customEvt = evt as CustomEvent;
+      if (customEvt?.detail) {
+        setGmailSenderStatus((prev) => ({ ...(prev || {}), ...customEvt.detail }));
+      }
+    };
+    window.addEventListener('admin-gmail-sender-updated', handleLiveGmailSenderUpdate);
+    return () => {
+      window.removeEventListener('admin-gmail-sender-updated', handleLiveGmailSenderUpdate);
+    };
+  }, []);
 
   const handleSearchCertificate = async (idToSearch?: string) => {
     const query = (idToSearch !== undefined ? idToSearch : searchCertId).trim();
@@ -94,12 +127,15 @@ export default function AdminPortal({ adminPasskeyPassed, onPasskeySuccess, onBi
     setLoading(true);
     setErrorMsg(null);
     try {
-      // Fetch stats and all certificates in parallel
-      const [data, certsRes] = await Promise.all([
+      // Fetch stats, certificates, and admin Gmail OTP sender status in parallel
+      const [data, certsRes, gmailRes] = await Promise.all([
         apiRequest('/api/admin/system-stats', 'GET', null, {
           'x-secret-passkey': 'VIGIL_ADMIN_77'
         }),
-        apiRequest('/api/certificates').catch(() => null)
+        apiRequest('/api/certificates').catch(() => null),
+        apiRequest('/api/admin/gmail-sender/status', 'GET', null, {
+          'x-secret-passkey': 'VIGIL_ADMIN_77'
+        }).catch(() => null),
       ]);
       setUsers(data.users);
       setSocketsCount(data.activeSocketsCount);
@@ -112,6 +148,9 @@ export default function AdminPortal({ adminPasskeyPassed, onPasskeySuccess, onBi
       }
       if (certsRes && certsRes.certificates) {
         setRegisteredCertificates(certsRes.certificates);
+      }
+      if (gmailRes) {
+        setGmailSenderStatus(gmailRes);
       }
     } catch (err: any) {
       setErrorMsg(err.message || 'Isolated gate authentication rejected.');
@@ -305,6 +344,91 @@ export default function AdminPortal({ adminPasskeyPassed, onPasskeySuccess, onBi
     }
   };
 
+  const handleConnectAdminGmailSender = async () => {
+    setShowGmailSenderConfirm(false);
+    setGmailSenderBusy(true);
+    setGmailSenderNotice(null);
+    setErrorMsg(null);
+    try {
+      const { accessToken } = await signInWithGoogle({ includeGmailScopes: true });
+      if (!accessToken) {
+        throw new Error('Google did not return a Gmail access token. Please allow Gmail permissions.');
+      }
+
+      const res = await apiRequest(
+        '/api/admin/gmail-sender/connect',
+        'POST',
+        { googleAccessToken: accessToken },
+        {
+          'x-secret-passkey': 'VIGIL_ADMIN_77',
+          'x-google-access-token': accessToken,
+        }
+      );
+
+      if (res?.status) {
+        setGmailSenderStatus((prev) => ({ ...(prev || {}), ...res.status }));
+        window.dispatchEvent(new CustomEvent('admin-gmail-sender-updated', { detail: res.status }));
+      }
+      setGmailSenderNotice(res?.message || 'Admin Gmail connected as Forgot Password OTP sender.');
+    } catch (err: any) {
+      setErrorMsg(err?.message || 'Failed to authorize Admin Gmail as OTP sender.');
+    } finally {
+      setGmailSenderBusy(false);
+    }
+  };
+
+  const handleToggleGmailRefreshMode = async (nextMode: 'auto' | 'manual') => {
+    if (gmailSenderStatus?.refreshMode === nextMode) return;
+    setGmailSenderBusy(true);
+    setGmailSenderNotice(null);
+    setErrorMsg(null);
+    try {
+      const res = await apiRequest(
+        '/api/admin/gmail-sender/mode',
+        'POST',
+        { refreshMode: nextMode },
+        { 'x-secret-passkey': 'VIGIL_ADMIN_77' }
+      );
+      if (res?.status) {
+        setGmailSenderStatus((prev) => ({ ...(prev || {}), ...res.status }));
+        window.dispatchEvent(new CustomEvent('admin-gmail-sender-updated', { detail: res.status }));
+      }
+      setGmailSenderNotice(
+        res?.message ||
+          (nextMode === 'auto'
+            ? 'Automatic session refresh enabled.'
+            : 'Manual session refresh enabled.')
+      );
+    } catch (err: any) {
+      setErrorMsg(err?.message || 'Failed to switch Admin Gmail session refresh mode.');
+    } finally {
+      setGmailSenderBusy(false);
+    }
+  };
+
+  const handleDisconnectAdminGmailSender = async () => {
+    setGmailSenderBusy(true);
+    setGmailSenderNotice(null);
+    setErrorMsg(null);
+    try {
+      const res = await apiRequest(
+        '/api/admin/gmail-sender/disconnect',
+        'POST',
+        {},
+        { 'x-secret-passkey': 'VIGIL_ADMIN_77' }
+      );
+      if (res?.status) {
+        setGmailSenderStatus((prev) => ({ ...(prev || {}), ...res.status }));
+        window.dispatchEvent(new CustomEvent('admin-gmail-sender-updated', { detail: res.status }));
+      }
+      setGmailSenderNotice(res?.message || 'Admin Gmail OTP sender disconnected.');
+    } catch (err: any) {
+      setErrorMsg(err?.message || 'Failed to disconnect Admin Gmail OTP sender.');
+    } finally {
+      setGmailSenderBusy(false);
+    }
+  };
+
   const pendingPayments = payments.filter((p) => p.status === 'pending_verification');
   const isPaywallEnabled = billingConfig?.subscriptionRequired ?? true;
   const isFreeAccessLive = Boolean(
@@ -426,6 +550,186 @@ export default function AdminPortal({ adminPasskeyPassed, onPasskeySuccess, onBi
                 </span>
               </button>
             </div>
+          </div>
+
+          {/* ========================================================================= */}
+          {/* ADMIN GMAIL OTP SENDER (AUTO / MANUAL SESSION REFRESH)                    */}
+          {/* ========================================================================= */}
+          <div className="bg-slate-900 border border-cyan-500/30 rounded-xl p-5 space-y-4 shadow-xl" id="admin-gmail-otp-sender">
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+              <div className="space-y-1.5">
+                <h3 className="text-sm font-bold text-white uppercase tracking-wider flex flex-wrap items-center gap-2">
+                  <Mail className="w-4 h-4 text-cyan-400" />
+                  <span>Admin Gmail OTP Sender</span>
+                  <span
+                    className={`px-2 py-0.5 rounded text-[9px] font-bold uppercase border ${
+                      gmailSenderStatus?.connected
+                        ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
+                        : 'bg-slate-800 text-slate-300 border-white/10'
+                    }`}
+                  >
+                    {gmailSenderStatus?.connected
+                      ? `ACTIVE (${gmailSenderStatus.email})`
+                      : 'NOT CONNECTED'}
+                  </span>
+                  <span
+                    className={`px-2 py-0.5 rounded text-[9px] font-bold uppercase border ${
+                      (gmailSenderStatus?.refreshMode ?? 'auto') === 'auto'
+                        ? 'bg-cyan-500/10 text-cyan-300 border-cyan-500/30'
+                        : 'bg-amber-500/10 text-amber-300 border-amber-500/30'
+                    }`}
+                    id="admin-gmail-refresh-mode-badge"
+                  >
+                    {(gmailSenderStatus?.refreshMode ?? 'auto') === 'auto' ? 'Auto-Refresh ON' : 'Manual Refresh'}
+                  </span>
+                </h3>
+                <p className="text-[11px] text-slate-400 leading-relaxed">
+                  {gmailSenderStatus?.connected
+                    ? (gmailSenderStatus?.refreshMode ?? 'auto') === 'auto'
+                      ? `Forgot Password & Login alerts are sent directly from ${gmailSenderStatus.email} via Gmail API (~${gmailSenderStatus.remainingMinutes} min remaining; auto-syncs browser session & prompts for 1-click renewal within ${gmailSenderStatus.autoRefreshWindowMinutes ?? 5} min of expiry).`
+                      : `Forgot Password & Login alerts are sent directly from ${gmailSenderStatus.email} via Gmail API (~${gmailSenderStatus.remainingMinutes} min remaining). Manual mode active — click Refresh whenever it expires.`
+                    : 'Authorize your Admin Google account once per browser session so Forgot Password OTPs are sent directly from your Gmail—no 16-character App Password needed.'}
+                </p>
+                {gmailSenderStatus?.lastAutoRefreshAt && (
+                  <p className="text-[10px] text-cyan-300/80 flex items-center gap-1.5">
+                    <RefreshCw className="w-3 h-3" />
+                    <span>
+                      Last auto-refreshed: {new Date(gmailSenderStatus.lastAutoRefreshAt).toLocaleTimeString()}
+                    </span>
+                  </p>
+                )}
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2 shrink-0">
+                {/* Automatic / Manual Refresh Mode Switch */}
+                <div
+                  className="inline-flex items-center rounded-lg bg-slate-950 border border-white/10 p-0.5"
+                  role="group"
+                  aria-label="Admin Gmail Session Refresh Mode"
+                  id="toggle-admin-gmail-refresh-mode"
+                >
+                  <button
+                    type="button"
+                    disabled={gmailSenderBusy}
+                    onClick={() => handleToggleGmailRefreshMode('auto')}
+                    className={`px-2.5 py-1.5 rounded-md text-[10px] font-bold uppercase tracking-wider cursor-pointer transition-colors ${
+                      (gmailSenderStatus?.refreshMode ?? 'auto') === 'auto'
+                        ? 'bg-cyan-500 text-slate-950 shadow'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                    id="btn-gmail-mode-auto"
+                    title="Automatically refresh Admin Gmail session before it expires"
+                  >
+                    Automatic
+                  </button>
+                  <button
+                    type="button"
+                    disabled={gmailSenderBusy}
+                    onClick={() => handleToggleGmailRefreshMode('manual')}
+                    className={`px-2.5 py-1.5 rounded-md text-[10px] font-bold uppercase tracking-wider cursor-pointer transition-colors ${
+                      gmailSenderStatus?.refreshMode === 'manual'
+                        ? 'bg-amber-500 text-slate-950 shadow'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                    id="btn-gmail-mode-manual"
+                    title="Require manual Refresh button click when session expires"
+                  >
+                    Manual
+                  </button>
+                </div>
+
+                {(!gmailSenderStatus?.connected || gmailSenderStatus?.refreshMode === 'manual') ? (
+                  <button
+                    type="button"
+                    disabled={gmailSenderBusy}
+                    onClick={() => setShowGmailSenderConfirm(true)}
+                    className="px-4 py-2 rounded-lg bg-cyan-500 hover:bg-cyan-400 disabled:opacity-50 text-slate-950 font-bold uppercase tracking-wider text-[11px] flex items-center gap-2 cursor-pointer transition-colors"
+                    id="connect-admin-gmail-otp-btn"
+                  >
+                    <ShieldCheck className="w-3.5 h-3.5" />
+                    <span>
+                      {gmailSenderBusy
+                        ? 'Connecting...'
+                        : gmailSenderStatus?.connected
+                          ? 'Refresh Admin Gmail Session'
+                          : 'Connect Admin Gmail as OTP Sender'}
+                    </span>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={gmailSenderBusy}
+                    onClick={() => setShowGmailSenderConfirm(true)}
+                    className="px-3 py-2 rounded-lg bg-slate-950 hover:bg-slate-800 border border-cyan-500/30 text-cyan-300 font-bold uppercase text-[10px] flex items-center gap-1.5 cursor-pointer transition-colors"
+                    id="connect-admin-gmail-otp-btn"
+                    title="Trigger an immediate manual Google sign-in refresh"
+                  >
+                    <RefreshCw className="w-3 h-3" />
+                    <span>{gmailSenderBusy ? 'Refreshing...' : 'Refresh Now'}</span>
+                  </button>
+                )}
+
+                {gmailSenderStatus?.connected && (
+                  <button
+                    type="button"
+                    disabled={gmailSenderBusy}
+                    onClick={handleDisconnectAdminGmailSender}
+                    className="px-3 py-2 rounded-lg bg-slate-950 hover:bg-red-950/40 border border-red-500/30 text-red-300 font-bold uppercase text-[10px] cursor-pointer"
+                    id="disconnect-admin-gmail-otp-btn"
+                  >
+                    Disconnect
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {gmailSenderStatus?.lastAutoRefreshError && (gmailSenderStatus?.refreshMode ?? 'auto') === 'auto' && (
+              <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-200 text-[11px] flex items-start gap-2" id="admin-gmail-autorefresh-warning">
+                <AlertCircle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                <div className="space-y-1">
+                  <div className="font-bold text-amber-300 uppercase text-[10px]">Interactive Re-Authorization Needed</div>
+                  <p>{gmailSenderStatus.lastAutoRefreshError}</p>
+                </div>
+              </div>
+            )}
+
+            {gmailSenderNotice && (
+              <div className="p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-xs flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 shrink-0" />
+                <span>{gmailSenderNotice}</span>
+              </div>
+            )}
+
+            {showGmailSenderConfirm && (
+              <div className="p-4 rounded-xl bg-slate-950 border border-cyan-500/40 space-y-3" id="confirm-admin-gmail-otp-modal">
+                <div className="flex items-start gap-2.5">
+                  <ShieldCheck className="w-4 h-4 text-cyan-400 shrink-0 mt-0.5" />
+                  <div className="space-y-1">
+                    <h4 className="text-xs font-bold text-white uppercase">Confirm Gmail Send Permission</h4>
+                    <p className="text-[11px] text-slate-300 leading-relaxed">
+                      Allow EncDec IDS to use your Admin Gmail account to send 6-digit Forgot Password OTP and password-change confirmation emails to operators? In Automatic mode, the session renews silently before its 55-minute expiry while your browser remains signed in to Google.
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowGmailSenderConfirm(false)}
+                    className="px-3 py-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] font-bold cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleConnectAdminGmailSender}
+                    className="px-3.5 py-1.5 rounded bg-cyan-500 hover:bg-cyan-400 text-slate-950 text-[11px] font-bold cursor-pointer"
+                    id="confirm-connect-admin-gmail-otp-btn"
+                  >
+                    Confirm &amp; Connect Gmail
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* ========================================================================= */}
@@ -907,6 +1211,9 @@ export default function AdminPortal({ adminPasskeyPassed, onPasskeySuccess, onBi
             )}
 
           </div>
+
+          {/* CE-SOC Certification Exam Question Bank (220+ Tough Academic Questions) */}
+          <AdminExamQuestionBank />
 
           {/* User management list */}
           <div className="bg-slate-900 border border-white/5 rounded-lg p-6">

@@ -8,30 +8,36 @@ import bcryptjs from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { User, EmailLog } from '../../src/types.js';
 import { DbSchema } from '../db/schema.js';
-import { sendEmail } from '../services/emailService.js';
-import { 
-  loginSchema, 
-  signupSchema, 
-  profileUpdateSchema, 
+import { sendEmail, getGmailAppConfig, verifyGmailOAuthToken } from '../services/emailService.js';
+import {
+  getActiveAdminGmailSender,
+  setAdminGmailSenderSession,
+  markAdminGmailSessionExpired,
+} from '../services/adminGmailSender.js';
+import {
+  loginSchema,
+  signupSchema,
+  profileUpdateSchema,
   mfaToggleSchema,
   safeBoxToggleSchema,
   safeBoxPasskeySchema,
   safeBoxVerifySchema,
-  forgotPasswordSchema, 
+  forgotPasswordSchema,
   verifyResetCodeSchema,
-  resetPasswordSchema 
+  resetPasswordSchema,
+  changePasswordSchema
 } from '../schemas/validation.js';
+import {
+  createOtpChallenge,
+  verifyOtpChallenge,
+  canCompletePasswordReset,
+  buildPasswordResetOtpEmail,
+  buildPasswordChangedEmail,
+  redactOtpFromText,
+  normalizeResetEmail
+} from '../services/passwordResetOtp.js';
 import { validateSafeBoxPasskey } from '../../src/utils/safeBoxToken.js';
 import { evaluateSubscriptionAccess, DEFAULT_BILLING_CONFIG } from '../../src/utils/subscription.js';
-
-interface PasswordResetSession {
-  email: string;
-  code: string;
-  expiresAt: number;
-  verified: boolean;
-}
-
-const passwordResetSessions = new Map<string, PasswordResetSession>();
 
 export function getJwtSecret(): string {
   const secret = process.env.JWT_SECRET;
@@ -146,22 +152,113 @@ export function createAuthRouter(
       `;
     }
 
+    const adminSender = getActiveAdminGmailSender();
+    const initialToken = googleAccessToken || adminSender?.accessToken;
+    const usingAdminInitially = !googleAccessToken && Boolean(adminSender);
+    const resolvedSenderEmail =
+      senderUser?.email ||
+      (usingAdminInitially ? adminSender?.email : undefined) ||
+      adminSender?.email ||
+      'security@encdec-ids.sec';
+
     const logEntry: EmailLog = {
       id: 'eml_' + Math.random().toString(36).substring(2, 9),
       recipient: user.email,
       recipientName: user.name || user.email.split('@')[0],
-      senderEmail: senderUser?.email || 'security@encdec-ids.sec',
-      senderUserId: senderUser?.id || 'system_service',
+      senderEmail: resolvedSenderEmail,
+      senderUserId: senderUser?.id || (usingAdminInitially ? adminSender?.connectedByUserId : undefined) || 'system_service',
       subject,
       eventType,
       type: eventType,
       role: user.role,
-      status: 'sent',
+      status: 'queued',
       timestamp: new Date().toISOString(),
       previewSnippet: bodyText.substring(0, 110) + '...',
       bodyText,
       htmlBody: bodyHtml
     };
+
+    const runDispatchWithTimeout = async () => {
+      let dispatchResult = await sendEmail({
+        to: user.email,
+        subject,
+        text: bodyText,
+        html: bodyHtml,
+        fromName: 'EncDec IDS SOC Security',
+        fromEmail: usingAdminInitially ? adminSender?.email : senderUser?.email,
+        googleAccessToken: initialToken,
+        preferOAuth: Boolean(initialToken),
+      });
+
+      const isDelivered = (ch?: string) =>
+        ch === 'gmail_oauth_api' || ch === 'gmail_app_password' || ch === 'smtp';
+
+      if (
+        !isDelivered(dispatchResult.channel) &&
+        adminSender?.accessToken &&
+        googleAccessToken &&
+        adminSender.accessToken !== googleAccessToken
+      ) {
+        // User's Google Sign-In token lacked Gmail send scopes; retry via connected Admin Gmail Sender
+        dispatchResult = await sendEmail({
+          to: user.email,
+          subject,
+          text: bodyText,
+          html: bodyHtml,
+          fromName: 'EncDec IDS SOC Security',
+          fromEmail: adminSender.email,
+          googleAccessToken: adminSender.accessToken,
+          preferOAuth: true,
+        });
+        if (dispatchResult.channel === 'gmail_oauth_api') {
+          logEntry.senderEmail = adminSender.email;
+          logEntry.senderUserId = adminSender.connectedByUserId;
+        }
+      }
+
+      if (dispatchResult.oauthExpired && (!googleAccessToken || dispatchResult.channel !== 'gmail_oauth_api')) {
+        markAdminGmailSessionExpired('Admin Gmail OAuth session expired. Reconnect Admin Gmail to resume delivery.');
+      }
+
+      return dispatchResult;
+    };
+
+    let finalDispatch: Awaited<ReturnType<typeof sendEmail>> = {
+      success: false,
+      channel: 'audit_log_only',
+      error: 'Email dispatch timed out.',
+    };
+
+    try {
+      finalDispatch = await Promise.race([
+        runDispatchWithTimeout(),
+        new Promise<Awaited<ReturnType<typeof sendEmail>>>((resolve) =>
+          setTimeout(
+            () =>
+              resolve({
+                success: false,
+                channel: 'audit_log_only',
+                error: 'Email delivery timed out; check Admin Gmail OTP Sender or GMAIL_APP_PASSWORD.',
+              }),
+            10000
+          )
+        ),
+      ]);
+    } catch (err: any) {
+      console.warn(`[EMAIL AUTOMATION NOTICE] Delivery recorded for ${user.email}: ${err?.message || err}`);
+      finalDispatch = {
+        success: false,
+        channel: 'audit_log_only',
+        error: err?.message || 'Email dispatch error',
+      };
+    }
+
+    const deliveredToGmail =
+      finalDispatch.channel === 'gmail_oauth_api' ||
+      finalDispatch.channel === 'gmail_app_password' ||
+      finalDispatch.channel === 'smtp';
+
+    logEntry.status = deliveredToGmail ? 'delivered' : 'queued';
 
     if (!dbState.emailLogs) {
       dbState.emailLogs = [];
@@ -173,24 +270,18 @@ export function createAuthRouter(
     saveDb();
     broadcastWs({ type: 'EMAIL_LOG_UPDATE', payload: logEntry });
 
-    // Dispatches via Gmail App Password, Gmail OAuth API, or SMTP
-    sendEmail({
-      to: user.email,
+    return {
       subject,
-      text: bodyText,
-      html: bodyHtml,
-      fromName: 'EncDec IDS SOC Security',
-      fromEmail: senderUser?.email,
-      googleAccessToken
-    }).catch(err => {
-      console.warn(`[EMAIL AUTOMATION NOTICE] Delivery recorded for ${user.email}: ${err?.message || err}`);
-    });
-
-    return { subject, bodyText, bodyHtml };
+      bodyText,
+      bodyHtml,
+      deliveredToGmail,
+      channel: finalDispatch.channel,
+      error: finalDispatch.error,
+    };
   }
 
   // POST /api/auth/signup
-  router.post('/signup', (req: any, res: Response) => {
+  router.post('/signup', async (req: any, res: Response) => {
     const parseResult = signupSchema.safeParse(req.body);
     if (!parseResult.success) {
       const err = parseResult.error.issues?.[0]?.message || 'Invalid operator credential payload.';
@@ -222,17 +313,23 @@ export function createAuthRouter(
     saveDb();
 
     addAuditLog(newUser.id, newUser.email, 'User Signup', newUser.email, req.ip || '127.0.0.1', 'success');
-    sendNotificationEmail(newUser, 'registration', req.ip, undefined, googleAccessToken).catch(console.error);
+    const emailDelivery = await sendNotificationEmail(newUser, 'registration', req.ip, undefined, googleAccessToken)
+      .catch(() => ({ deliveredToGmail: false, channel: 'audit_log_only', error: 'Dispatch failed' }));
 
     const token = jwt.sign({ id: newUser.id, email: newUser.email, role: newUser.role }, JWT_SECRET, { expiresIn: '8h' });
     res.status(201).json({
       token,
-      user: buildSafeUser(newUser)
+      user: buildSafeUser(newUser),
+      emailDelivery: {
+        deliveredToGmail: emailDelivery.deliveredToGmail,
+        channel: emailDelivery.channel,
+        error: emailDelivery.error,
+      },
     });
   });
 
   // POST /api/auth/login
-  router.post('/login', (req: any, res: Response) => {
+  router.post('/login', async (req: any, res: Response) => {
     const parseResult = loginSchema.safeParse(req.body);
     if (!parseResult.success) {
       const err = parseResult.error.issues?.[0]?.message || 'Operator identification required.';
@@ -253,8 +350,8 @@ export function createAuthRouter(
     }
 
     let validPassword = bcryptjs.compareSync(password, user.passwordHash || '');
-    if (!validPassword) {
-      // Support demo keys displayed in Admin Safe Box / Seed configurations
+    if (!validPassword && !user.passwordUpdatedAt) {
+      // Support initial demo keys before an operator changes their password
       const cleanEmail = (user.email || email).toLowerCase();
       if (
         (cleanEmail === 'chekchris85@gmail.com' && (password === 'admin123' || password === 'Admin#2026!SecOps' || password === 'admin')) ||
@@ -283,12 +380,18 @@ export function createAuthRouter(
     }
 
     addAuditLog(user.id, user.email, 'Console Authentication Success', 'Operator Console', req.ip || '127.0.0.1', 'success');
-    sendNotificationEmail(user, 'login', req.ip, undefined, googleAccessToken).catch(console.error);
+    const emailDelivery = await sendNotificationEmail(user, 'login', req.ip, undefined, googleAccessToken)
+      .catch(() => ({ deliveredToGmail: false, channel: 'audit_log_only', error: 'Dispatch failed' }));
 
     const token = jwt.sign({ id: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '8h' });
     res.json({
       token,
-      user: buildSafeUser(user)
+      user: buildSafeUser(user),
+      emailDelivery: {
+        deliveredToGmail: emailDelivery.deliveredToGmail,
+        channel: emailDelivery.channel,
+        error: emailDelivery.error,
+      },
     });
   });
 
@@ -329,99 +432,132 @@ export function createAuthRouter(
       addAuditLog(user.id, user.email, 'Google Authentication Success', 'Operator Console', req.ip || '127.0.0.1', 'success');
     }
 
-    // Trigger automated email with direct Gmail delivery
-    sendNotificationEmail(user, isNewUser ? 'registration' : 'login', req.ip, undefined, googleAccessToken).catch(console.error);
+    // If an admin signs in via Google with Gmail permissions, automatically activate Admin Gmail OTP & Alert Sender
+    if (user.role === 'admin' && googleAccessToken && typeof googleAccessToken === 'string') {
+      try {
+        const verified = await verifyGmailOAuthToken(googleAccessToken);
+        if (verified.ok && verified.email) {
+          const senderStatus = setAdminGmailSenderSession({
+            accessToken: googleAccessToken,
+            email: verified.email,
+            userId: user.id,
+          });
+          dbState.adminGmailLastEmail = verified.email;
+          saveDb();
+          broadcastWs({ type: 'ADMIN_GMAIL_SENDER_UPDATE', payload: senderStatus });
+        }
+      } catch {
+        // Non-fatal: continue login flow
+      }
+    }
+
+    // Trigger automated email with direct Gmail delivery (falls back to connected Admin Gmail Sender)
+    const emailDelivery = await sendNotificationEmail(user, isNewUser ? 'registration' : 'login', req.ip, undefined, googleAccessToken)
+      .catch(() => ({ deliveredToGmail: false, channel: 'audit_log_only', error: 'Dispatch failed' }));
 
     const token = jwt.sign({ id: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '8h' });
     res.json({
       token,
       isNewUser,
-      user: buildSafeUser(user)
+      user: buildSafeUser(user),
+      emailDelivery: {
+        deliveredToGmail: emailDelivery.deliveredToGmail,
+        channel: emailDelivery.channel,
+        error: emailDelivery.error,
+      },
     });
   });
 
-  // POST /api/auth/forgot-password (Dispatches 6-digit verification code to user's Gmail)
+  // POST /api/auth/forgot-password (Dispatches 6-digit OTP to user's Gmail for security verification)
   router.post('/forgot-password', async (req: any, res: Response) => {
     const parseResult = forgotPasswordSchema.safeParse(req.body);
     if (!parseResult.success) {
-      const err = parseResult.error.issues?.[0]?.message || 'Valid email required';
+      const err = parseResult.error.issues?.[0]?.message || 'Valid Gmail / email address is required';
       return res.status(400).json({ error: err });
     }
     const { email } = parseResult.data;
-    const normalizedEmail = email.toLowerCase().trim();
+    const normalizedEmail = normalizeResetEmail(email);
     const user = dbState.users.find(u => u.email.toLowerCase() === normalizedEmail);
     if (!user) {
       return res.status(404).json({ error: `No registered operator found with email "${email}". Please verify your Gmail address.` });
     }
+    if (user.status === 'suspended') {
+      return res.status(403).json({ error: 'This operator account is suspended. Contact your SOC Administrator.' });
+    }
 
-    // Generate secure 6-digit OTP code
-    const code = Math.floor(100000 + Math.random() * 900000).toString();
-    const expiresAt = Date.now() + 15 * 60 * 1000; // 15 minutes validity
-
-    passwordResetSessions.set(normalizedEmail, {
-      email: normalizedEmail,
+    // Generate cryptographically secure 6-digit OTP challenge (hashed + salted, 15m TTL, max 5 attempts)
+    const { code, challenge } = createOtpChallenge(user.email);
+    const timestamp = new Date().toLocaleString();
+    const originIp = req.ip || '127.0.0.1';
+    const { subject, textBody, htmlBody } = buildPasswordResetOtpEmail({
+      userName: user.name || user.email.split('@')[0],
+      email: user.email,
       code,
-      expiresAt,
-      verified: false
+      originIp,
+      timestamp,
     });
 
-    const timestamp = new Date().toLocaleString();
-    const subject = `[EncDec IDS] Your 6-Digit Password Reset Code: ${code}`;
-    const textBody = `Hello ${user.name},\n\nA password reset request was initiated for your EncDec IDS operator account (${user.email}).\n\nYour 6-digit verification code is:\n\n   >>> ${code} <<<\n\nThis verification code expires in 15 minutes. Enter this code into your EncDec IDS software to proceed with setting a new password.\n\nIf you did not initiate this request, your account credentials remain unchanged.\n\nTimestamp: ${timestamp}\nIP Address: ${req.ip || '127.0.0.1'}\n\nRegards,\nEncDec Security Operations Team`;
-    
-    const htmlBody = `
-      <div style="font-family: Arial, sans-serif; background-color: #0f172a; color: #e2e8f0; padding: 24px; border-radius: 8px; border: 1px solid #1e293b; max-width: 540px; margin: 0 auto;">
-        <div style="border-bottom: 1px solid #1e293b; padding-bottom: 12px; margin-bottom: 16px;">
-          <h2 style="color: #06b6d4; margin: 0; font-size: 20px;">EncDec IDS Security Gateway</h2>
-          <p style="color: #64748b; font-size: 11px; margin: 4px 0 0 0;">CONFIDENTIAL OPERATIONAL ACCESS VERIFICATION</p>
-        </div>
-        <p style="font-size: 14px; margin-top: 0;">Hello <strong>${user.name}</strong>,</p>
-        <p style="font-size: 13px; line-height: 1.5; color: #cbd5e1;">A password recovery request was initiated for your operator account (<strong>${user.email}</strong>).</p>
-        <p style="font-size: 13px; color: #94a3b8;">Enter the 6-digit verification code below in your software console:</p>
-        
-        <div style="background: #1e293b; border: 2px solid #06b6d4; padding: 18px; border-radius: 8px; text-align: center; margin: 20px 0; box-shadow: 0 0 15px rgba(6, 182, 212, 0.2);">
-          <span style="font-family: 'Courier New', monospace; font-size: 32px; font-weight: bold; letter-spacing: 8px; color: #38bdf8;">${code}</span>
-        </div>
+    const adminSender = getActiveAdminGmailSender();
 
-        <div style="background: #1e293b/60; border-left: 3px solid #f59e0b; padding: 10px 14px; margin: 16px 0; font-size: 12px; color: #cbd5e1;">
-          <p style="margin: 0;"><strong>Expiry Window:</strong> 15 minutes</p>
-          <p style="margin: 4px 0 0 0;"><strong>Request Time:</strong> ${timestamp}</p>
-          <p style="margin: 4px 0 0 0;"><strong>Origin IP:</strong> ${req.ip || '127.0.0.1'}</p>
-        </div>
-
-        <p style="color: #94a3b8; font-size: 12px;">If you did not request this password reset, please contact your SOC Administrator immediately.</p>
-        <hr style="border: none; border-top: 1px solid #334155; margin: 20px 0;" />
-        <p style="color: #64748b; font-size: 11px; margin-bottom: 0;">EncDec Autonomous Hybrid IDS • Enterprise Cyber Defense Platform</p>
-      </div>
-    `;
-
-    // Dispatch real email to Gmail
-    sendEmail({
+    // Dispatch real email to Gmail (using Admin's connected Gmail account first if active, else Gmail App Password / SMTP)
+    const dispatchResult = await sendEmail({
       to: user.email,
       subject,
       text: textBody,
       html: htmlBody,
-      fromName: 'EncDec IDS Security Gateway'
-    }).catch(err => {
-      console.warn(`[PASSWORD RESET EMAIL NOTICE] ${err?.message || err}`);
+      fromName: 'EncDec IDS Security Gateway',
+      fromEmail: adminSender?.email,
+      googleAccessToken: adminSender?.accessToken,
+      preferOAuth: Boolean(adminSender)
     });
 
-    // Record into email logs
+    if (dispatchResult.oauthExpired) {
+      markAdminGmailSessionExpired('Admin Gmail OAuth session expired. Reconnect Admin Gmail to resume OTP delivery.');
+    }
+
+    const deliveredToRealInbox =
+      dispatchResult.channel === 'gmail_app_password' ||
+      dispatchResult.channel === 'smtp' ||
+      dispatchResult.channel === 'gmail_oauth_api';
+
+    if (!deliveredToRealInbox) {
+      const hasGmailEnv = Boolean(getGmailAppConfig());
+      const failureReason = dispatchResult.error
+        ? `Unable to deliver OTP email to ${user.email}: ${dispatchResult.error}`
+        : hasGmailEnv
+          ? `Unable to deliver OTP email to ${user.email}. Please ask the Admin to connect their Gmail account in Admin Gateway.`
+          : 'Unable to send OTP to your Gmail inbox yet. Ask the Administrator to click "Connect Admin Gmail as OTP Sender" in Admin Gateway (or configure Gmail App Password).';
+
+      addAuditLog(user.id, user.email, 'Password Reset OTP Delivery Unavailable', `Gmail: ${user.email}`, originIp, 'failure');
+      return res.status(503).json({
+        error: failureReason,
+        code: 'GMAIL_DELIVERY_UNAVAILABLE',
+        gmailConfigured: hasGmailEnv,
+        adminSenderConnected: Boolean(getActiveAdminGmailSender())
+      });
+    }
+
+    // Persist hashed OTP challenge on user record (replaces any prior OTP)
+    user.passwordResetOtp = challenge;
+
+    // Record into email logs with OTP redacted so audit viewers never read live OTP codes
+    const redactedText = redactOtpFromText(textBody, code);
+    const redactedHtml = redactOtpFromText(htmlBody, code);
     const logEntry: EmailLog = {
       id: 'eml_' + Math.random().toString(36).substring(2, 9),
       recipient: user.email,
       recipientName: user.name,
-      senderEmail: 'security@encdec-ids.sec',
-      senderUserId: 'auth_service',
+      senderEmail: adminSender?.email || 'security@encdec-ids.sec',
+      senderUserId: adminSender?.connectedByUserId || 'auth_service',
       subject,
       eventType: 'login',
       type: 'login',
       role: user.role,
       status: 'sent',
       timestamp: new Date().toISOString(),
-      previewSnippet: `Password recovery 6-digit code: ${code} dispatched to ${user.email}`,
-      bodyText: textBody,
-      htmlBody
+      previewSnippet: `6-digit password reset OTP dispatched to ${user.email} (code redacted for security)`,
+      bodyText: redactedText,
+      htmlBody: redactedHtml
     };
 
     if (!dbState.emailLogs) dbState.emailLogs = [];
@@ -430,96 +566,162 @@ export function createAuthRouter(
     saveDb();
     broadcastWs({ type: 'EMAIL_LOG_UPDATE', payload: logEntry });
 
-    addAuditLog(user.id, user.email, 'Password Recovery Code Dispatched', `Gmail: ${user.email}`, req.ip || '127.0.0.1', 'success');
+    addAuditLog(user.id, user.email, 'Password Recovery OTP Dispatched', `Gmail: ${user.email}`, originIp, 'success');
 
-    res.json({ 
-      status: 'ok', 
-      success: true, 
-      message: `A 6-digit verification code has been dispatched to ${user.email}. Check your Gmail inbox.`,
+    res.json({
+      status: 'ok',
+      success: true,
+      deliveredToGmail: true,
+      channel: dispatchResult.channel,
+      expiresInMinutes: 15,
+      message: `A 6-digit OTP verification code has been sent to ${user.email}. Check your Gmail inbox (and Spam folder).`,
       email: user.email
     });
   });
 
-  // POST /api/auth/verify-reset-code (Validates 6-digit OTP code before asking for new password)
+  // POST /api/auth/verify-reset-code (Validates 6-digit Gmail OTP before asking for new password)
   router.post('/verify-reset-code', (req: any, res: Response) => {
     const parseResult = verifyResetCodeSchema.safeParse(req.body);
     if (!parseResult.success) {
-      const err = parseResult.error.issues?.[0]?.message || 'Invalid 6-digit verification code';
+      const err = parseResult.error.issues?.[0]?.message || 'Invalid 6-digit OTP code';
       return res.status(400).json({ error: err });
     }
 
     const { email, code } = parseResult.data;
-    const normalizedEmail = email.toLowerCase().trim();
-    const session = passwordResetSessions.get(normalizedEmail);
+    const normalizedEmail = normalizeResetEmail(email);
+    const user = dbState.users.find(u => u.email.toLowerCase() === normalizedEmail);
+    if (!user) {
+      return res.status(404).json({ error: 'Operator account not found.' });
+    }
 
-    if (!session || session.expiresAt < Date.now()) {
-      return res.status(400).json({ 
-        error: 'Verification code has expired or was not requested. Please request a new 6-digit code.' 
+    const verification = verifyOtpChallenge(user.passwordResetOtp, user.email, code);
+
+    if (!verification.ok) {
+      if (verification.clearChallenge) {
+        delete user.passwordResetOtp;
+      } else if (verification.updatedChallenge) {
+        user.passwordResetOtp = verification.updatedChallenge;
+      }
+      saveDb();
+      addAuditLog(user.id, user.email, 'Password Reset OTP Verification Failed', verification.reason || 'invalid', req.ip || '127.0.0.1', 'failure');
+      const statusCode = verification.reason === 'locked' ? 429 : 400;
+      return res.status(statusCode).json({
+        error: verification.message,
+        reason: verification.reason,
+        attemptsRemaining: verification.attemptsRemaining,
+        lockedOut: verification.reason === 'locked'
       });
     }
 
-    if (session.code !== code.trim()) {
-      return res.status(400).json({ 
-        error: 'Incorrect 6-digit verification code. Please check your Gmail message and re-enter.' 
-      });
-    }
+    user.passwordResetOtp = verification.updatedChallenge;
+    saveDb();
+    addAuditLog(user.id, user.email, 'Password Reset OTP Verified', `Gmail: ${user.email}`, req.ip || '127.0.0.1', 'success');
 
-    session.verified = true;
     res.json({
       status: 'ok',
       success: true,
-      message: 'Verification code confirmed. You can now set your new password.'
+      verified: true,
+      message: verification.message
     });
   });
 
-  // POST /api/auth/reset-password (Saves new password and logs the user in immediately)
+  // POST /api/auth/reset-password (Requires verified OTP + matching confirmPassword, then updates password)
   router.post('/reset-password', async (req: any, res: Response) => {
     const parseResult = resetPasswordSchema.safeParse(req.body);
     if (!parseResult.success) {
-      const err = parseResult.error.issues?.[0]?.message || 'Invalid parameters';
+      const err = parseResult.error.issues?.[0]?.message || 'Invalid password reset parameters';
       return res.status(400).json({ error: err });
     }
 
     const { email, code, newPassword, confirmPassword } = parseResult.data;
-    const normalizedEmail = email.toLowerCase().trim();
-
-    if (confirmPassword && newPassword !== confirmPassword) {
-      return res.status(400).json({ error: 'Passwords do not match. Please ensure both passwords match.' });
+    if (newPassword !== confirmPassword) {
+      return res.status(400).json({ error: 'Passwords do not match. Please enter the same new password twice.' });
     }
 
-    const session = passwordResetSessions.get(normalizedEmail);
-    if (!session || session.code !== code.trim() || session.expiresAt < Date.now()) {
-      return res.status(400).json({ 
-        error: 'Password reset session expired or invalid. Please request a new code.' 
-      });
-    }
-
+    const normalizedEmail = normalizeResetEmail(email);
     const user = dbState.users.find(u => u.email.toLowerCase() === normalizedEmail);
     if (!user) {
       return res.status(404).json({ error: 'Operator entry not found.' });
     }
-    
-    // Rotate password
+
+    const eligibility = canCompletePasswordReset(user.passwordResetOtp, user.email, code);
+    if (!eligibility.ok) {
+      if (eligibility.clearChallenge) {
+        delete user.passwordResetOtp;
+        saveDb();
+      }
+      return res.status(400).json({
+        error: eligibility.message || 'Password reset session expired or unverified. Please verify your OTP first.'
+      });
+    }
+
+    // Rotate password and invalidate single-use OTP challenge
     user.passwordHash = bcryptjs.hashSync(newPassword, 10);
+    user.passwordUpdatedAt = new Date().toISOString();
+    delete user.passwordResetOtp;
     saveDb();
 
-    // Clear reset session
-    passwordResetSessions.delete(normalizedEmail);
+    const originIp = req.ip || '127.0.0.1';
+    addAuditLog(user.id, user.email, 'Password Changed via Gmail OTP', 'Operator Profile', originIp, 'success');
 
-    addAuditLog(user.id, user.email, 'Password Reset & Authenticated', 'Operator Profile', req.ip || '127.0.0.1', 'success');
+    // Notify user via Gmail that their password was changed
+    const { subject, textBody, htmlBody } = buildPasswordChangedEmail({
+      userName: user.name || user.email.split('@')[0],
+      email: user.email,
+      originIp,
+      timestamp: new Date().toLocaleString(),
+    });
+    const activeSender = getActiveAdminGmailSender();
+    sendEmail({
+      to: user.email,
+      subject,
+      text: textBody,
+      html: htmlBody,
+      fromName: 'EncDec IDS Security Gateway',
+      fromEmail: activeSender?.email,
+      googleAccessToken: activeSender?.accessToken,
+      preferOAuth: Boolean(activeSender)
+    }).catch(console.error);
 
-    // Notify user of successful change
-    sendNotificationEmail(user, 'login', req.ip).catch(console.error);
+    res.json({
+      status: 'ok',
+      success: true,
+      passwordChanged: true,
+      email: user.email,
+      message: 'Password changed successfully! You can now sign in with your new password.'
+    });
+  });
 
-    // Auto-login: issue session token and user profile
-    const token = jwt.sign({ id: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '8h' });
+  // POST /api/auth/change-password (Authenticated in-console password rotation from Settings)
+  router.post('/change-password', authenticateToken, (req: any, res: Response) => {
+    const parseResult = changePasswordSchema.safeParse(req.body);
+    if (!parseResult.success) {
+      const err = parseResult.error.issues?.[0]?.message || 'Invalid password change payload';
+      return res.status(400).json({ error: err });
+    }
 
-    res.json({ 
-      status: 'ok', 
-      success: true, 
-      token,
-      user: buildSafeUser(user),
-      message: 'Password successfully updated! Logging you in...' 
+    const { currentPassword, newPassword } = parseResult.data;
+    const user = dbState.users.find(u => u.id === req.user.id);
+    if (!user) {
+      return res.status(404).json({ error: 'Operator profile not found.' });
+    }
+
+    const matchesCurrent = bcryptjs.compareSync(currentPassword, user.passwordHash || '');
+    if (!matchesCurrent) {
+      addAuditLog(user.id, user.email, 'Password Rotation Failed (Wrong Current Password)', 'Operator Settings', req.ip || '127.0.0.1', 'failure');
+      return res.status(401).json({ error: 'Current password is incorrect.' });
+    }
+
+    user.passwordHash = bcryptjs.hashSync(newPassword, 10);
+    user.passwordUpdatedAt = new Date().toISOString();
+    delete user.passwordResetOtp;
+    saveDb();
+
+    addAuditLog(user.id, user.email, 'Password Rotated from Settings', 'Operator Settings', req.ip || '127.0.0.1', 'success');
+    res.json({
+      status: 'ok',
+      success: true,
+      message: 'Operator credentials rotated successfully.'
     });
   });
 

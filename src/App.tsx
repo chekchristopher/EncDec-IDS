@@ -7,7 +7,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { 
   ShieldCheck, ShieldAlert, Wifi, WifiOff, Bell, 
   HelpCircle, Command, Settings as SettingsIcon, AlertOctagon, Menu, Lock,
-  GraduationCap, ArrowUpRight, X
+  GraduationCap, ArrowUpRight, X, RefreshCw
 } from 'lucide-react';
 
 // API and utilities
@@ -21,6 +21,7 @@ import {
   UserCertificationStatus
 } from './types.js';
 import { evaluateSubscriptionAccess } from './utils/subscription.js';
+import { getValidCachedGmailToken, renewGmailSessionWithPopup } from './services/googleAuth.js';
 
 // Components
 import LandingPage from './components/LandingPage.jsx';
@@ -59,6 +60,12 @@ export default function App() {
   const [certificationStatus, setCertificationStatus] = useState<UserCertificationStatus | null>(null);
   const [certReminderText, setCertReminderText] = useState<string | null>(null);
   const [certNoticeDismissed, setCertNoticeDismissed] = useState(false);
+  const [gmailAutoRenewPrompt, setGmailAutoRenewPrompt] = useState<{
+    email: string;
+    expired: boolean;
+    remainingMinutes?: number;
+  } | null>(null);
+  const [gmailRenewBusy, setGmailRenewBusy] = useState(false);
 
   // Core Data States
   const [metrics, setMetrics] = useState({
@@ -204,6 +211,216 @@ export default function App() {
       cancelled = true;
     };
   }, [currentUser?.id, hasDashboardAccess]);
+
+  // Admin Gmail OTP Sender Manager (silently re-syncs valid in-memory tokens and surfaces 1-click renewal when nearing expiry)
+  const autoRefreshInFlightRef = useRef(false);
+  const hadGmailSessionThisTabRef = useRef(false);
+  const gmailRenewDismissedRef = useRef(false);
+  const flushPendingLoginEmail = async (status: any) => {
+    if (!status?.connected || typeof sessionStorage === 'undefined') return;
+    const raw = sessionStorage.getItem('encdec_pending_login_email');
+    if (!raw) return;
+    sessionStorage.removeItem('encdec_pending_login_email');
+    try {
+      const pending = JSON.parse(raw);
+      if (!pending?.email || Date.now() - (pending.createdAt || 0) > 5 * 60 * 1000) {
+        return;
+      }
+      const eventType = pending.eventType === 'registration' ? 'registration' : 'login';
+      const role = String(pending.role || 'analyst');
+      await apiRequest('/api/email-logs/send', 'POST', {
+        recipient: pending.email,
+        role,
+        type: eventType,
+        subject:
+          eventType === 'registration'
+            ? '[EncDec IDS Security] New Operator Account Confirmation'
+            : '[EncDec IDS Alert] Successful Gateway Console Login',
+        bodyText: `Authenticated session established for ${pending.email} (${role.toUpperCase()}) at ${new Date().toLocaleString()}.`,
+      });
+    } catch {
+      // Non-fatal
+    }
+  };
+
+  useEffect(() => {
+    if (!currentUser || currentUser.role !== 'admin' || !getAuthToken()) {
+      setGmailAutoRenewPrompt(null);
+      return;
+    }
+
+    let cancelled = false;
+    let timerId: number | null = null;
+
+    const clearScheduledTimer = () => {
+      if (timerId !== null) {
+        window.clearTimeout(timerId);
+        timerId = null;
+      }
+    };
+
+    const syncCachedTokenToServer = async (token: string) => {
+      if (autoRefreshInFlightRef.current || cancelled) return;
+      autoRefreshInFlightRef.current = true;
+      try {
+        const res = await apiRequest('/api/admin/gmail-sender/auto-refresh', 'POST', {
+          googleAccessToken: token,
+        });
+        if (!cancelled && res?.status) {
+          window.dispatchEvent(new CustomEvent('admin-gmail-sender-updated', { detail: res.status }));
+          scheduleFromStatus(res.status);
+          void flushPendingLoginEmail(res.status);
+        }
+      } catch {
+        // Token may have been revoked or mismatched; fall back cleanly to 1-click renewal banner
+        if (!cancelled) {
+          setGmailAutoRenewPrompt({
+            email: currentUser.email || 'Admin Gmail',
+            expired: true,
+            remainingMinutes: 0,
+          });
+        }
+      } finally {
+        autoRefreshInFlightRef.current = false;
+      }
+    };
+
+    const scheduleFromStatus = (status: any) => {
+      clearScheduledTimer();
+      if (status?.connected) {
+        hadGmailSessionThisTabRef.current = true;
+        gmailRenewDismissedRef.current = false;
+      }
+      if (cancelled || !status || status.refreshMode !== 'auto') {
+        setGmailAutoRenewPrompt(null);
+        return;
+      }
+
+      const windowMs = (status.autoRefreshWindowMinutes || 5) * 60 * 1000;
+      const hintEmail = status.email || status.lastConnectedEmail || currentUser.email || 'Admin Gmail';
+      const cachedToken = getValidCachedGmailToken();
+      const hasPendingLoginEmail =
+        typeof sessionStorage !== 'undefined' && Boolean(sessionStorage.getItem('encdec_pending_login_email'));
+
+      if (!status.connected && cachedToken) {
+        void syncCachedTokenToServer(cachedToken);
+        return;
+      }
+
+      if (status.connected && typeof status.expiresAt === 'number') {
+        const msUntilRefresh = status.expiresAt - Date.now() - windowMs;
+        if (msUntilRefresh <= 0) {
+          if (!gmailRenewDismissedRef.current) {
+            setGmailAutoRenewPrompt({
+              email: hintEmail,
+              expired: false,
+              remainingMinutes: status.remainingMinutes,
+            });
+          }
+          return;
+        }
+        setGmailAutoRenewPrompt(null);
+        // Cap setTimeout below 2^31-1 (~24.8 days), session TTL is <=55m
+        const safeDelay = Math.min(Math.max(msUntilRefresh, 1000), 60 * 60 * 1000);
+        timerId = window.setTimeout(() => {
+          if (!cancelled && !gmailRenewDismissedRef.current) {
+            setGmailAutoRenewPrompt({
+              email: hintEmail,
+              expired: false,
+              remainingMinutes: Math.max(1, Math.ceil(windowMs / 60000)),
+            });
+          }
+        }, safeDelay);
+      } else if (
+        !status.connected &&
+        !gmailRenewDismissedRef.current &&
+        (hadGmailSessionThisTabRef.current || hasPendingLoginEmail || status.lastConnectedEmail)
+      ) {
+        setGmailAutoRenewPrompt({
+          email: hintEmail,
+          expired: true,
+          remainingMinutes: 0,
+        });
+      } else {
+        setGmailAutoRenewPrompt(null);
+      }
+    };
+
+    const syncHeartbeat = async () => {
+      if (cancelled || !getAuthToken()) return;
+      try {
+        const status = await apiRequest('/api/admin/gmail-sender/heartbeat');
+        if (!cancelled && status) {
+          window.dispatchEvent(new CustomEvent('admin-gmail-sender-updated', { detail: status }));
+          scheduleFromStatus(status);
+          void flushPendingLoginEmail(status);
+        }
+      } catch {
+        // Non-fatal background poll
+      }
+    };
+
+    const handleSenderStatusUpdate = (evt: Event) => {
+      const customEvt = evt as CustomEvent;
+      if (customEvt?.detail) {
+        scheduleFromStatus(customEvt.detail);
+        void flushPendingLoginEmail(customEvt.detail);
+      }
+    };
+
+    const handleVisibilityOrFocus = () => {
+      if (document.visibilityState === 'visible') {
+        void syncHeartbeat();
+      }
+    };
+
+    void syncHeartbeat();
+    const pollIntervalId = window.setInterval(() => {
+      void syncHeartbeat();
+    }, 60 * 1000);
+
+    window.addEventListener('admin-gmail-sender-updated', handleSenderStatusUpdate);
+    window.addEventListener('focus', handleVisibilityOrFocus);
+    document.addEventListener('visibilitychange', handleVisibilityOrFocus);
+
+    return () => {
+      cancelled = true;
+      clearScheduledTimer();
+      window.clearInterval(pollIntervalId);
+      window.removeEventListener('admin-gmail-sender-updated', handleSenderStatusUpdate);
+      window.removeEventListener('focus', handleVisibilityOrFocus);
+      document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
+    };
+  }, [currentUser?.id, currentUser?.role]);
+
+  const handleOneClickGmailRenew = async () => {
+    if (gmailRenewBusy) return;
+    setGmailRenewBusy(true);
+    try {
+      const freshToken = await renewGmailSessionWithPopup(gmailAutoRenewPrompt?.email || currentUser?.email);
+      const res = await apiRequest('/api/admin/gmail-sender/auto-refresh', 'POST', {
+        googleAccessToken: freshToken,
+      });
+      if (res?.status) {
+        window.dispatchEvent(new CustomEvent('admin-gmail-sender-updated', { detail: res.status }));
+        void flushPendingLoginEmail(res.status);
+      }
+      setGmailAutoRenewPrompt(null);
+    } catch (err: any) {
+      try {
+        const errRes = await apiRequest('/api/admin/gmail-sender/auto-refresh-error', 'POST', {
+          error: err?.message || 'Admin Gmail renewal popup was closed or blocked.',
+        });
+        if (errRes?.status) {
+          window.dispatchEvent(new CustomEvent('admin-gmail-sender-updated', { detail: errRes.status }));
+        }
+      } catch {
+        // Non-fatal
+      }
+    } finally {
+      setGmailRenewBusy(false);
+    }
+  };
 
   // Handle WebSocket Connection (only when unlocked)
   useEffect(() => {
@@ -360,6 +577,12 @@ export default function App() {
               setCertReminderText(msg.payload.message);
             }
             setCertNoticeDismissed(false);
+            break;
+
+          case 'ADMIN_GMAIL_SENDER_UPDATE':
+            if (msg.payload) {
+              window.dispatchEvent(new CustomEvent('admin-gmail-sender-updated', { detail: msg.payload }));
+            }
             break;
 
           default:
@@ -740,6 +963,49 @@ export default function App() {
           </div>
 
         </header>
+
+        {/* Admin Gmail Session 1-Click Auto-Renewal Prompt Banner */}
+        {currentUser?.role === 'admin' && gmailAutoRenewPrompt && (
+          <div
+            className="bg-cyan-950/75 border-b border-cyan-500/35 text-cyan-100 px-4 lg:px-8 py-2.5 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+            id="admin-gmail-renew-banner"
+            role="status"
+          >
+            <div className="flex items-start sm:items-center gap-2.5 min-w-0">
+              <RefreshCw className={`w-4 h-4 text-cyan-400 shrink-0 mt-0.5 sm:mt-0 ${gmailRenewBusy ? 'animate-spin' : ''}`} />
+              <p className="leading-snug">
+                <span className="font-semibold text-white">Admin Gmail Session:</span>{' '}
+                {gmailAutoRenewPrompt.expired
+                  ? `Session for ${gmailAutoRenewPrompt.email} expired. Renew now to resume OTP & alert delivery.`
+                  : `Session for ${gmailAutoRenewPrompt.email} expires in ~${gmailAutoRenewPrompt.remainingMinutes ?? 5} min.`}
+              </p>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                type="button"
+                disabled={gmailRenewBusy}
+                onClick={handleOneClickGmailRenew}
+                className="px-3 py-1.5 rounded-md bg-cyan-400 hover:bg-cyan-300 disabled:opacity-60 text-slate-950 font-semibold text-xs whitespace-nowrap shrink-0 flex items-center gap-1.5 cursor-pointer transition-colors"
+                id="banner-renew-gmail-btn"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${gmailRenewBusy ? 'animate-spin' : ''}`} />
+                <span>{gmailRenewBusy ? 'Renewing...' : 'Renew Admin Gmail'}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  gmailRenewDismissedRef.current = true;
+                  setGmailAutoRenewPrompt(null);
+                }}
+                className="p-1.5 rounded text-cyan-300 hover:text-white hover:bg-white/10 cursor-pointer transition-colors"
+                aria-label="Dismiss Admin Gmail renewal notice"
+                id="dismiss-gmail-renew-banner-btn"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Uncertified Analyst Workbook Notification Banner */}
         {hasDashboardAccess &&

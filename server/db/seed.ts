@@ -419,7 +419,9 @@ export function getInitialDatabaseState(): DbSchema {
       ...DEFAULT_BILLING_CONFIG,
       updatedAt: new Date().toISOString(),
     },
-    payments: []
+    payments: [],
+    adminGmailRefreshMode: 'auto',
+    adminGmailLastEmail: null
   };
 }
 

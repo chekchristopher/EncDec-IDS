@@ -35,21 +35,25 @@ export const GMAIL_SCOPES = [
   'https://www.googleapis.com/auth/gmail.addons.current.message.readonly'
 ];
 
-const createGoogleProvider = (includeGmailScopes: boolean) => {
+const createGoogleProvider = (
+  includeGmailScopes: boolean,
+  options?: { hintEmail?: string; promptMode?: 'consent' | 'select_account' }
+) => {
   const gProvider = new GoogleAuthProvider();
+  const params: Record<string, string> = {};
   if (includeGmailScopes) {
     GMAIL_SCOPES.forEach((scope) => {
       gProvider.addScope(scope);
     });
-    gProvider.setCustomParameters({
-      prompt: 'consent',
-      access_type: 'offline'
-    });
+    params.prompt = options?.promptMode || 'consent';
+    params.access_type = 'offline';
   } else {
-    gProvider.setCustomParameters({
-      prompt: 'select_account'
-    });
+    params.prompt = 'select_account';
   }
+  if (options?.hintEmail) {
+    params.login_hint = options.hintEmail;
+  }
+  gProvider.setCustomParameters(params);
   return gProvider;
 };
 
@@ -57,6 +61,8 @@ const createGoogleProvider = (includeGmailScopes: boolean) => {
 let isSigningIn = false;
 // In-memory access token cache (CRITICAL: Do NOT store in localStorage per SKILL.md)
 let cachedAccessToken: string | null = null;
+let cachedHasGmailScopes = false;
+let cachedAccessTokenExpiresAt: number | null = null;
 let cachedGoogleUser: User | null = null;
 
 type AuthCallback = (user: User | null, token: string | null) => void;
@@ -90,6 +96,8 @@ export const initGoogleAuth = (
       }
     } else {
       cachedAccessToken = null;
+      cachedHasGmailScopes = false;
+      cachedAccessTokenExpiresAt = null;
       cachedGoogleUser = null;
       if (onAuthFailure) onAuthFailure();
     }
@@ -97,21 +105,29 @@ export const initGoogleAuth = (
   });
 };
 
-// Sign in with Google Popup
+// Sign in with Google Popup (must be invoked from an explicit user click)
 export const signInWithGoogle = async (
-  options: { includeGmailScopes?: boolean } = {}
+  options: { includeGmailScopes?: boolean; hintEmail?: string; promptMode?: 'consent' | 'select_account' } = {}
 ): Promise<{ user: User; accessToken: string | null }> => {
-  const { includeGmailScopes = true } = options;
+  const { includeGmailScopes = true, hintEmail, promptMode } = options;
   try {
     isSigningIn = true;
-    const authProvider = createGoogleProvider(includeGmailScopes);
+    const authProvider = createGoogleProvider(includeGmailScopes, { hintEmail, promptMode });
     const result = await signInWithPopup(auth, authProvider);
     const credential = GoogleAuthProvider.credentialFromResult(result);
     if (includeGmailScopes && !credential?.accessToken) {
       throw new Error('Failed to obtain Google access token. Please grant the requested permissions.');
     }
 
-    cachedAccessToken = credential?.accessToken || null;
+    if (includeGmailScopes) {
+      cachedAccessToken = credential?.accessToken || null;
+      cachedHasGmailScopes = Boolean(cachedAccessToken);
+      cachedAccessTokenExpiresAt = cachedAccessToken ? Date.now() + 55 * 60 * 1000 : null;
+    } else {
+      cachedAccessToken = null;
+      cachedHasGmailScopes = false;
+      cachedAccessTokenExpiresAt = null;
+    }
     cachedGoogleUser = result.user;
     notifyListeners();
 
@@ -143,7 +159,19 @@ export const signInWithGoogle = async (
 };
 
 export const getGoogleAccessToken = async (): Promise<string | null> => {
+  return cachedHasGmailScopes ? cachedAccessToken : null;
+};
+
+export const getValidCachedGmailToken = (): string | null => {
+  if (!cachedHasGmailScopes || !cachedAccessToken) return null;
+  if (cachedAccessTokenExpiresAt && Date.now() >= cachedAccessTokenExpiresAt) {
+    return null;
+  }
   return cachedAccessToken;
+};
+
+export const hasGmailAccessScope = (): boolean => {
+  return Boolean(getValidCachedGmailToken());
 };
 
 export const getCachedGoogleUser = (): User | null => {
@@ -153,6 +181,26 @@ export const getCachedGoogleUser = (): User | null => {
 export const googleSignOut = async () => {
   await signOut(auth);
   cachedAccessToken = null;
+  cachedHasGmailScopes = false;
+  cachedAccessTokenExpiresAt = null;
   cachedGoogleUser = null;
   notifyListeners();
+};
+
+/**
+ * Renews the Admin Gmail OAuth token via Firebase signInWithPopup (must be invoked from an explicit button click).
+ * Avoids Google Identity Services initTokenClient, which emits [GSI_LOGGER]: Failed to open popup window
+ * when blocked by embedded iframes or popup policies.
+ */
+export const renewGmailSessionWithPopup = async (hintEmail?: string): Promise<string> => {
+  const effectiveHint = (hintEmail || cachedGoogleUser?.email || auth.currentUser?.email || '').trim() || undefined;
+  const { accessToken } = await signInWithGoogle({
+    includeGmailScopes: true,
+    hintEmail: effectiveHint,
+    promptMode: 'select_account',
+  });
+  if (!accessToken) {
+    throw new Error('Google did not return a Gmail access token.');
+  }
+  return accessToken;
 };

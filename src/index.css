@@ -409,6 +409,45 @@ html.light .fixed .bg-slate-950 {
   box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1) !important;
 }
 
+/* Preserve optical dark depth inside Three.js 3D WebGL stage in Light Mode */
+html.light .encdec-webgl-viewport {
+  background-color: #030917 !important;
+  border-color: #cbd5e1 !important;
+}
+
+html.light .encdec-dark-card,
+html.light .encdec-dark-card .bg-\[\#050c1a\],
+html.light .encdec-dark-card .bg-\[\#0b162d\],
+html.light .encdec-dark-card .bg-\[\#081224\] {
+  background-color: #071022 !important;
+  border-color: rgba(56, 189, 248, 0.25) !important;
+}
+
+html.light .encdec-dark-card .text-slate-200,
+html.light .encdec-dark-card .text-slate-300,
+html.light .encdec-dark-card .text-white {
+  color: #f1f5f9 !important;
+}
+
+html.light .encdec-dark-card .text-slate-400,
+html.light .encdec-dark-card .text-slate-500 {
+  color: #94a3b8 !important;
+}
+
+html.light .encdec-dark-card .text-cyan-300,
+html.light .encdec-dark-card .text-cyan-400 {
+  color: #38bdf8 !important;
+}
+
+html.light .encdec-dark-card .text-emerald-400 {
+  color: #34d399 !important;
+}
+
+html.light .encdec-dark-card .text-sky-300,
+html.light .encdec-dark-card .text-sky-400 {
+  color: #7dd3fc !important;
+}
+
 /* Hide scrollbars globally */
 ::-webkit-scrollbar {
   display: none;

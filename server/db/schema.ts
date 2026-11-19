@@ -7,7 +7,7 @@ import {
   User, Host, Rule, Alert, Threat, APIKey, 
   AuditLog, LiveActivity, ThreatIntelFeed, MLModel, QuarantineItem, EmailLog,
   Incident, RawSecurityEvent, ActiveResponseAction, SensorStatus, WorkbookProgress,
-  StoredCertificate, BillingConfig, PaymentRecord
+  StoredCertificate, BillingConfig, PaymentRecord, ExamQuestion
 } from '../../src/types.js';
 
 export interface DbSchema {
@@ -31,4 +31,7 @@ export interface DbSchema {
   certificates?: StoredCertificate[];
   billingConfig?: BillingConfig;
   payments?: PaymentRecord[];
+  customExamQuestions?: ExamQuestion[];
+  adminGmailRefreshMode?: 'auto' | 'manual';
+  adminGmailLastEmail?: string | null;
 }

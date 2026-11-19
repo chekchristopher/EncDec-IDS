@@ -166,7 +166,7 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
     setGoogleLoading(true);
 
     try {
-      const res = await signInWithGoogle({ includeGmailScopes: false });
+      const res = await signInWithGoogle({ includeGmailScopes: true, promptMode: 'select_account' });
       const googleUser = res.user;
       const googleAccessToken = res.accessToken || undefined;
 
@@ -182,20 +182,38 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
         googleAccessToken
       });
 
-      // Dispatch direct Gmail confirmation when Gmail token is available
-      if (googleAccessToken) {
-        sendDirectAuthEmailToGmail({
-          email: googleUser.email,
-          name: googleUser.displayName || googleUser.email.split('@')[0],
-          role: authRes.user.role,
-          eventType: authRes.isNewUser ? 'registration' : 'login'
-        }).catch(console.error);
-      }
-
       if (authRes.user?.email) {
         localStorage.setItem('encdec_last_email', authRes.user.email);
       }
       setAuthToken(authRes.token);
+
+      if (!authRes.emailDelivery?.deliveredToGmail) {
+        let clientDelivered = false;
+        if (googleAccessToken) {
+          const directRes = await sendDirectAuthEmailToGmail({
+            email: googleUser.email,
+            name: googleUser.displayName || googleUser.email.split('@')[0],
+            role: authRes.user.role,
+            eventType: authRes.isNewUser ? 'registration' : 'login'
+          }).catch(() => ({ delivered: false }));
+          clientDelivered = Boolean(directRes?.delivered);
+        }
+        if (!clientDelivered) {
+          sessionStorage.setItem(
+            'encdec_pending_login_email',
+            JSON.stringify({
+              email: authRes.user.email,
+              name: authRes.user.name,
+              role: authRes.user.role,
+              eventType: authRes.isNewUser ? 'registration' : 'login',
+              createdAt: Date.now(),
+            })
+          );
+        }
+      } else {
+        sessionStorage.removeItem('encdec_pending_login_email');
+      }
+
       onLoginSuccess(authRes.user);
     } catch (err: any) {
       if (err?.code === 'auth/popup-blocked' || err?.message?.includes('popup-blocked')) {
@@ -247,74 +265,81 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
 
     try {
       // -------------------------------------------------------------
-      // 1. FORGOT PASSWORD WORKFLOW
+      // 1. FORGOT PASSWORD WORKFLOW (3-STEP GMAIL OTP -> NEW PASSWORD x2)
       // -------------------------------------------------------------
       if (isForgotPassword) {
         
-        // STEP 1: User inputs their Gmail to receive the 6-digit code
+        // STEP 1: User inputs their Gmail to receive the 6-digit OTP
         if (forgotStep === 'enter_email') {
           if (!email || !email.includes('@')) {
-            throw new Error('Please enter a valid Gmail / operator address.');
+            throw new Error('Please enter a valid Gmail address.');
           }
 
-          const response = await apiRequest('/api/auth/forgot-password', 'POST', { email });
-          setMessage(response.message || `A 6-digit verification code was sent to ${email}.`);
+          const response = await apiRequest('/api/auth/forgot-password', 'POST', { email: email.trim() });
+          setResetCode('');
+          setMessage(response.message || `A 6-digit OTP verification code has been sent to ${email.trim()}. Check your Gmail inbox.`);
           setForgotStep('enter_code');
           setResendCooldown(60);
           setLoading(false);
           return;
         }
 
-        // STEP 2: User inputs the 6-digit code sent to their Gmail
+        // STEP 2: User inputs the 6-digit OTP from their Gmail inbox
         if (forgotStep === 'enter_code') {
           const cleanCode = resetCode.trim();
           if (cleanCode.length !== 6 || !/^\d{6}$/.test(cleanCode)) {
-            throw new Error('Please enter the complete 6-digit numeric verification code.');
+            throw new Error('Please enter the complete 6-digit numeric OTP from your Gmail.');
           }
 
-          const response = await apiRequest('/api/auth/verify-reset-code', 'POST', { 
-            email, 
-            code: cleanCode 
-          });
+          try {
+            const response = await apiRequest('/api/auth/verify-reset-code', 'POST', {
+              email: email.trim(),
+              code: cleanCode
+            });
 
-          setMessage(response.message || '6-digit code verified! Please enter and confirm your new password below.');
-          setForgotStep('set_new_password');
-          setLoading(false);
+            setNewPassword('');
+            setConfirmPassword('');
+            setMessage(response.message || 'OTP verified! Enter your new password twice below to confirm.');
+            setForgotStep('set_new_password');
+          } catch (verifyErr: any) {
+            if (verifyErr?.message?.toLowerCase().includes('too many incorrect') || verifyErr?.message?.toLowerCase().includes('expired')) {
+              setResetCode('');
+            }
+            throw verifyErr;
+          } finally {
+            setLoading(false);
+          }
           return;
         }
 
-        // STEP 3: User inputs new password twice as if signing up, and is auto-logged in!
+        // STEP 3: User inputs new password and confirms it a second time, then password is changed
         if (forgotStep === 'set_new_password') {
           if (!newPassword || newPassword.length < 6) {
-            throw new Error('New password must be at least 6 characters in length.');
+            throw new Error('New password must be at least 6 characters long.');
           }
 
           if (newPassword !== confirmPassword) {
-            throw new Error('Passwords do not match. Please ensure both password fields match exactly.');
+            throw new Error('Passwords do not match. Please enter the same password both times.');
           }
 
           const response = await apiRequest('/api/auth/reset-password', 'POST', {
-            email,
+            email: email.trim(),
             code: resetCode.trim(),
             newPassword,
             confirmPassword
           });
 
-          setMessage('Password updated successfully! Authenticating and entering console...');
-
-          // Auto-login: Store token and transition immediately into dashboard
-          if (response.token && response.user) {
-            if (response.user?.email) {
-              localStorage.setItem('encdec_last_email', response.user.email);
-            }
-            setAuthToken(response.token);
-            setTimeout(() => {
-              onLoginSuccess(response.user);
-            }, 600);
-          } else {
-            setIsForgotPassword(false);
-            setForgotStep('enter_email');
-          }
+          const preservedEmail = response.email || email.trim();
+          localStorage.setItem('encdec_last_email', preservedEmail);
+          resetFormState();
+          setEmail(preservedEmail);
+          setIsForgotPassword(false);
+          setIsSignUp(false);
+          setMfaRequired(false);
+          setMessage(
+            response.message ||
+              `Password changed successfully for ${preservedEmail}! Sign in below with your new password.`
+          );
           return;
         }
       }
@@ -332,17 +357,35 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
           googleAccessToken: cachedGoogleToken || undefined
         });
 
-        sendDirectAuthEmailToGmail({
-          email: response.user.email,
-          name: response.user.name,
-          role: response.user.role,
-          eventType: 'registration'
-        }).catch(console.error);
-
         if (response.user?.email) {
           localStorage.setItem('encdec_last_email', response.user.email);
         }
         setAuthToken(response.token);
+
+        if (!response.emailDelivery?.deliveredToGmail) {
+          if (cachedGoogleToken) {
+            sendDirectAuthEmailToGmail({
+              email: response.user.email,
+              name: response.user.name,
+              role: response.user.role,
+              eventType: 'registration'
+            }).catch(() => {});
+          } else {
+            sessionStorage.setItem(
+              'encdec_pending_login_email',
+              JSON.stringify({
+                email: response.user.email,
+                name: response.user.name,
+                role: response.user.role,
+                eventType: 'registration',
+                createdAt: Date.now(),
+              })
+            );
+          }
+        } else {
+          sessionStorage.removeItem('encdec_pending_login_email');
+        }
+
         onLoginSuccess(response.user);
       } else {
         const payload: any = { 
@@ -363,17 +406,35 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
           return;
         }
 
-        sendDirectAuthEmailToGmail({
-          email: response.user.email,
-          name: response.user.name,
-          role: response.user.role,
-          eventType: 'login'
-        }).catch(console.error);
-
         if (response.user?.email) {
           localStorage.setItem('encdec_last_email', response.user.email);
         }
         setAuthToken(response.token);
+
+        if (!response.emailDelivery?.deliveredToGmail) {
+          if (cachedGoogleToken) {
+            sendDirectAuthEmailToGmail({
+              email: response.user.email,
+              name: response.user.name,
+              role: response.user.role,
+              eventType: 'login'
+            }).catch(() => {});
+          } else {
+            sessionStorage.setItem(
+              'encdec_pending_login_email',
+              JSON.stringify({
+                email: response.user.email,
+                name: response.user.name,
+                role: response.user.role,
+                eventType: 'login',
+                createdAt: Date.now(),
+              })
+            );
+          }
+        } else {
+          sessionStorage.removeItem('encdec_pending_login_email');
+        }
+
         onLoginSuccess(response.user);
       }
     } catch (err: any) {
@@ -421,24 +482,24 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
                 <span>Password Recovery Protocol</span>
               </div>
               <h2 className="text-xl font-bold text-white tracking-tight font-sans">
-                {forgotStep === 'enter_email' && 'Retrieve Your Password'}
-                {forgotStep === 'enter_code' && 'Enter 6-Digit Verification Code'}
-                {forgotStep === 'set_new_password' && 'Set New Password & Log In'}
+                {forgotStep === 'enter_email' && 'Verify Your Gmail Address'}
+                {forgotStep === 'enter_code' && 'Enter 6-Digit Gmail OTP'}
+                {forgotStep === 'set_new_password' && 'Create New Password'}
               </h2>
               <p className="text-xs text-slate-400 font-mono leading-relaxed">
-                {forgotStep === 'enter_email' && 'Enter your Gmail address. We will dispatch a 6-digit verification code to your inbox.'}
-                {forgotStep === 'enter_code' && `A 6-digit code has been sent to ${email}. Check your Gmail inbox and enter the code below.`}
-                {forgotStep === 'set_new_password' && 'Enter your new password of choice twice to confirm and log straight into the SOC console.'}
+                {forgotStep === 'enter_email' && 'Enter your registered Gmail address. We will send a 6-digit one-time password (OTP) to verify your identity.'}
+                {forgotStep === 'enter_code' && `Enter the 6-digit OTP sent to ${email} to verify it is you.`}
+                {forgotStep === 'set_new_password' && 'Enter your new password and confirm it a second time to complete the password change.'}
               </p>
 
-              {/* Step indicator progress pills */}
+              {/* Step indicator progress */}
               <div className="flex items-center gap-1.5 pt-2 font-mono text-[10px]">
-                <span className={`px-2 py-0.5 rounded ${forgotStep === 'enter_email' ? 'bg-cyan-500 text-slate-950 font-bold' : 'bg-slate-800 text-slate-400'}`}>
+                <span className={`px-2 py-0.5 rounded ${forgotStep === 'enter_email' ? 'bg-cyan-500 text-slate-950 font-bold' : 'bg-emerald-950 text-emerald-400 border border-emerald-500/30'}`}>
                   1. Gmail
                 </span>
                 <ChevronRight className="w-3 h-3 text-slate-600" />
                 <span className={`px-2 py-0.5 rounded ${forgotStep === 'enter_code' ? 'bg-cyan-500 text-slate-950 font-bold' : forgotStep === 'set_new_password' ? 'bg-emerald-950 text-emerald-400 border border-emerald-500/30' : 'bg-slate-800 text-slate-400'}`}>
-                  2. 6-Digit Code
+                  2. Gmail OTP
                 </span>
                 <ChevronRight className="w-3 h-3 text-slate-600" />
                 <span className={`px-2 py-0.5 rounded ${forgotStep === 'set_new_password' ? 'bg-cyan-500 text-slate-950 font-bold' : 'bg-slate-800 text-slate-400'}`}>
@@ -599,12 +660,14 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
                   <input
                     id="reset-code-input"
                     type="text"
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
                     required
                     maxLength={6}
                     autoFocus
                     placeholder="••••••"
                     value={resetCode}
-                    onChange={(e) => setResetCode(e.target.value.replace(/\D/g, ''))}
+                    onChange={(e) => setResetCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
                     className="w-full bg-transparent border-none py-3.5 pl-10 pr-4 text-center text-lg text-white placeholder-slate-600 focus:outline-none focus:ring-0 font-mono tracking-[0.5em] font-bold"
                   />
                 </div>
@@ -643,7 +706,7 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
             <div className="space-y-3.5 animate-fadeIn">
               <div className="p-2.5 rounded-lg bg-emerald-950/30 border border-emerald-500/30 flex items-center gap-2 text-xs text-emerald-300 font-mono">
                 <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-                <span>Identity verified via Gmail code. Set your new password:</span>
+                <span>Gmail OTP verified for {email}. Enter and confirm your new password:</span>
               </div>
 
               {/* New Password */}
@@ -842,17 +905,17 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
               forgotStep === 'enter_email' ? (
                 <>
                   <Send className="w-4 h-4" />
-                  <span>Send 6-Digit Code to Gmail →</span>
+                  <span>Send OTP to Gmail →</span>
                 </>
               ) : forgotStep === 'enter_code' ? (
                 <>
                   <ShieldCheck className="w-4 h-4" />
-                  <span>Verify 6-Digit Code →</span>
+                  <span>Verify OTP Code →</span>
                 </>
               ) : (
                 <>
                   <CheckCircle2 className="w-4 h-4" />
-                  <span>Confirm Password & Log In →</span>
+                  <span>Change Password →</span>
                 </>
               )
             ) : mfaRequired ? (

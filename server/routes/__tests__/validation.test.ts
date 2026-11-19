@@ -1,11 +1,13 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { 
   loginSchema, 
   signupSchema, 
-  hostRegisterSchema, 
   ruleCreateSchema, 
   mssqlQuerySchema,
-  mssqlConfigureSchema
+  verifyResetCodeSchema,
+  resetPasswordSchema,
+  changePasswordSchema,
+  adminGmailRefreshModeSchema
 } from '../../schemas/validation.js';
 
 describe('API Input Validation Schemas', () => {
@@ -54,6 +56,53 @@ describe('API Input Validation Schemas', () => {
         role: 'analyst'
       });
       expect(result.success).toBe(false);
+    });
+  });
+
+  describe('forgot password OTP & reset schemas', () => {
+    it('accepts 6 numeric digits for verifyResetCodeSchema and rejects non-numeric', () => {
+      expect(verifyResetCodeSchema.safeParse({ email: 'user@gmail.com', code: '482913' }).success).toBe(true);
+      expect(verifyResetCodeSchema.safeParse({ email: 'user@gmail.com', code: '48291a' }).success).toBe(false);
+      expect(verifyResetCodeSchema.safeParse({ email: 'user@gmail.com', code: '12345' }).success).toBe(false);
+    });
+
+    it('requires matching confirmPassword on resetPasswordSchema', () => {
+      expect(resetPasswordSchema.safeParse({
+        email: 'user@gmail.com',
+        code: '482913',
+        newPassword: 'NewSecurePassword!',
+        confirmPassword: 'NewSecurePassword!',
+      }).success).toBe(true);
+
+      expect(resetPasswordSchema.safeParse({
+        email: 'user@gmail.com',
+        code: '482913',
+        newPassword: 'NewSecurePassword!',
+      }).success).toBe(false);
+
+      expect(resetPasswordSchema.safeParse({
+        email: 'user@gmail.com',
+        code: '482913',
+        newPassword: 'NewSecurePassword!',
+        confirmPassword: 'DifferentPassword!',
+      }).success).toBe(false);
+    });
+
+    it('validates changePasswordSchema', () => {
+      expect(changePasswordSchema.safeParse({
+        currentPassword: 'oldPassword',
+        newPassword: 'newPassword123',
+      }).success).toBe(true);
+      expect(changePasswordSchema.safeParse({
+        currentPassword: '',
+        newPassword: 'newPassword123',
+      }).success).toBe(false);
+    });
+
+    it('validates adminGmailRefreshModeSchema', () => {
+      expect(adminGmailRefreshModeSchema.safeParse({ refreshMode: 'auto' }).success).toBe(true);
+      expect(adminGmailRefreshModeSchema.safeParse({ refreshMode: 'manual' }).success).toBe(true);
+      expect(adminGmailRefreshModeSchema.safeParse({ refreshMode: 'hourly' }).success).toBe(false);
     });
   });
 

@@ -198,7 +198,10 @@ export default function SettingsScreen({ currentUser, onProfileUpdate, onOpenPro
     setSuccessMsg(null);
 
     try {
-      await apiRequest('/api/auth/reset-password', 'POST', { email: currentUser?.email, newPassword });
+      await apiRequest('/api/auth/change-password', 'POST', {
+        currentPassword: oldPassword,
+        newPassword
+      });
       setSuccessMsg('Operator credentials rotated successfully.');
       setOldPassword('');
       setNewPassword('');
