@@ -166,7 +166,10 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
     setGoogleLoading(true);
 
     try {
-      const res = await signInWithGoogle({ includeGmailScopes: true, promptMode: 'select_account' });
+      // Use standard Google Sign-In (basic profile/email only — no restricted Gmail API scopes)
+      // so all users can sign in without hitting Google's restricted-scope verification block.
+      // Admins connect Gmail API scopes on demand inside Admin Portal / Gmail Console.
+      const res = await signInWithGoogle({ includeGmailScopes: false, promptMode: 'select_account' });
       const googleUser = res.user;
       const googleAccessToken = res.accessToken || undefined;
 
@@ -226,10 +229,21 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
         setGoogleAuthNotice(
           'Google Sign-In popup closed before completion (auth/popup-closed-by-user). Keep the Google popup open until sign-in finishes—or if running inside an embedded preview iframe, open the Dev/App URL in a new standalone browser tab—or sign in with email & password.'
         );
-      } else if (err?.code === 'auth/unauthorized-domain' || err?.message?.includes('auth/unauthorized-domain')) {
+      } else if (
+        err?.code === 'auth/unauthorized-domain' ||
+        err?.message?.includes('auth/unauthorized-domain')
+      ) {
         const currentDomain = window.location.hostname;
         setGoogleAuthNotice(
           `Domain Authorization Notice: "${currentDomain}" needs to be whitelisted in Firebase Console -> Authentication -> Settings -> Authorized Domains. In the meantime, you can log in instantly with standard operator credentials below or unlock the Admin Safe Box.`
+        );
+      } else if (
+        err?.code === 'auth/access-denied' ||
+        err?.message?.toLowerCase().includes('access_denied') ||
+        err?.message?.toLowerCase().includes('verification process')
+      ) {
+        setGoogleAuthNotice(
+          'Google OAuth Testing Mode Notice: This Google Cloud project is currently in Testing mode and only allows listed Test Users. Publish the OAuth consent screen to Production (or add this email under Test users in Google Cloud Console), or sign in with email & password below.'
         );
       } else {
         setError(err?.message || 'Google Authentication sequence was aborted.');
@@ -586,15 +600,15 @@ export default function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
                 {googleLoading
                   ? 'Connecting to Google...'
                   : isSignUp
-                  ? 'Sign up with Google (Direct Gmail Inbox)'
-                  : 'Continue with Google (Direct Gmail Inbox)'}
+                  ? 'Sign up with Google'
+                  : 'Continue with Google'}
               </span>
             </button>
 
-            {/* Direct Gmail delivery badge */}
+            {/* Standard Google Auth info badge */}
             <div className="flex items-center justify-center gap-1.5 text-[11px] text-cyan-400/90 font-mono bg-cyan-950/30 border border-cyan-500/20 py-1.5 px-2.5 rounded-lg">
               <Send className="w-3 h-3 text-cyan-400 shrink-0" />
-              <span>Direct Gmail dispatch enabled for security verification</span>
+              <span>Standard Google Sign-In · Alerts sent via SOC Gateway</span>
             </div>
 
             <div className="flex items-center gap-3 my-3">

@@ -131,7 +131,7 @@ export const signInWithGoogle = async (
     cachedGoogleUser = result.user;
     notifyListeners();
 
-    return { user: result.user, accessToken: cachedAccessToken };
+    return { user: result.user, accessToken: includeGmailScopes ? cachedAccessToken : null };
   } catch (error: any) {
     if (error?.code === 'auth/popup-blocked' || error?.message?.includes('popup-blocked')) {
       const friendlyErr = new Error('Popup blocked by browser or iframe sandbox. Please allow popups for this site, or open the app in a new tab.');
