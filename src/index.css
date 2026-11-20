@@ -12,8 +12,22 @@
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
 }
 
+html {
+  scroll-behavior: smooth;
+  -webkit-text-size-adjust: 100%;
+  -webkit-tap-highlight-color: transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+}
+
 html, body, #root {
   min-height: 100vh;
+  max-width: 100%;
+  overflow-x: clip;
   margin: 0;
   padding: 0;
   transition: background-color 0.2s ease, color 0.2s ease;
@@ -409,7 +423,7 @@ html.light .fixed .bg-slate-950 {
   box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1) !important;
 }
 
-/* Preserve optical dark depth inside Three.js 3D WebGL stage in Light Mode */
+/* Preserve optical dark depth inside Three.js 3D WebGL stage & Cinema Player in Light Mode */
 html.light .encdec-webgl-viewport {
   background-color: #030917 !important;
   border-color: #cbd5e1 !important;
@@ -417,12 +431,62 @@ html.light .encdec-webgl-viewport {
 
 html.light .encdec-dark-card,
 html.light .encdec-dark-card .bg-\[\#050c1a\],
+html.light .encdec-dark-card .bg-\[\#050c1a\]\/88,
+html.light .encdec-dark-card .bg-\[\#050c1a\]\/94,
 html.light .encdec-dark-card .bg-\[\#0b162d\],
-html.light .encdec-dark-card .bg-\[\#081224\] {
+html.light .encdec-dark-card .bg-\[\#081224\],
+html.light .encdec-dark-card .bg-\[\#040b18\],
+html.light .encdec-dark-card .bg-\[\#040c1b\],
+html.light .encdec-dark-card .bg-\[\#050d1d\]\/90,
+html.light .encdec-dark-card .bg-\[\#071124\]\/82,
+html.light .encdec-dark-card .bg-\[\#0b1830\]\/96,
+html.light .encdec-dark-card .bg-\[\#09152b\],
+html.light .encdec-dark-card .bg-\[\#081931\],
+html.light .encdec-dark-card .bg-\[\#07182f\],
+html.light .encdec-dark-card .bg-\[\#09172d\],
+html.light .encdec-dark-card .bg-\[\#091c36\],
+html.light .encdec-dark-card .bg-\[\#0b1930\],
+html.light .encdec-dark-card .bg-\[\#061120\],
+html.light .encdec-dark-card .bg-\[\#061c20\],
+html.light .encdec-dark-card .bg-\[\#081d1c\],
+html.light .encdec-dark-card .bg-\[\#121623\],
+html.light .encdec-dark-card .bg-\[\#121626\],
+html.light .encdec-dark-card .bg-slate-950,
+html.light .encdec-dark-card .bg-slate-950\/60,
+html.light .encdec-dark-card .bg-slate-950\/70,
+html.light .encdec-dark-card .bg-slate-950\/85,
+html.light .encdec-dark-card .bg-slate-950\/88,
+html.light .encdec-dark-card .bg-slate-900,
+html.light .encdec-dark-card .bg-slate-900\/75,
+html.light .encdec-dark-card .bg-slate-900\/80,
+html.light .encdec-dark-card .bg-slate-900\/95 {
   background-color: #071022 !important;
-  border-color: rgba(56, 189, 248, 0.25) !important;
+  border-color: rgba(56, 189, 248, 0.24) !important;
 }
 
+html.light .encdec-dark-card.encdec-holo-card {
+  background-image: linear-gradient(135deg, #07152a 0%, #0c1d38 52%, #050e1f 100%) !important;
+  border-color: rgba(103, 232, 249, 0.35) !important;
+}
+
+html.light .encdec-dark-card .bg-slate-800 {
+  background-color: #1e293b !important;
+}
+
+html.light .encdec-dark-card select {
+  background-color: #020617 !important;
+  color: #e2e8f0 !important;
+  border-color: rgba(255, 255, 255, 0.14) !important;
+}
+
+html.light .encdec-dark-card button.bg-slate-950,
+html.light .encdec-dark-card button.bg-slate-900 {
+  background-color: #0f172a !important;
+  color: #e2e8f0 !important;
+  border-color: rgba(255, 255, 255, 0.14) !important;
+}
+
+html.light .encdec-dark-card .text-slate-100,
 html.light .encdec-dark-card .text-slate-200,
 html.light .encdec-dark-card .text-slate-300,
 html.light .encdec-dark-card .text-white {
@@ -434,13 +498,21 @@ html.light .encdec-dark-card .text-slate-500 {
   color: #94a3b8 !important;
 }
 
+html.light .encdec-dark-card .text-cyan-200,
 html.light .encdec-dark-card .text-cyan-300,
 html.light .encdec-dark-card .text-cyan-400 {
   color: #38bdf8 !important;
 }
 
+html.light .encdec-dark-card .text-emerald-300,
 html.light .encdec-dark-card .text-emerald-400 {
   color: #34d399 !important;
+}
+
+html.light .encdec-dark-card .text-amber-100,
+html.light .encdec-dark-card .text-amber-300,
+html.light .encdec-dark-card .text-amber-400 {
+  color: #fbbf24 !important;
 }
 
 html.light .encdec-dark-card .text-sky-300,

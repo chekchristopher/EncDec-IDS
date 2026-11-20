@@ -10,17 +10,23 @@ interface TiltStage3DProps {
   className?: string;
   maxTilt?: number;
   disabled?: boolean;
+  glareColor?: string;
+  glareOpacity?: number;
+  enableVolumetricDepth?: boolean;
 }
 
 /**
- * Subtle, pointer-responsive 3D perspective stage for product previews.
- * Clamps rotation tightly so crisp UI typography remains 100% legible.
+ * Pointer-responsive 3D perspective stage with optional volumetric preserve-3d depth
+ * and optical specular glare. Stays zero-overhead at rest and touch-pan-y safe on mobile.
  */
 export default function TiltStage3D({
   children,
   className = '',
   maxTilt = 4.5,
   disabled = false,
+  glareColor = 'rgba(56, 189, 248, 0.48)',
+  glareOpacity = 0.16,
+  enableVolumetricDepth = false,
 }: TiltStage3DProps) {
   const frameRef = useRef<HTMLDivElement | null>(null);
   const [transformStyle, setTransformStyle] = useState<string>(
@@ -69,11 +75,17 @@ export default function TiltStage3D({
       ref={frameRef}
       onPointerMove={handlePointerMove}
       onPointerLeave={handlePointerLeave}
-      className={`relative will-change-transform transition-transform duration-200 ease-out ${className}`}
-      style={{
-        transform: transformStyle,
-        transformStyle: 'preserve-3d',
-      }}
+      className={`relative touch-pan-y transition-transform duration-200 ease-out ${
+        glarePos.visible ? 'will-change-transform' : ''
+      } ${className}`}
+      style={
+        glarePos.visible || enableVolumetricDepth
+          ? {
+              transform: transformStyle,
+              transformStyle: 'preserve-3d',
+            }
+          : undefined
+      }
     >
       {children}
       {/* Subtle optical specular highlight on pointer hover */}
@@ -81,8 +93,9 @@ export default function TiltStage3D({
         aria-hidden="true"
         className="pointer-events-none absolute inset-0 rounded-[inherit] transition-opacity duration-300"
         style={{
-          opacity: glarePos.visible ? 0.14 : 0,
-          background: `radial-gradient(520px circle at ${glarePos.x}% ${glarePos.y}%, rgba(56, 189, 248, 0.45), transparent 65%)`,
+          opacity: glarePos.visible ? glareOpacity : 0,
+          background: `radial-gradient(520px circle at ${glarePos.x}% ${glarePos.y}%, ${glareColor}, transparent 65%)`,
+          transform: enableVolumetricDepth ? 'translateZ(1px)' : undefined,
         }}
       />
     </div>

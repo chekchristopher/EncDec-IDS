@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import {
   Activity,
   Terminal,
@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import TiltStage3D from './TiltStage3D.js';
+import ThreatGlobe3D from './ThreatGlobe3D.js';
 import type { PublicHealthSnapshot } from './HeroConsolePreview3D.js';
 
 export type ShowcaseTabId = 'dpi' | 'overview' | 'hids' | 'incidents' | 'certification';
@@ -191,6 +192,7 @@ export default function ProductShowcase3D({
   const [probeBusy, setProbeBusy] = useState(false);
   const [activeVector, setActiveVector] = useState<string | null>(null);
   const [probeLogs, setProbeLogs] = useState<ProbeLogEntry[]>([]);
+  const dpiOutputRef = useRef<HTMLDivElement | null>(null);
 
   // Representative HIDS selector state
   const [selectedNodeId, setSelectedNodeId] = useState(REPRESENTATIVE_NODES[0].id);
@@ -262,6 +264,14 @@ export default function ProductShowcase3D({
       ]);
     } finally {
       setProbeBusy(false);
+      if (
+        typeof window !== 'undefined' &&
+        window.innerWidth < 1024 &&
+        dpiOutputRef.current &&
+        typeof dpiOutputRef.current.scrollIntoView === 'function'
+      ) {
+        dpiOutputRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }
       setTimeout(() => onProbeActivity?.('nominal'), 2600);
     }
   };
@@ -290,16 +300,17 @@ export default function ProductShowcase3D({
   };
 
   return (
-    <div className="space-y-6" id="interactive-product-explorer">
-      {/* Clean Segmented Control Bar (functional filter tabs, single-line controls) */}
+    <div className="space-y-4 sm:space-y-6 min-w-0" id="interactive-product-explorer">
+      {/* Clean Segmented Control Bar (all 5 tabs visible in 2-col grid on phones, horizontal row on sm+) */}
       <div
         role="tablist"
         aria-label="EncDec IDS interactive interface views"
-        className="flex flex-wrap items-center gap-2 p-1.5 rounded-xl bg-slate-900/90 border border-white/10"
+        className="grid grid-cols-2 sm:flex sm:flex-wrap items-center gap-1.5 sm:gap-2 p-1.5 rounded-xl bg-slate-900/90 border border-white/10"
       >
-        {SHOWCASE_TABS.map((tab) => {
+        {SHOWCASE_TABS.map((tab, idx) => {
           const Icon = tab.icon;
           const isActive = activeTab === tab.id;
+          const isLastOdd = idx === SHOWCASE_TABS.length - 1 && SHOWCASE_TABS.length % 2 === 1;
           return (
             <button
               key={tab.id}
@@ -307,7 +318,9 @@ export default function ProductShowcase3D({
               role="tab"
               aria-selected={isActive}
               onClick={() => onTabChange(tab.id)}
-              className={`flex items-center gap-2 px-3.5 py-2.5 rounded-lg text-xs font-medium transition-all cursor-pointer whitespace-nowrap shrink-0 ${
+              className={`flex items-center justify-center sm:justify-start gap-2 px-3 sm:px-3.5 py-2.5 min-h-[44px] sm:min-h-[40px] rounded-lg text-xs font-medium transition-all cursor-pointer whitespace-nowrap shrink-0 ${
+                isLastOdd ? 'col-span-2 sm:col-span-1' : ''
+              } ${
                 isActive
                   ? 'bg-cyan-500 text-slate-950 font-semibold shadow-sm'
                   : 'text-slate-300 hover:text-white hover:bg-white/5'
@@ -315,18 +328,18 @@ export default function ProductShowcase3D({
               id={`showcase-tab-${tab.id}`}
             >
               <Icon className="w-3.5 h-3.5 shrink-0" />
-              <span>{tab.label}</span>
+              <span className="truncate">{tab.label}</span>
             </button>
           );
         })}
       </div>
 
       {/* 3D Tilted Showcase Frame */}
-      <TiltStage3D maxTilt={3} className="w-full">
+      <TiltStage3D maxTilt={3} className="w-full min-w-0">
         <div className="rounded-2xl border border-white/10 bg-slate-950 shadow-[0_32px_80px_-24px_rgba(2,6,23,0.85)] overflow-hidden">
           {/* Application Window Frame Header */}
-          <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-3 border-b border-white/10 bg-slate-900/80">
-            <div className="flex items-center gap-3 min-w-0">
+          <div className="flex flex-wrap items-center justify-between gap-2 px-3.5 sm:px-5 py-3 border-b border-white/10 bg-slate-900/80">
+            <div className="flex items-center gap-2 sm:gap-3 min-w-0">
               <span className="font-mono text-xs font-semibold text-white truncate">
                 EncDec IDS
               </span>
@@ -337,7 +350,7 @@ export default function ProductShowcase3D({
                 {SHOWCASE_TABS.find((t) => t.id === activeTab)?.label}
               </span>
             </div>
-            <div className="flex items-center gap-3 text-xs text-slate-400 font-mono">
+            <div className="flex items-center gap-2 text-[11px] sm:text-xs text-slate-400 font-mono">
               <span>
                 {SHOWCASE_TABS.find((t) => t.id === activeTab)?.modeTag === 'Live Backend'
                   ? 'Connected to live server endpoint'
@@ -347,7 +360,7 @@ export default function ProductShowcase3D({
           </div>
 
           {/* Animated Panel Body */}
-          <div className="p-5 sm:p-7 min-h-[420px]">
+          <div className="p-3.5 sm:p-6 lg:p-7 min-h-[340px] sm:min-h-[420px]">
             <AnimatePresence mode="wait">
               {/* TAB 1: LIVE DPI PROBE (REAL /api/probe/live-attack) */}
               {activeTab === 'dpi' && (
@@ -357,16 +370,19 @@ export default function ProductShowcase3D({
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, y: -8 }}
                   transition={{ duration: 0.2 }}
-                  className="grid lg:grid-cols-12 gap-6"
+                  className="grid lg:grid-cols-12 gap-5 sm:gap-6"
                 >
-                  <div className="lg:col-span-5 space-y-3">
+                  <div className="lg:col-span-5 min-w-0 space-y-3">
                     <div>
                       <h3 className="text-base font-semibold text-white">
                         Dispatch a Live HTTP Exploit Probe
                       </h3>
-                      <p className="text-sm text-slate-400 mt-1 leading-relaxed">
+                      <p className="text-xs sm:text-sm text-slate-400 mt-1 leading-relaxed">
                         Trigger a real loopback request through EncDec IDS&apos;s Deep Packet Inspection middleware via{' '}
-                        <code className="font-mono text-xs text-cyan-300">POST /api/probe/live-attack</code>.
+                        <code className="font-mono text-[11px] sm:text-xs text-cyan-300 break-all">
+                          POST /api/probe/live-attack
+                        </code>
+                        .
                       </p>
                     </div>
 
@@ -377,22 +393,24 @@ export default function ProductShowcase3D({
                           type="button"
                           disabled={probeBusy}
                           onClick={() => runLiveDpiProbe(vec.id)}
-                          className={`w-full text-left px-4 py-3 rounded-lg border transition-all cursor-pointer flex items-center justify-between gap-3 ${
+                          className={`w-full text-left px-3.5 sm:px-4 py-3 rounded-lg border transition-all cursor-pointer flex items-center justify-between gap-3 ${
                             activeVector === vec.id && probeBusy
                               ? 'border-cyan-400 bg-cyan-500/10 text-white'
                               : 'border-white/10 bg-slate-900/70 hover:border-cyan-500/40 hover:bg-slate-900 text-slate-200'
                           }`}
                           id={`probe-vector-${vec.id}`}
                         >
-                          <div className="min-w-0">
-                            <div className="flex items-center gap-2 text-xs font-semibold text-white">
+                          <div className="min-w-0 flex-1">
+                            <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs font-semibold text-white">
                               <span>{vec.label}</span>
                               <span aria-hidden="true" className="text-slate-600">
                                 ·
                               </span>
                               <span className="font-mono text-cyan-400 font-normal">{vec.mitre}</span>
                             </div>
-                            <p className="text-xs text-slate-400 mt-0.5 truncate">{vec.summary}</p>
+                            <p className="text-xs text-slate-400 mt-0.5 line-clamp-2 sm:truncate">
+                              {vec.summary}
+                            </p>
                           </div>
                           <Play className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
                         </button>
@@ -400,17 +418,20 @@ export default function ProductShowcase3D({
                     </div>
                   </div>
 
-                  <div className="lg:col-span-7 flex flex-col rounded-xl border border-white/10 bg-slate-900/50 overflow-hidden">
-                    <div className="px-4 py-2.5 border-b border-white/10 flex items-center justify-between bg-slate-900">
-                      <span className="font-mono text-xs text-slate-300 flex items-center gap-2">
-                        <Terminal className="w-3.5 h-3.5 text-cyan-400" />
-                        DPI Interception Response Stream
+                  <div
+                    ref={dpiOutputRef}
+                    className="lg:col-span-7 min-w-0 flex flex-col rounded-xl border border-white/10 bg-slate-900/50 overflow-hidden scroll-mt-20"
+                  >
+                    <div className="px-3.5 sm:px-4 py-2.5 border-b border-white/10 flex flex-wrap items-center justify-between gap-2 bg-slate-900">
+                      <span className="font-mono text-xs text-slate-300 flex items-center gap-2 min-w-0">
+                        <Terminal className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                        <span className="truncate">DPI Interception Response Stream</span>
                       </span>
                       {probeLogs.length > 0 && (
                         <button
                           type="button"
                           onClick={() => setProbeLogs([])}
-                          className="text-xs text-slate-400 hover:text-white inline-flex items-center gap-1 cursor-pointer"
+                          className="text-xs text-slate-400 hover:text-white inline-flex items-center gap-1 cursor-pointer shrink-0"
                         >
                           <RotateCcw className="w-3 h-3" />
                           Clear
@@ -524,68 +545,36 @@ export default function ProductShowcase3D({
 
                   {/* Representative TopoJSON Geodesic Visualization matching RealTimeMap.tsx */}
                   <div className="grid lg:grid-cols-12 gap-5">
-                    <div className="lg:col-span-8 rounded-xl border border-white/10 bg-slate-900/60 p-4">
-                      <div className="flex items-center justify-between mb-3">
+                    <div className="lg:col-span-8 min-w-0 rounded-xl border border-white/10 bg-slate-900/60 p-3.5 sm:p-4">
+                      <div className="flex flex-wrap items-center justify-between gap-1.5 mb-3">
                         <span className="text-sm font-semibold text-white">
-                          Real-Time TopoJSON Geodesic Incursion Map
+                          Real-Time 3D Geodesic Incursion Globe
                         </span>
                         <span className="font-mono text-[11px] text-slate-400">
-                          D3 + TopoJSON Vector · Preview
+                          Three.js + TopoJSON Telemetry · Preview
                         </span>
                       </div>
-                      <svg
-                        viewBox="0 0 640 240"
-                        className="w-full h-48 rounded-lg bg-slate-950 border border-white/5"
-                        role="img"
-                        aria-label="Schematic preview of the EncDec IDS D3 TopoJSON geodesic threat trajectory map"
-                      >
-                        {/* Subtle Latitude/Longitude Graticule */}
-                        {[40, 80, 120, 160, 200].map((y) => (
-                          <line key={y} x1="0" y1={y} x2="640" y2={y} stroke="#1e293b" strokeWidth="0.6" />
-                        ))}
-                        {[80, 160, 240, 320, 400, 480, 560].map((x) => (
-                          <line key={x} x1={x} y1="0" x2={x} y2="240" stroke="#1e293b" strokeWidth="0.6" />
-                        ))}
-                        {/* Simplified Continental Silhouettes */}
-                        <path
-                          d="M65,65 L145,55 L180,95 L150,125 L95,118 Z M165,138 L210,145 L198,210 L170,195 Z M285,55 L365,50 L375,95 L300,102 Z M295,112 L360,115 L350,192 L305,178 Z M385,55 L525,58 L555,118 L470,138 L392,108 Z M500,162 L565,165 L560,205 L505,198 Z"
-                          fill="#0f172a"
-                          stroke="#334155"
-                          strokeWidth="1"
-                        />
-                        {/* Geodesic Incursion Arcs converging on Primary Gateway */}
-                        <path d="M135,88 Q230,32 325,132" fill="none" stroke="#38bdf8" strokeWidth="1.5" strokeDasharray="4 4" />
-                        <path d="M328,72 Q350,95 325,132" fill="none" stroke="#f59e0b" strokeWidth="1.5" strokeDasharray="4 4" />
-                        <path d="M495,92 Q415,52 325,132" fill="none" stroke="#ef4444" strokeWidth="1.5" strokeDasharray="4 4" />
-                        <path d="M482,126 Q405,110 325,132" fill="none" stroke="#22d3ee" strokeWidth="1.4" strokeDasharray="4 4" />
-                        {/* Origin & Target Markers */}
-                        <circle cx="135" cy="88" r="3.5" fill="#38bdf8" />
-                        <circle cx="328" cy="72" r="3.5" fill="#f59e0b" />
-                        <circle cx="495" cy="92" r="3.5" fill="#ef4444" />
-                        <circle cx="482" cy="126" r="3.5" fill="#22d3ee" />
-                        <circle cx="325" cy="132" r="6" fill="rgba(16,185,129,0.22)" stroke="#10b981" strokeWidth="1.5" />
-                        <circle cx="325" cy="132" r="2.5" fill="#10b981" />
-                      </svg>
+                      <ThreatGlobe3D className="w-full h-52 sm:h-60" />
                     </div>
 
-                    <div className="lg:col-span-4 rounded-xl border border-white/10 bg-slate-900/60 p-4 flex flex-col justify-between gap-4">
+                    <div className="lg:col-span-4 min-w-0 rounded-xl border border-white/10 bg-slate-900/60 p-4 flex flex-col justify-between gap-4">
                       <div className="space-y-3">
                         <h4 className="text-sm font-semibold text-white">Per-Operator Isolation</h4>
                         <p className="text-xs text-slate-400 leading-relaxed">
                           Each signed-in operator views and triages alerts strictly scoped to their own enrolled hosts, with one-click Resolve, Escalate, Ignore, and Gmail Alert actions.
                         </p>
                         <div className="space-y-1.5 font-mono text-[11px] text-slate-300 pt-1">
-                          <div className="flex justify-between">
+                          <div className="flex justify-between gap-2">
                             <span className="text-slate-500">Alert Triage</span>
-                            <span>Resolve / Escalate / Email</span>
+                            <span className="text-right">Resolve / Escalate / Email</span>
                           </div>
-                          <div className="flex justify-between">
+                          <div className="flex justify-between gap-2">
                             <span className="text-slate-500">Recon View</span>
-                            <span>Tactical Geo Modal</span>
+                            <span className="text-right">Tactical Geo Modal</span>
                           </div>
-                          <div className="flex justify-between">
+                          <div className="flex justify-between gap-2">
                             <span className="text-slate-500">Access Policy</span>
-                            <span>JWT + RBAC + MFA</span>
+                            <span className="text-right">JWT + RBAC + MFA</span>
                           </div>
                         </div>
                       </div>
@@ -609,9 +598,9 @@ export default function ProductShowcase3D({
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, y: -8 }}
                   transition={{ duration: 0.2 }}
-                  className="grid lg:grid-cols-12 gap-6"
+                  className="grid lg:grid-cols-12 gap-5 sm:gap-6"
                 >
-                  <div className="lg:col-span-4 space-y-2.5">
+                  <div className="lg:col-span-4 min-w-0 space-y-2.5">
                     <p className="text-xs text-slate-400 font-medium">
                       Select Representative Endpoint
                     </p>
@@ -644,37 +633,37 @@ export default function ProductShowcase3D({
                     })}
                   </div>
 
-                  <div className="lg:col-span-8 rounded-xl border border-white/10 bg-slate-900/60 p-5 space-y-5">
-                    <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 pb-3.5">
-                      <div>
-                        <h4 className="font-mono text-sm font-semibold text-white">
+                  <div className="lg:col-span-8 min-w-0 rounded-xl border border-white/10 bg-slate-900/60 p-4 sm:p-5 space-y-4 sm:space-y-5">
+                    <div className="flex flex-wrap items-center justify-between gap-2 sm:gap-3 border-b border-white/10 pb-3.5">
+                      <div className="min-w-0">
+                        <h4 className="font-mono text-sm font-semibold text-white truncate">
                           {selectedNode.name}
                         </h4>
-                        <p className="text-xs text-slate-400 mt-0.5">
+                        <p className="text-xs text-slate-400 mt-0.5 break-words">
                           {selectedNode.os} · IP {selectedNode.ip} · Agent {selectedNode.agent}
                         </p>
                       </div>
-                      <span className="font-mono text-xs text-slate-400">
+                      <span className="font-mono text-[11px] sm:text-xs text-slate-400">
                         Quarantine targets: File · Process · IP
                       </span>
                     </div>
 
-                    <div className="grid grid-cols-3 gap-3">
-                      <div className="p-3 rounded-lg bg-slate-950 border border-white/5">
+                    <div className="grid grid-cols-3 gap-2 sm:gap-3">
+                      <div className="p-2.5 sm:p-3 rounded-lg bg-slate-950 border border-white/5">
                         <p className="text-[11px] text-slate-400">CPU Load</p>
-                        <p className="font-mono text-base font-semibold text-white mt-0.5 tabular-nums">
+                        <p className="font-mono text-sm sm:text-base font-semibold text-white mt-0.5 tabular-nums">
                           {selectedNode.cpu}%
                         </p>
                       </div>
-                      <div className="p-3 rounded-lg bg-slate-950 border border-white/5">
+                      <div className="p-2.5 sm:p-3 rounded-lg bg-slate-950 border border-white/5">
                         <p className="text-[11px] text-slate-400">Memory</p>
-                        <p className="font-mono text-base font-semibold text-white mt-0.5 tabular-nums">
+                        <p className="font-mono text-sm sm:text-base font-semibold text-white mt-0.5 tabular-nums">
                           {selectedNode.memory}%
                         </p>
                       </div>
-                      <div className="p-3 rounded-lg bg-slate-950 border border-white/5">
+                      <div className="p-2.5 sm:p-3 rounded-lg bg-slate-950 border border-white/5">
                         <p className="text-[11px] text-slate-400">Disk</p>
-                        <p className="font-mono text-base font-semibold text-white mt-0.5 tabular-nums">
+                        <p className="font-mono text-sm sm:text-base font-semibold text-white mt-0.5 tabular-nums">
                           {selectedNode.disk}%
                         </p>
                       </div>
@@ -684,7 +673,26 @@ export default function ProductShowcase3D({
                       <p className="text-xs font-medium text-slate-300">
                         Observed Process Stack &amp; System Calls (Sample Schema)
                       </p>
-                      <div className="overflow-x-auto rounded-lg border border-white/10 bg-slate-950">
+                      {/* Mobile Stacked Process Cards (prevents horizontal table clipping on phones) */}
+                      <div className="sm:hidden space-y-2">
+                        {selectedNode.processes.map((proc) => (
+                          <div
+                            key={proc.pid}
+                            className="p-3 rounded-lg border border-white/10 bg-slate-950 font-mono text-xs space-y-1"
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-cyan-300 font-semibold truncate">{proc.name}</span>
+                              <span className="text-slate-300 tabular-nums shrink-0">
+                                PID {proc.pid} · {proc.cpu}
+                              </span>
+                            </div>
+                            <p className="text-[11px] text-slate-400 break-all">{proc.path}</p>
+                          </div>
+                        ))}
+                      </div>
+
+                      {/* Desktop & Tablet Process Table */}
+                      <div className="hidden sm:block overflow-x-auto rounded-lg border border-white/10 bg-slate-950">
                         <table className="w-full text-left font-mono text-xs">
                           <thead className="border-b border-white/10 text-slate-400">
                             <tr>
@@ -706,7 +714,7 @@ export default function ProductShowcase3D({
                           </tbody>
                         </table>
                       </div>
-                      <p className="font-mono text-[11px] text-slate-500">
+                      <p className="font-mono text-[11px] text-slate-500 break-words">
                         Tracked services: {selectedNode.services.join(' · ')}
                       </p>
                     </div>
@@ -724,7 +732,7 @@ export default function ProductShowcase3D({
                   transition={{ duration: 0.2 }}
                   className="grid lg:grid-cols-12 gap-6"
                 >
-                  <div className="lg:col-span-5 space-y-2.5">
+                  <div className="lg:col-span-5 min-w-0 space-y-2.5">
                     <p className="text-xs text-slate-400 font-medium">
                       MITRE ATT&amp;CK Kill Chain Coverage
                     </p>
@@ -739,9 +747,9 @@ export default function ProductShowcase3D({
                             : 'border-white/10 bg-slate-900/60 hover:bg-slate-900 text-slate-300'
                         }`}
                       >
-                        <div className="flex items-center justify-between text-xs">
-                          <span className="font-semibold text-white">{stage.tactic}</span>
-                          <span className="font-mono text-cyan-400">{stage.tacticId}</span>
+                        <div className="flex items-center justify-between gap-2 text-xs">
+                          <span className="font-semibold text-white truncate">{stage.tactic}</span>
+                          <span className="font-mono text-cyan-400 shrink-0">{stage.tacticId}</span>
                         </div>
                         <p className="font-mono text-[11px] text-slate-400 mt-1 truncate">
                           {stage.response}
@@ -750,10 +758,10 @@ export default function ProductShowcase3D({
                     ))}
                   </div>
 
-                  <div className="lg:col-span-7 rounded-xl border border-white/10 bg-slate-900/60 p-5 flex flex-col justify-between gap-5">
+                  <div className="lg:col-span-7 min-w-0 rounded-xl border border-white/10 bg-slate-900/60 p-4 sm:p-5 flex flex-col justify-between gap-5">
                     <div className="space-y-4">
-                      <div className="flex items-center justify-between border-b border-white/10 pb-3">
-                        <div>
+                      <div className="flex items-center justify-between gap-3 border-b border-white/10 pb-3">
+                        <div className="min-w-0">
                           <span className="font-mono text-xs text-cyan-400">
                             {MITRE_STAGES[selectedStageIdx].tacticId}
                           </span>
@@ -761,7 +769,7 @@ export default function ProductShowcase3D({
                             {MITRE_STAGES[selectedStageIdx].tactic} Correlation &amp; Containment
                           </h4>
                         </div>
-                        <Lock className="w-4 h-4 text-slate-400" />
+                        <Lock className="w-4 h-4 text-slate-400 shrink-0" />
                       </div>
 
                       <div className="space-y-2">
@@ -769,7 +777,7 @@ export default function ProductShowcase3D({
                         {MITRE_STAGES[selectedStageIdx].techniques.map((tech) => (
                           <div
                             key={tech}
-                            className="p-3 rounded-lg bg-slate-950 border border-white/5 font-mono text-xs text-slate-200"
+                            className="p-3 rounded-lg bg-slate-950 border border-white/5 font-mono text-xs text-slate-200 break-words"
                           >
                             {tech}
                           </div>
@@ -778,7 +786,7 @@ export default function ProductShowcase3D({
 
                       <div className="p-4 rounded-lg bg-slate-950 border border-white/5 space-y-1.5">
                         <p className="text-xs font-medium text-white">Active Response Playbook</p>
-                        <p className="font-mono text-xs text-cyan-300">
+                        <p className="font-mono text-xs text-cyan-300 break-words">
                           {MITRE_STAGES[selectedStageIdx].response}
                         </p>
                         <p className="text-xs text-slate-400 leading-relaxed pt-1">
@@ -791,7 +799,7 @@ export default function ProductShowcase3D({
                       <button
                         type="button"
                         onClick={onEnterConsole}
-                        className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-slate-950 text-xs font-semibold transition-colors cursor-pointer"
+                        className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-slate-950 text-xs font-semibold transition-colors cursor-pointer"
                       >
                         Open Incidents Workspace
                         <ArrowRight className="w-3.5 h-3.5" />
@@ -809,44 +817,44 @@ export default function ProductShowcase3D({
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, y: -8 }}
                   transition={{ duration: 0.2 }}
-                  className="grid lg:grid-cols-12 gap-6"
+                  className="grid lg:grid-cols-12 gap-5 sm:gap-6"
                 >
-                  <div className="lg:col-span-5 space-y-4">
+                  <div className="lg:col-span-5 min-w-0 space-y-4">
                     <div>
                       <h3 className="text-base font-semibold text-white">
                         CE-SOC Certification &amp; Anti-Malpractice Exam
                       </h3>
-                      <p className="text-sm text-slate-400 mt-1.5 leading-relaxed">
+                      <p className="text-xs sm:text-sm text-slate-400 mt-1.5 leading-relaxed">
                         Operators complete the 10-chapter EncDec Workbook and pass a timed 10-minute examination drawing 6 randomized questions from a 220-question academic bank (80% minimum to pass; failing or exceeding 10:00 resets progress to Chapter 1).
                       </p>
                     </div>
 
                     <div className="space-y-2 border-t border-white/10 pt-3.5 font-mono text-xs text-slate-300">
-                      <div className="flex justify-between">
+                      <div className="flex justify-between gap-2">
                         <span className="text-slate-500">Workbook Curriculum</span>
-                        <span>10 Chapters</span>
+                        <span className="text-right">10 Chapters</span>
                       </div>
-                      <div className="flex justify-between">
+                      <div className="flex justify-between gap-2">
                         <span className="text-slate-500">Authoritative Bank</span>
-                        <span className="tabular-nums">220+ Questions</span>
+                        <span className="tabular-nums text-right">220+ Questions</span>
                       </div>
-                      <div className="flex justify-between">
+                      <div className="flex justify-between gap-2">
                         <span className="text-slate-500">Per-Candidate Exam</span>
-                        <span className="tabular-nums">6 Random · 10:00 Limit</span>
+                        <span className="tabular-nums text-right">6 Random · 10:00 Limit</span>
                       </div>
-                      <div className="flex justify-between">
+                      <div className="flex justify-between gap-2">
                         <span className="text-slate-500">Pass Threshold</span>
-                        <span className="tabular-nums">80% (Reset on Fail/Timeout)</span>
+                        <span className="tabular-nums text-right">80% (Reset on Fail)</span>
                       </div>
                     </div>
                   </div>
 
-                  <div className="lg:col-span-7 rounded-xl border border-white/10 bg-slate-900/60 p-5 space-y-4">
+                  <div className="lg:col-span-7 min-w-0 rounded-xl border border-white/10 bg-slate-900/60 p-4 sm:p-5 space-y-4">
                     <div>
                       <h4 className="text-sm font-semibold text-white">
                         Verify a CE-SOC Certificate (Live Registry)
                       </h4>
-                      <p className="text-xs text-slate-400 mt-0.5">
+                      <p className="text-xs text-slate-400 mt-0.5 break-words">
                         Query <code className="font-mono text-cyan-300">GET /api/certificates/verify/:id</code> directly against the EncDec registry.
                       </p>
                     </div>
@@ -867,12 +875,12 @@ export default function ProductShowcase3D({
                         value={certQuery}
                         onChange={(e) => setCertQuery(e.target.value)}
                         placeholder="e.g. CERT-ENCDEC-2026-X892A"
-                        className="flex-1 px-3.5 py-2.5 rounded-lg bg-slate-950 border border-white/15 text-xs font-mono text-white focus:outline-none focus:border-cyan-400"
+                        className="flex-1 min-h-[44px] sm:min-h-0 px-3.5 py-2.5 rounded-lg bg-slate-950 border border-white/15 text-base sm:text-xs font-mono text-white focus:outline-none focus:border-cyan-400"
                       />
                       <button
                         type="submit"
                         disabled={certLoading}
-                        className="px-4 py-2.5 rounded-lg bg-cyan-500 hover:bg-cyan-400 disabled:opacity-60 text-slate-950 text-xs font-semibold inline-flex items-center justify-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                        className="min-h-[44px] sm:min-h-0 px-4 py-2.5 rounded-lg bg-cyan-500 hover:bg-cyan-400 disabled:opacity-60 text-slate-950 text-xs font-semibold inline-flex items-center justify-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap shrink-0"
                         id="landing-cert-verify-btn"
                       >
                         <Search className="w-3.5 h-3.5" />
@@ -880,14 +888,14 @@ export default function ProductShowcase3D({
                       </button>
                     </form>
 
-                    <div className="flex flex-wrap items-center gap-2 text-xs text-slate-400">
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-400">
                       <span>Example ID formats:</span>
                       {['CERT-ENCDEC-2026-X892A', 'CERT-ENCDEC-2026-W194E'].map((sampleId) => (
                         <button
                           key={sampleId}
                           type="button"
                           onClick={() => handleVerifyCertificate(sampleId)}
-                          className="font-mono text-[11px] text-cyan-400 hover:text-cyan-300 underline underline-offset-2 cursor-pointer"
+                          className="min-h-[36px] inline-flex items-center font-mono text-[11px] text-cyan-400 hover:text-cyan-300 underline underline-offset-2 cursor-pointer"
                         >
                           {sampleId}
                         </button>

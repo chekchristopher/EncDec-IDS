@@ -251,6 +251,9 @@ export default function CommercialVideoPlayer({ onEnterConsole }: CommercialVide
   const [voiceMode, setVoiceMode] = useState<VoiceMode>('idle');
   const [voiceNotice, setVoiceNotice] = useState<string | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const canFullscreen =
+    typeof document !== 'undefined' &&
+    Boolean(document.fullscreenEnabled || (document as any).webkitFullscreenEnabled);
 
   // Track real measured durations per scene once studio WAV metadata loads
   const [sceneDurations, setSceneDurations] = useState<Record<string, number>>(() =>
@@ -259,6 +262,7 @@ export default function CommercialVideoPlayer({ onEnterConsole }: CommercialVide
 
   const playerStageRef = useRef<HTMLDivElement | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const unlockedAudioRef = useRef<HTMLAudioElement | null>(null);
   const audioCacheRef = useRef<Map<string, string>>(new Map());
   const inflightFetchRef = useRef<Map<string, Promise<string>>>(new Map());
   const ambientRef = useRef<AmbientScoreEngine | null>(null);
@@ -266,6 +270,22 @@ export default function CommercialVideoPlayer({ onEnterConsole }: CommercialVide
   const fallbackClockStartRef = useRef<number>(0);
   const fallbackPausedFractionRef = useRef<number>(0);
   const playSessionTokenRef = useRef<number>(0);
+
+  // Prime a reusable Audio element synchronously during user tap so iOS Safari / Mobile Chrome
+  // permits studio voiceover playback after async WAV fetching completes.
+  const primeMobileAudioElement = useCallback(() => {
+    if (typeof Audio === 'undefined') return;
+    try {
+      if (!unlockedAudioRef.current) {
+        const el = new Audio('');
+        el.setAttribute?.('playsinline', 'true');
+        (el as any).playsInline = true;
+        unlockedAudioRef.current = el;
+      }
+    } catch {
+      // ignore on unsupported environments
+    }
+  }, []);
 
   // Keep latest mutable audio settings for async callbacks
   const mutedRef = useRef(isMuted);
@@ -354,6 +374,10 @@ export default function CommercialVideoPlayer({ onEnterConsole }: CommercialVide
   useEffect(() => {
     return () => {
       stopAllPlaybackResources();
+      if (unlockedAudioRef.current) {
+        unlockedAudioRef.current.pause();
+        unlockedAudioRef.current = null;
+      }
       ambientRef.current?.dispose();
       audioCacheRef.current.forEach((url) => {
         try {
@@ -514,7 +538,21 @@ export default function CommercialVideoPlayer({ onEnterConsole }: CommercialVide
         // Pre-fetch the next scene's voiceover in the background for zero-gap transitions
         prefetchNextScene(index, activeVoice);
 
-        const audio = new Audio(audioUrl);
+        const audio = unlockedAudioRef.current || new Audio(audioUrl);
+        if (audio.src !== audioUrl) {
+          audio.src = audioUrl;
+        } else {
+          try {
+            audio.currentTime =
+              startFraction > 0 && Number.isFinite(audio.duration) && audio.duration > 0
+                ? audio.duration * startFraction
+                : 0;
+          } catch {
+            // ignore if audio not seekable yet
+          }
+        }
+        audio.setAttribute?.('playsinline', 'true');
+        (audio as any).playsInline = true;
         audio.muted = mutedRef.current;
         audio.volume = volumeRef.current;
         audioRef.current = audio;
@@ -575,20 +613,22 @@ export default function CommercialVideoPlayer({ onEnterConsole }: CommercialVide
       return;
     }
 
+    primeMobileAudioElement();
     if (hasFinished) {
       void playSceneAt(0, 0);
     } else {
       const resumeFrac = sceneProgress >= 0.98 ? 0 : sceneProgress;
       void playSceneAt(activeIndex, resumeFrac);
     }
-  }, [activeIndex, hasFinished, isPlaying, playSceneAt, sceneProgress, stopAllPlaybackResources]);
+  }, [activeIndex, hasFinished, isPlaying, playSceneAt, primeMobileAudioElement, sceneProgress, stopAllPlaybackResources]);
 
   const handleSelectScene = useCallback(
     (index: number) => {
       if (index < 0 || index >= scenes.length) return;
+      primeMobileAudioElement();
       void playSceneAt(index, 0);
     },
-    [playSceneAt, scenes.length]
+    [playSceneAt, primeMobileAudioElement, scenes.length]
   );
 
   const handleVoiceChange = useCallback(
@@ -596,10 +636,11 @@ export default function CommercialVideoPlayer({ onEnterConsole }: CommercialVide
       setSelectedVoice(nextVoice);
       voiceRef.current = nextVoice;
       if (isPlaying) {
+        primeMobileAudioElement();
         void playSceneAt(activeIndex, 0);
       }
     },
-    [activeIndex, isPlaying, playSceneAt]
+    [activeIndex, isPlaying, playSceneAt, primeMobileAudioElement]
   );
 
   const handleToggleFullscreen = useCallback(() => {
@@ -648,8 +689,8 @@ export default function CommercialVideoPlayer({ onEnterConsole }: CommercialVide
         ref={playerStageRef}
         className="encdec-dark-card relative rounded-2xl border border-white/10 bg-slate-950 shadow-[0_36px_90px_-28px_rgba(2,6,23,0.92)] overflow-hidden select-none"
       >
-        {/* Main 16:9 Motion Picture Viewport */}
-        <div className="relative aspect-video w-full overflow-hidden bg-[#040915]">
+        {/* Main Motion Picture Viewport (expands cleanly on mobile, 16:9 widescreen on md+) */}
+        <div className="relative flex flex-col justify-between min-h-[430px] sm:min-h-[410px] md:aspect-video w-full overflow-hidden bg-[#040915]">
           {/* Subtle cinema atmospheric radial lighting & subtle scan grid */}
           <div
             aria-hidden="true"
@@ -670,20 +711,20 @@ export default function CommercialVideoPlayer({ onEnterConsole }: CommercialVide
           />
 
           {/* Top Broadcast HUD Overlay (Chapter Cue + Voiceover Status) */}
-          <div className="absolute top-0 left-0 right-0 z-20 flex items-center justify-between gap-3 px-4 sm:px-6 py-3.5 bg-gradient-to-b from-slate-950/90 via-slate-950/45 to-transparent">
-            <div className="flex items-center gap-2.5 min-w-0">
+          <div className="relative md:absolute md:top-0 md:left-0 md:right-0 z-20 flex items-center justify-between gap-2.5 px-3.5 sm:px-6 py-3 bg-gradient-to-b from-slate-950/90 via-slate-950/45 to-transparent">
+            <div className="flex items-center gap-2 min-w-0">
               <EncDecLogo size="sm" />
               <div className="min-w-0">
-                <p className="font-mono text-[11px] text-cyan-400 truncate">
+                <p className="font-mono text-[10px] sm:text-[11px] text-cyan-400 truncate">
                   {activeScene.chapterLabel}
                 </p>
-                <p className="text-xs font-semibold text-white truncate">
-                  EncDec IDS — Official Product Film
+                <p className="text-[11px] sm:text-xs font-semibold text-white truncate">
+                  EncDec IDS — Product Film
                 </p>
               </div>
             </div>
 
-            <div className="flex items-center gap-3 text-[11px] font-mono text-slate-300 shrink-0">
+            <div className="flex items-center gap-2 sm:gap-3 text-[11px] font-mono text-slate-300 shrink-0">
               {/* Animated voice waveform bars when actively narrating */}
               {isPlaying && !isBuffering && !isMuted && (
                 <span
@@ -714,20 +755,20 @@ export default function CommercialVideoPlayer({ onEnterConsole }: CommercialVide
                   ))}
                 </span>
               )}
-              <span className="hidden sm:inline text-slate-400">
+              <span className="text-[10px] sm:text-[11px] text-slate-400 whitespace-nowrap">
                 {isBuffering
-                  ? 'Synthesizing voiceover...'
+                  ? 'Loading...'
                   : voiceMode === 'studio'
-                    ? `Studio Voice · ${selectedVoice}`
+                    ? `Studio · ${selectedVoice}`
                     : voiceMode === 'browser-fallback'
-                      ? 'Browser Speech Voiceover'
-                      : 'Voiceover Ready'}
+                      ? 'Speech'
+                      : 'Voice Ready'}
               </span>
             </div>
           </div>
 
           {/* Animated Commercial Scene Canvas */}
-          <div className="relative z-10 h-full w-full flex items-center justify-center px-5 sm:px-10 pt-14 pb-20">
+          <div className="relative z-10 flex-1 w-full flex items-center justify-center px-3.5 sm:px-8 md:px-10 py-3 sm:py-6 md:pt-14 md:pb-20">
             <AnimatePresence mode="wait">
               <motion.div
                 key={activeScene.id}
@@ -735,7 +776,7 @@ export default function CommercialVideoPlayer({ onEnterConsole }: CommercialVide
                 animate={{ opacity: 1, scale: 1 }}
                 exit={{ opacity: 0, scale: prefersReducedMotion ? 1 : 1.01 }}
                 transition={{ duration: 0.35, ease: 'easeOut' }}
-                className="w-full max-w-4xl"
+                className="w-full max-w-4xl min-w-0"
               >
                 <CommercialSceneVisual
                   sceneId={activeScene.id}
@@ -748,13 +789,13 @@ export default function CommercialVideoPlayer({ onEnterConsole }: CommercialVide
             </AnimatePresence>
           </div>
 
-          {/* Closed Captions (Broadcast Subtitle Strip) */}
+          {/* Closed Captions (Flows below scene on mobile so it never covers visuals; overlays bottom on md+) */}
           {captionsOn && hasStarted && !hasFinished && (
             <div
               aria-live="polite"
-              className="pointer-events-none absolute bottom-4 left-4 right-4 z-20 flex justify-center"
+              className="pointer-events-none relative md:absolute md:bottom-4 md:left-4 md:right-4 z-20 px-3 pb-3 md:p-0 flex justify-center"
             >
-              <p className="max-w-3xl px-4 py-2 rounded-lg bg-slate-950/88 border border-white/10 text-center text-xs sm:text-sm text-slate-100 leading-relaxed shadow-lg">
+              <p className="w-full md:w-auto max-w-3xl px-3.5 py-2 rounded-lg bg-slate-950/88 border border-white/10 text-center text-[11px] sm:text-xs md:text-sm text-slate-100 leading-relaxed shadow-lg">
                 {activeSubtitle}
               </p>
             </div>
@@ -762,9 +803,9 @@ export default function CommercialVideoPlayer({ onEnterConsole }: CommercialVide
 
           {/* Buffering Indicator Overlay */}
           {isBuffering && (
-            <div className="absolute inset-0 z-30 flex items-center justify-center bg-slate-950/55">
-              <div className="flex items-center gap-3 px-4 py-2.5 rounded-xl bg-slate-900 border border-cyan-500/30 text-xs font-mono text-cyan-300 shadow-xl">
-                <Loader2 className="w-4 h-4 animate-spin text-cyan-400" />
+            <div className="absolute inset-0 z-30 flex items-center justify-center bg-slate-950/60 px-4">
+              <div className="flex items-center gap-2.5 px-4 py-2.5 rounded-xl bg-slate-900 border border-cyan-500/30 text-xs font-mono text-cyan-300 shadow-xl text-center">
+                <Loader2 className="w-4 h-4 animate-spin text-cyan-400 shrink-0" />
                 <span>Preparing studio voiceover ({selectedVoice})...</span>
               </div>
             </div>
@@ -772,48 +813,48 @@ export default function CommercialVideoPlayer({ onEnterConsole }: CommercialVide
 
           {/* Initial Poster Overlay (Before First Play) */}
           {!hasStarted && (
-            <div className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-slate-950/65 px-6 text-center">
+            <div className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-slate-950/72 px-4 sm:px-6 text-center">
               <button
                 type="button"
                 onClick={handleTogglePlay}
                 id="commercial-poster-play-btn"
                 aria-label="Play EncDec IDS commercial video with voiceover"
-                className="group flex items-center gap-4 px-7 py-4 rounded-2xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-semibold text-sm sm:text-base shadow-[0_20px_50px_-12px_rgba(6,182,212,0.55)] transition-transform duration-200 hover:scale-[1.03] cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-cyan-300"
+                className="group w-full max-w-xs sm:w-auto sm:max-w-none flex items-center justify-center sm:justify-start gap-3 sm:gap-4 px-5 py-3.5 sm:px-7 sm:py-4 rounded-2xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-semibold text-sm sm:text-base shadow-[0_20px_50px_-12px_rgba(6,182,212,0.55)] transition-transform duration-200 hover:scale-[1.02] cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-cyan-300"
               >
-                <span className="w-10 h-10 rounded-full bg-slate-950/15 flex items-center justify-center">
-                  <Play className="w-5 h-5 fill-slate-950 translate-x-0.5" />
+                <span className="w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-slate-950/15 flex items-center justify-center shrink-0">
+                  <Play className="w-4 h-4 sm:w-5 sm:h-5 fill-slate-950 translate-x-0.5" />
                 </span>
-                <span className="text-left">
+                <span className="text-left min-w-0">
                   <span className="block font-bold leading-tight">Watch Product Commercial</span>
-                  <span className="block text-xs font-mono text-slate-900/80 mt-0.5">
-                    Narrated Overview · 6 Chapters · {formatTime(totalDurationSec)}
+                  <span className="block text-[11px] sm:text-xs font-mono text-slate-900/80 mt-0.5">
+                    6 Chapters · {formatTime(totalDurationSec)}
                   </span>
                 </span>
               </button>
-              <p className="mt-4 text-xs font-mono text-slate-300 flex items-center gap-2">
-                <Headphones className="w-3.5 h-3.5 text-cyan-400" />
-                <span>Includes studio voiceover narration &amp; synchronized closed captions</span>
+              <p className="mt-3.5 text-[11px] sm:text-xs font-mono text-slate-300 flex items-center justify-center gap-2 max-w-xs sm:max-w-md">
+                <Headphones className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                <span>Studio voiceover narration &amp; closed captions included</span>
               </p>
             </div>
           )}
 
           {/* End-Slate Action Overlay */}
           {hasFinished && (
-            <div className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-slate-950/85 px-6 text-center space-y-5">
-              <div className="flex items-center gap-3">
+            <div className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-slate-950/90 px-4 sm:px-6 text-center space-y-4 sm:space-y-5">
+              <div className="flex items-center gap-2.5">
                 <EncDecLogo size="md" />
-                <span className="text-2xl sm:text-3xl font-bold text-white tracking-tight">
+                <span className="text-xl sm:text-3xl font-bold text-white tracking-tight">
                   EncDec IDS
                 </span>
               </div>
-              <p className="text-sm sm:text-base text-slate-300 max-w-lg">
+              <p className="text-xs sm:text-base text-slate-300 max-w-lg leading-relaxed">
                 Unified Network DPI, isolated Host IDS fleets, MITRE ATT&amp;CK hunting, Dual-Database audit storage, and CE-SOC certification.
               </p>
-              <div className="flex flex-wrap items-center justify-center gap-3">
+              <div className="flex flex-col sm:flex-row w-full sm:w-auto items-stretch sm:items-center justify-center gap-2.5 sm:gap-3 max-w-xs sm:max-w-none">
                 <button
                   type="button"
                   onClick={onEnterConsole}
-                  className="inline-flex items-center gap-2 px-5 py-3 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-slate-950 text-sm font-semibold transition-colors cursor-pointer"
+                  className="inline-flex items-center justify-center gap-2 px-5 py-3 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-slate-950 text-sm font-semibold transition-colors cursor-pointer"
                 >
                   <span>Launch Console</span>
                   <ArrowRight className="w-4 h-4" />
@@ -821,7 +862,7 @@ export default function CommercialVideoPlayer({ onEnterConsole }: CommercialVide
                 <button
                   type="button"
                   onClick={() => handleSelectScene(0)}
-                  className="inline-flex items-center gap-2 px-5 py-3 rounded-lg border border-white/15 bg-white/5 hover:bg-white/10 text-white text-sm font-semibold transition-colors cursor-pointer"
+                  className="inline-flex items-center justify-center gap-2 px-5 py-3 rounded-lg border border-white/15 bg-white/5 hover:bg-white/10 text-white text-sm font-semibold transition-colors cursor-pointer"
                 >
                   <RotateCcw className="w-4 h-4" />
                   <span>Replay Commercial</span>
@@ -832,12 +873,12 @@ export default function CommercialVideoPlayer({ onEnterConsole }: CommercialVide
         </div>
 
         {/* Cinema Transport & Audio Control Bar */}
-        <div className="border-t border-white/10 bg-slate-900/95 px-4 sm:px-5 py-3 space-y-2.5">
+        <div className="border-t border-white/10 bg-slate-900/95 px-3 sm:px-5 py-3 space-y-2.5">
           {/* Segmented 6-Chapter Interactive Scrubber */}
           <div
             role="group"
             aria-label="Commercial timeline chapters"
-            className="grid grid-cols-6 gap-1.5"
+            className="grid grid-cols-6 gap-1 sm:gap-1.5"
           >
             {scenes.map((sc, idx) => {
               const fillPct =
@@ -852,7 +893,7 @@ export default function CommercialVideoPlayer({ onEnterConsole }: CommercialVide
                   type="button"
                   onClick={() => handleSelectScene(idx)}
                   aria-label={`Jump to ${sc.chapterLabel}: ${sc.title}`}
-                  className="group py-1.5 cursor-pointer text-left focus-visible:outline-2 focus-visible:outline-cyan-400 rounded"
+                  className="group py-2 cursor-pointer text-left focus-visible:outline-2 focus-visible:outline-cyan-400 rounded"
                 >
                   <div className="h-1.5 w-full rounded-full bg-slate-800 overflow-hidden">
                     <div
@@ -867,15 +908,15 @@ export default function CommercialVideoPlayer({ onEnterConsole }: CommercialVide
             })}
           </div>
 
-          {/* Primary Controls Row */}
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="flex items-center gap-2">
+          {/* Primary Controls Row (44px mobile touch targets, prevents iOS select zoom) */}
+          <div className="flex flex-wrap items-center justify-between gap-2 sm:gap-3">
+            <div className="flex items-center gap-1 sm:gap-2">
               <button
                 type="button"
                 onClick={handleTogglePlay}
                 id="commercial-play-toggle-btn"
                 aria-label={isPlaying ? 'Pause commercial' : 'Play commercial'}
-                className="w-9 h-9 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-slate-950 flex items-center justify-center transition-colors cursor-pointer shrink-0"
+                className="w-11 h-11 sm:w-9 sm:h-9 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-slate-950 flex items-center justify-center transition-colors cursor-pointer shrink-0"
               >
                 {isPlaying ? (
                   <Pause className="w-4 h-4 fill-slate-950" />
@@ -889,7 +930,7 @@ export default function CommercialVideoPlayer({ onEnterConsole }: CommercialVide
                 onClick={() => handleSelectScene(Math.max(0, activeIndex - 1))}
                 disabled={activeIndex === 0}
                 aria-label="Previous chapter"
-                className="p-2 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 disabled:opacity-35 transition-colors cursor-pointer"
+                className="w-11 h-11 sm:w-9 sm:h-9 flex items-center justify-center rounded-lg text-slate-300 hover:text-white hover:bg-white/5 disabled:opacity-35 transition-colors cursor-pointer"
               >
                 <SkipBack className="w-4 h-4" />
               </button>
@@ -899,7 +940,7 @@ export default function CommercialVideoPlayer({ onEnterConsole }: CommercialVide
                 onClick={() => handleSelectScene(Math.min(scenes.length - 1, activeIndex + 1))}
                 disabled={activeIndex === scenes.length - 1}
                 aria-label="Next chapter"
-                className="p-2 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 disabled:opacity-35 transition-colors cursor-pointer"
+                className="w-11 h-11 sm:w-9 sm:h-9 flex items-center justify-center rounded-lg text-slate-300 hover:text-white hover:bg-white/5 disabled:opacity-35 transition-colors cursor-pointer"
               >
                 <SkipForward className="w-4 h-4" />
               </button>
@@ -908,25 +949,25 @@ export default function CommercialVideoPlayer({ onEnterConsole }: CommercialVide
                 type="button"
                 onClick={() => handleSelectScene(0)}
                 aria-label="Restart commercial"
-                className="p-2 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition-colors cursor-pointer"
+                className="w-11 h-11 sm:w-9 sm:h-9 flex items-center justify-center rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition-colors cursor-pointer"
               >
                 <RotateCcw className="w-4 h-4" />
               </button>
 
-              <span className="ml-1 font-mono text-xs text-slate-300 tabular-nums">
+              <span className="ml-0.5 sm:ml-1 font-mono text-[11px] sm:text-xs text-slate-300 tabular-nums whitespace-nowrap">
                 {formatTime(elapsedSec)} <span className="text-slate-600">/</span>{' '}
                 {formatTime(totalDurationSec)}
               </span>
             </div>
 
-            <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+            <div className="flex flex-wrap items-center gap-1.5 sm:gap-3 w-full sm:w-auto justify-between sm:justify-end">
               {/* Mute & Volume */}
               <div className="flex items-center gap-1.5">
                 <button
                   type="button"
                   onClick={() => setIsMuted((m) => !m)}
                   aria-label={isMuted ? 'Unmute voiceover' : 'Mute voiceover'}
-                  className="p-2 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition-colors cursor-pointer"
+                  className="w-11 h-11 sm:w-9 sm:h-9 flex items-center justify-center rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition-colors cursor-pointer"
                 >
                   {isMuted || volume === 0 ? (
                     <VolumeX className="w-4 h-4 text-amber-400" />
@@ -950,14 +991,14 @@ export default function CommercialVideoPlayer({ onEnterConsole }: CommercialVide
                 />
               </div>
 
-              {/* Narrator Voice Selector */}
-              <label className="inline-flex items-center gap-1.5 text-xs text-slate-400">
+              {/* Narrator Voice Selector (16px on mobile to prevent iOS Safari auto-zoom) */}
+              <label className="inline-flex items-center text-xs text-slate-400 flex-1 sm:flex-none min-w-0">
                 <span className="sr-only">Narrator Voice</span>
                 <select
                   aria-label="Select narrator voice"
                   value={selectedVoice}
                   onChange={(e) => handleVoiceChange(e.target.value)}
-                  className="px-2.5 py-1.5 rounded-lg bg-slate-950 border border-white/10 text-xs font-mono text-slate-200 focus:outline-none focus:border-cyan-400 cursor-pointer"
+                  className="w-full sm:w-auto min-h-[44px] sm:min-h-0 px-2.5 py-2 sm:py-1.5 rounded-lg bg-slate-950 border border-white/10 text-base sm:text-xs font-mono text-slate-200 focus:outline-none focus:border-cyan-400 cursor-pointer"
                 >
                   {VOICE_OPTIONS.map((v) => (
                     <option key={v.id} value={v.id}>
@@ -973,7 +1014,7 @@ export default function CommercialVideoPlayer({ onEnterConsole }: CommercialVide
                 onClick={() => setCaptionsOn((c) => !c)}
                 aria-label={captionsOn ? 'Hide closed captions' : 'Show closed captions'}
                 aria-pressed={captionsOn}
-                className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-mono transition-colors cursor-pointer ${
+                className={`min-h-[44px] sm:min-h-0 inline-flex items-center justify-center gap-1 px-3 sm:px-2.5 py-2 sm:py-1.5 rounded-lg border text-xs font-mono transition-colors cursor-pointer shrink-0 ${
                   captionsOn
                     ? 'border-cyan-500/40 bg-cyan-500/15 text-cyan-300'
                     : 'border-white/10 bg-slate-950 text-slate-400 hover:text-white'
@@ -983,53 +1024,61 @@ export default function CommercialVideoPlayer({ onEnterConsole }: CommercialVide
                 <span>CC</span>
               </button>
 
-              {/* Fullscreen Toggle */}
-              <button
-                type="button"
-                onClick={handleToggleFullscreen}
-                aria-label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
-                className="p-2 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition-colors cursor-pointer"
-              >
-                {isFullscreen ? (
-                  <Minimize2 className="w-4 h-4" />
-                ) : (
-                  <Maximize2 className="w-4 h-4" />
-                )}
-              </button>
+              {/* Fullscreen Toggle (hidden when browser does not support Fullscreen API, e.g. iOS Safari) */}
+              {canFullscreen && (
+                <button
+                  type="button"
+                  onClick={handleToggleFullscreen}
+                  aria-label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
+                  className="w-11 h-11 sm:w-9 sm:h-9 flex items-center justify-center rounded-lg text-slate-300 hover:text-white hover:bg-white/5 transition-colors cursor-pointer shrink-0"
+                >
+                  {isFullscreen ? (
+                    <Minimize2 className="w-4 h-4" />
+                  ) : (
+                    <Maximize2 className="w-4 h-4" />
+                  )}
+                </button>
+              )}
             </div>
           </div>
 
           {voiceNotice && (
-            <p className="text-[11px] font-mono text-amber-300/90 flex items-center gap-1.5 pt-0.5">
-              <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+            <p className="text-[11px] font-mono text-amber-300/90 flex items-start gap-1.5 pt-0.5 break-words">
+              <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
               <span>{voiceNotice}</span>
             </p>
           )}
         </div>
       </div>
 
-      {/* 6-Chapter Storyboard Rail Below Player */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5">
-        {scenes.map((sc, idx) => {
-          const isCurrent = idx === activeIndex;
-          return (
-            <button
-              key={sc.id}
-              type="button"
-              onClick={() => handleSelectScene(idx)}
-              className={`text-left p-3 rounded-xl border transition-all cursor-pointer ${
-                isCurrent
-                  ? 'border-cyan-500/50 bg-cyan-500/10 text-white'
-                  : 'border-white/10 bg-slate-900/50 text-slate-400 hover:border-white/20 hover:text-slate-200'
-              }`}
-            >
-              <p className={`font-mono text-[10px] ${isCurrent ? 'text-cyan-400' : 'text-slate-500'}`}>
-                {sc.chapterLabel}
-              </p>
-              <p className="mt-1 text-xs font-semibold leading-snug line-clamp-2">{sc.title}</p>
-            </button>
-          );
-        })}
+      {/* 6-Chapter Storyboard Rail Below Player (Horizontal snap carousel on phones, grid on sm+) */}
+      <div className="space-y-1.5">
+        <div className="flex sm:hidden items-center justify-between text-[11px] font-mono text-slate-400 px-0.5">
+          <span>Chapters ({activeIndex + 1} / {scenes.length})</span>
+          <span>Swipe to browse →</span>
+        </div>
+        <div className="flex overflow-x-auto snap-x pb-1 sm:pb-0 sm:grid sm:grid-cols-3 lg:grid-cols-6 gap-2.5">
+          {scenes.map((sc, idx) => {
+            const isCurrent = idx === activeIndex;
+            return (
+              <button
+                key={sc.id}
+                type="button"
+                onClick={() => handleSelectScene(idx)}
+                className={`snap-start min-w-[152px] sm:min-w-0 shrink-0 text-left p-3 rounded-xl border transition-all cursor-pointer ${
+                  isCurrent
+                    ? 'border-cyan-500/50 bg-cyan-500/10 text-white'
+                    : 'border-white/10 bg-slate-900/50 text-slate-400 hover:border-white/20 hover:text-slate-200'
+                }`}
+              >
+                <p className={`font-mono text-[10px] ${isCurrent ? 'text-cyan-400' : 'text-slate-500'}`}>
+                  {sc.chapterLabel}
+                </p>
+                <p className="mt-1 text-xs font-semibold leading-snug line-clamp-2">{sc.title}</p>
+              </button>
+            );
+          })}
+        </div>
       </div>
     </div>
   );
@@ -1063,10 +1112,12 @@ function CommercialSceneVisual({
     ];
 
     return (
-      <div className="grid md:grid-cols-12 gap-6 items-center">
-        <div className="md:col-span-6 space-y-3">
-          <p className="font-mono text-xs text-amber-400 tracking-wider">{scene.kicker}</p>
-          <h3 className="text-2xl sm:text-3xl font-bold text-white tracking-tight leading-tight">
+      <div className="grid md:grid-cols-12 gap-4 sm:gap-6 items-center">
+        <div className="md:col-span-6 min-w-0 space-y-2 sm:space-y-3">
+          <p className="font-mono text-[11px] sm:text-xs text-amber-400 tracking-wider">
+            {scene.kicker}
+          </p>
+          <h3 className="text-lg sm:text-2xl lg:text-3xl font-bold text-white tracking-tight leading-tight">
             Fragmented security tools leave blind spots when attacks strike.
           </h3>
           <p className="text-xs sm:text-sm text-slate-400 leading-relaxed">
@@ -1074,27 +1125,27 @@ function CommercialSceneVisual({
           </p>
         </div>
 
-        <div className="md:col-span-6 rounded-xl border border-white/10 bg-slate-900/75 p-4 space-y-2.5">
-          <div className="flex items-center justify-between text-[11px] font-mono text-slate-400 border-b border-white/10 pb-2">
-            <span>INBOUND PERIMETER TELEMETRY</span>
+        <div className="md:col-span-6 min-w-0 rounded-xl border border-white/10 bg-slate-900/75 p-3 sm:p-4 space-y-2">
+          <div className="flex flex-wrap items-center justify-between gap-1 text-[10px] sm:text-[11px] font-mono text-slate-400 border-b border-white/10 pb-2">
+            <span>INBOUND PERIMETER</span>
             <span className="text-amber-400">HIGH PROBE ACTIVITY</span>
           </div>
-          {vectors.map((v, idx) => {
+          {vectors.map((v) => {
             const lit = progress >= v.threshold || !isPlaying;
             return (
               <motion.div
                 key={v.label}
-                initial={{ opacity: 0.35, x: reducedMotion ? 0 : 10 }}
-                animate={{ opacity: lit ? 1 : 0.35, x: lit ? 0 : 8 }}
+                initial={{ opacity: 0.35, x: reducedMotion ? 0 : 8 }}
+                animate={{ opacity: lit ? 1 : 0.35, x: lit ? 0 : 6 }}
                 transition={{ duration: 0.3 }}
-                className={`flex items-center justify-between px-3 py-2 rounded-lg border text-xs font-mono ${
+                className={`flex items-center justify-between gap-2 px-2.5 sm:px-3 py-1.5 sm:py-2 rounded-lg border text-[11px] sm:text-xs font-mono ${
                   lit
                     ? 'border-amber-500/35 bg-amber-950/25 text-amber-100'
                     : 'border-white/5 bg-slate-950/60 text-slate-500'
                 }`}
               >
                 <span className="truncate">{v.label}</span>
-                <span className="text-[10px] text-amber-400 shrink-0 ml-2">{v.mitre}</span>
+                <span className="text-[10px] text-amber-400 shrink-0">{v.mitre}</span>
               </motion.div>
             );
           })}
@@ -1108,13 +1159,13 @@ function CommercialSceneVisual({
     const activeProtoIdx = Math.floor(progress * protocols.length) % protocols.length;
 
     return (
-      <div className="grid md:grid-cols-12 gap-6 items-center">
-        <div className="md:col-span-5 space-y-3">
-          <div className="inline-flex items-center gap-2 font-mono text-xs text-cyan-400">
-            <Activity className="w-4 h-4" />
+      <div className="grid md:grid-cols-12 gap-4 sm:gap-6 items-center">
+        <div className="md:col-span-5 min-w-0 space-y-2 sm:space-y-3">
+          <div className="inline-flex items-center gap-2 font-mono text-[11px] sm:text-xs text-cyan-400">
+            <Activity className="w-4 h-4 shrink-0" />
             <span>{scene.kicker}</span>
           </div>
-          <h3 className="text-2xl sm:text-3xl font-bold text-white tracking-tight leading-tight">
+          <h3 className="text-lg sm:text-2xl lg:text-3xl font-bold text-white tracking-tight leading-tight">
             12-Protocol Network IDS &amp; Real-Time HTTP DPI
           </h3>
           <p className="text-xs sm:text-sm text-slate-400 leading-relaxed">
@@ -1122,14 +1173,14 @@ function CommercialSceneVisual({
           </p>
         </div>
 
-        <div className="md:col-span-7 rounded-xl border border-cyan-500/25 bg-slate-900/80 p-4 space-y-3.5">
-          <div className="grid grid-cols-6 gap-1.5">
+        <div className="md:col-span-7 min-w-0 rounded-xl border border-cyan-500/25 bg-slate-900/80 p-3 sm:p-4 space-y-3">
+          <div className="grid grid-cols-4 sm:grid-cols-6 gap-1.5">
             {protocols.map((proto, idx) => {
               const active = idx <= activeProtoIdx;
               return (
                 <div
                   key={proto}
-                  className={`py-1.5 text-center rounded font-mono text-[11px] border transition-colors ${
+                  className={`py-1.5 text-center rounded font-mono text-[10px] sm:text-[11px] border transition-colors ${
                     idx === activeProtoIdx && isPlaying
                       ? 'border-cyan-400 bg-cyan-500/25 text-white font-semibold'
                       : active
@@ -1144,17 +1195,17 @@ function CommercialSceneVisual({
           </div>
 
           <div className="rounded-lg bg-slate-950 border border-white/10 p-3 font-mono text-[11px] space-y-1.5">
-            <div className="flex justify-between text-slate-400">
+            <div className="flex items-center justify-between gap-2 text-slate-400">
               <span>DPI GATEWAY INTERCEPT</span>
-              <span className="text-emerald-400">ACTIVE</span>
+              <span className="text-emerald-400 shrink-0">ACTIVE</span>
             </div>
-            <p className="text-cyan-300 truncate">
-              POST /api/probe/live-attack → UNION SELECT credential extraction
+            <p className="text-cyan-300 break-words">
+              POST /api/probe/live-attack → UNION SELECT extraction
             </p>
-            <div className="flex items-center justify-between pt-1 text-emerald-400">
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-1 text-emerald-400">
               <span className="inline-flex items-center gap-1.5">
-                <CheckCircle2 className="w-3.5 h-3.5" />
-                MITRE T1190 Signature Matched &amp; Logged
+                <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                MITRE T1190 Matched &amp; Logged
               </span>
               <span className="text-slate-400 tabular-nums">{Math.round(progress * 100)}%</span>
             </div>
@@ -1173,13 +1224,13 @@ function CommercialSceneVisual({
     const quarantineEngaged = progress >= 0.55;
 
     return (
-      <div className="grid md:grid-cols-12 gap-6 items-center">
-        <div className="md:col-span-5 space-y-3">
-          <div className="inline-flex items-center gap-2 font-mono text-xs text-sky-400">
-            <Server className="w-4 h-4" />
+      <div className="grid md:grid-cols-12 gap-4 sm:gap-6 items-center">
+        <div className="md:col-span-5 min-w-0 space-y-2 sm:space-y-3">
+          <div className="inline-flex items-center gap-2 font-mono text-[11px] sm:text-xs text-sky-400">
+            <Server className="w-4 h-4 shrink-0" />
             <span>{scene.kicker}</span>
           </div>
-          <h3 className="text-2xl sm:text-3xl font-bold text-white tracking-tight leading-tight">
+          <h3 className="text-lg sm:text-2xl lg:text-3xl font-bold text-white tracking-tight leading-tight">
             Isolated Host IDS Fleets Across Linux, Windows &amp; macOS
           </h3>
           <p className="text-xs sm:text-sm text-slate-400 leading-relaxed">
@@ -1187,17 +1238,17 @@ function CommercialSceneVisual({
           </p>
         </div>
 
-        <div className="md:col-span-7 space-y-2.5">
+        <div className="md:col-span-7 min-w-0 space-y-2">
           {hosts.map((host) => (
             <div
               key={host.name}
-              className="rounded-xl border border-white/10 bg-slate-900/80 px-4 py-3 flex items-center justify-between gap-4"
+              className="rounded-xl border border-white/10 bg-slate-900/80 px-3 sm:px-4 py-2.5 sm:py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-1.5 sm:gap-4"
             >
               <div className="min-w-0">
                 <p className="font-mono text-xs font-semibold text-white truncate">{host.name}</p>
                 <p className="text-[11px] text-slate-400">{host.os} · HIDS Agent</p>
               </div>
-              <div className="flex items-center gap-4 font-mono text-[11px] tabular-nums shrink-0">
+              <div className="flex flex-wrap items-center gap-3 sm:gap-4 font-mono text-[11px] tabular-nums shrink-0">
                 <span className="text-cyan-300">CPU {host.cpu}%</span>
                 <span className="text-sky-300">MEM {host.mem}%</span>
                 <span
@@ -1212,17 +1263,19 @@ function CommercialSceneVisual({
           ))}
 
           <div
-            className={`rounded-lg border px-3.5 py-2.5 flex items-center justify-between text-xs font-mono transition-colors ${
+            className={`rounded-lg border px-3 py-2 flex items-center text-[11px] sm:text-xs font-mono transition-colors ${
               quarantineEngaged
                 ? 'border-emerald-500/40 bg-emerald-950/30 text-emerald-300'
                 : 'border-white/10 bg-slate-950/70 text-slate-400'
             }`}
           >
             <span className="inline-flex items-center gap-2">
-              <Lock className="w-3.5 h-3.5" />
-              {quarantineEngaged
-                ? 'Remote Quarantine Policy Broadcasted via WebSocket'
-                : 'Monitoring Process Trees & File Integrity Logs'}
+              <Lock className="w-3.5 h-3.5 shrink-0" />
+              <span>
+                {quarantineEngaged
+                  ? 'Remote Quarantine Policy Broadcasted via WebSocket'
+                  : 'Monitoring Process Trees & File Integrity Logs'}
+              </span>
             </span>
           </div>
         </div>
@@ -1240,13 +1293,13 @@ function CommercialSceneVisual({
     const activeStage = Math.min(stages.length - 1, Math.floor(progress * stages.length));
 
     return (
-      <div className="grid md:grid-cols-12 gap-6 items-center">
-        <div className="md:col-span-5 space-y-3">
-          <div className="inline-flex items-center gap-2 font-mono text-xs text-amber-400">
-            <Globe className="w-4 h-4" />
+      <div className="grid md:grid-cols-12 gap-4 sm:gap-6 items-center">
+        <div className="md:col-span-5 min-w-0 space-y-2 sm:space-y-3">
+          <div className="inline-flex items-center gap-2 font-mono text-[11px] sm:text-xs text-amber-400">
+            <Globe className="w-4 h-4 shrink-0" />
             <span>{scene.kicker}</span>
           </div>
-          <h3 className="text-2xl sm:text-3xl font-bold text-white tracking-tight leading-tight">
+          <h3 className="text-lg sm:text-2xl lg:text-3xl font-bold text-white tracking-tight leading-tight">
             MITRE ATT&amp;CK Correlation &amp; Geodesic Threat Telemetry
           </h3>
           <p className="text-xs sm:text-sm text-slate-400 leading-relaxed">
@@ -1254,11 +1307,11 @@ function CommercialSceneVisual({
           </p>
         </div>
 
-        <div className="md:col-span-7 rounded-xl border border-white/10 bg-slate-900/80 p-4 space-y-3">
+        <div className="md:col-span-7 min-w-0 rounded-xl border border-white/10 bg-slate-900/80 p-3 sm:p-4 space-y-3">
           {/* Stylized Geodesic Telemetry Arcs SVG */}
           <svg
             viewBox="0 0 460 150"
-            className="w-full h-32 rounded-lg bg-slate-950 border border-white/10"
+            className="w-full h-24 sm:h-32 rounded-lg bg-slate-950 border border-white/10"
             aria-hidden="true"
           >
             <g stroke="rgba(56,189,248,0.14)" strokeWidth="1" fill="none">
@@ -1301,7 +1354,7 @@ function CommercialSceneVisual({
             <circle cx="230" cy="75" r="3" fill="#22d3ee" />
           </svg>
 
-          <div className="grid grid-cols-4 gap-2">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
             {stages.map((st, idx) => (
               <div
                 key={st.code}
@@ -1323,13 +1376,13 @@ function CommercialSceneVisual({
 
   if (sceneId === 'dual-db-gmail') {
     return (
-      <div className="grid md:grid-cols-12 gap-6 items-center">
-        <div className="md:col-span-5 space-y-3">
-          <div className="inline-flex items-center gap-2 font-mono text-xs text-emerald-400">
-            <Database className="w-4 h-4" />
+      <div className="grid md:grid-cols-12 gap-4 sm:gap-6 items-center">
+        <div className="md:col-span-5 min-w-0 space-y-2 sm:space-y-3">
+          <div className="inline-flex items-center gap-2 font-mono text-[11px] sm:text-xs text-emerald-400">
+            <Database className="w-4 h-4 shrink-0" />
             <span>{scene.kicker}</span>
           </div>
-          <h3 className="text-2xl sm:text-3xl font-bold text-white tracking-tight leading-tight">
+          <h3 className="text-lg sm:text-2xl lg:text-3xl font-bold text-white tracking-tight leading-tight">
             Dual-Database Persistence &amp; Verified Gmail Operations
           </h3>
           <p className="text-xs sm:text-sm text-slate-400 leading-relaxed">
@@ -1337,10 +1390,10 @@ function CommercialSceneVisual({
           </p>
         </div>
 
-        <div className="md:col-span-7 grid sm:grid-cols-2 gap-3.5">
-          <div className="rounded-xl border border-emerald-500/30 bg-slate-900/80 p-4 space-y-2.5">
-            <div className="flex items-center gap-2 text-xs font-mono text-emerald-400">
-              <Database className="w-4 h-4" />
+        <div className="md:col-span-7 min-w-0 grid sm:grid-cols-2 gap-3">
+          <div className="rounded-xl border border-emerald-500/30 bg-slate-900/80 p-3.5 sm:p-4 space-y-2">
+            <div className="flex items-center gap-2 text-[11px] sm:text-xs font-mono text-emerald-400">
+              <Database className="w-4 h-4 shrink-0" />
               <span>DUAL PERSISTENCE</span>
             </div>
             <p className="text-sm font-semibold text-white">Firestore + MS SQL Server</p>
@@ -1355,16 +1408,16 @@ function CommercialSceneVisual({
             </div>
           </div>
 
-          <div className="rounded-xl border border-cyan-500/30 bg-slate-900/80 p-4 space-y-2.5">
-            <div className="flex items-center gap-2 text-xs font-mono text-cyan-400">
-              <Mail className="w-4 h-4" />
+          <div className="rounded-xl border border-cyan-500/30 bg-slate-900/80 p-3.5 sm:p-4 space-y-2">
+            <div className="flex items-center gap-2 text-[11px] sm:text-xs font-mono text-cyan-400">
+              <Mail className="w-4 h-4 shrink-0" />
               <span>GMAIL DISPATCH</span>
             </div>
             <p className="text-sm font-semibold text-white">OAuth Alerts &amp; 6-Digit OTP</p>
             <p className="text-xs text-slate-400 leading-relaxed">
               Login security notices, AI-assisted incident drafts, and Gmail OTP recovery with full audit logging.
             </p>
-            <div className="font-mono text-[11px] text-cyan-300 bg-slate-950 border border-white/10 rounded px-2.5 py-1.5">
+            <div className="font-mono text-[10px] sm:text-[11px] text-cyan-300 bg-slate-950 border border-white/10 rounded px-2.5 py-1.5 truncate">
               OTP VERIFY · 6-DIGIT · TLS/OAUTH
             </div>
           </div>
@@ -1375,31 +1428,37 @@ function CommercialSceneVisual({
 
   // Final scene: cesoc-cta
   return (
-    <div className="text-center max-w-3xl mx-auto space-y-5">
-      <div className="inline-flex items-center gap-2 font-mono text-xs text-cyan-400">
-        <GraduationCap className="w-4 h-4" />
+    <div className="text-center max-w-3xl mx-auto space-y-4 sm:space-y-5">
+      <div className="inline-flex items-center gap-2 font-mono text-[11px] sm:text-xs text-cyan-400">
+        <GraduationCap className="w-4 h-4 shrink-0" />
         <span>CE-SOC CERTIFICATION ACADEMY</span>
       </div>
-      <h3 className="text-2xl sm:text-4xl font-bold text-white tracking-tight leading-tight">
+      <h3 className="text-xl sm:text-3xl lg:text-4xl font-bold text-white tracking-tight leading-tight">
         Defend Your Infrastructure. Certify Your Analysts.
       </h3>
-      <div className="grid grid-cols-3 gap-3 max-w-2xl mx-auto pt-1">
-        <div className="rounded-xl border border-white/10 bg-slate-900/80 p-3.5">
-          <p className="font-mono text-lg sm:text-xl font-bold text-cyan-400 tabular-nums">10</p>
-          <p className="text-[11px] text-slate-300 mt-0.5">Workbook Chapters</p>
+      <div className="grid grid-cols-3 gap-2 sm:gap-3 max-w-2xl mx-auto pt-1">
+        <div className="rounded-xl border border-white/10 bg-slate-900/80 p-2.5 sm:p-3.5">
+          <p className="font-mono text-base sm:text-xl font-bold text-cyan-400 tabular-nums">10</p>
+          <p className="text-[10px] sm:text-[11px] text-slate-300 mt-0.5 leading-tight">
+            Workbook Chapters
+          </p>
         </div>
-        <div className="rounded-xl border border-white/10 bg-slate-900/80 p-3.5">
-          <p className="font-mono text-lg sm:text-xl font-bold text-white tabular-nums">220+</p>
-          <p className="text-[11px] text-slate-300 mt-0.5">Randomized Exam Bank</p>
+        <div className="rounded-xl border border-white/10 bg-slate-900/80 p-2.5 sm:p-3.5">
+          <p className="font-mono text-base sm:text-xl font-bold text-white tabular-nums">220+</p>
+          <p className="text-[10px] sm:text-[11px] text-slate-300 mt-0.5 leading-tight">
+            Exam Bank
+          </p>
         </div>
-        <div className="rounded-xl border border-white/10 bg-slate-900/80 p-3.5">
-          <p className="font-mono text-lg sm:text-xl font-bold text-emerald-400 tabular-nums">QR</p>
-          <p className="text-[11px] text-slate-300 mt-0.5">Public Registry Verify</p>
+        <div className="rounded-xl border border-white/10 bg-slate-900/80 p-2.5 sm:p-3.5">
+          <p className="font-mono text-base sm:text-xl font-bold text-emerald-400 tabular-nums">QR</p>
+          <p className="text-[10px] sm:text-[11px] text-slate-300 mt-0.5 leading-tight">
+            Registry Verify
+          </p>
         </div>
       </div>
-      <div className="flex items-center justify-center gap-2.5 pt-2 text-xs font-mono text-slate-400">
-        <Shield className="w-4 h-4 text-cyan-400" />
-        <span>ENCDEC IDS · HYBRID INTRUSION DETECTION &amp; SOC COMMAND CONSOLE</span>
+      <div className="flex flex-wrap items-center justify-center gap-2 pt-1 text-[10px] sm:text-xs font-mono text-slate-400">
+        <Shield className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-cyan-400 shrink-0" />
+        <span>ENCDEC IDS · HYBRID IDS &amp; SOC COMMAND CONSOLE</span>
       </div>
     </div>
   );

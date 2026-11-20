@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, cleanup, within } from '@testing-library/react';
 import { ThemeProvider } from '../../context/ThemeContext.js';
 import LandingPage from '../LandingPage.js';
 
@@ -313,4 +313,91 @@ describe('LandingPage 3D Public Experience', () => {
       );
     });
   });
+
+  it('toggles the mobile navigation drawer and closes cleanly on navigation or dismiss', () => {
+    const onEnterConsole = vi.fn();
+
+    render(
+      <ThemeProvider>
+        <LandingPage onEnterConsole={onEnterConsole} />
+      </ThemeProvider>
+    );
+
+    const openMenuBtn = screen.getByRole('button', { name: /Open menu/i });
+    expect(openMenuBtn.getAttribute('aria-expanded')).toBe('false');
+
+    fireEvent.click(openMenuBtn);
+    const closeMenuBtn = screen.getByRole('button', { name: /Close menu/i });
+    expect(closeMenuBtn.getAttribute('aria-expanded')).toBe('true');
+
+    // Mobile drawer displays Appearance theme row and section links
+    expect(screen.getByText('Appearance')).toBeTruthy();
+
+    // Clicking Close menu dismisses drawer
+    fireEvent.click(closeMenuBtn);
+    expect(screen.getByRole('button', { name: /Open menu/i }).getAttribute('aria-expanded')).toBe('false');
+    expect(screen.queryByText('Appearance')).toBeNull();
+
+    // Re-open and tap a mobile drawer link to verify drawer closes automatically
+    fireEvent.click(screen.getByRole('button', { name: /Open menu/i }));
+    const mobileNav = screen.getByRole('navigation', { name: 'Mobile navigation' });
+    expect(within(mobileNav).getByText('Appearance')).toBeTruthy();
+    fireEvent.click(within(mobileNav).getByRole('link', { name: 'Commercial' }));
+    expect(screen.getByRole('button', { name: /Open menu/i }).getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('triggers live DPI probe from the uncovered 3D Hero dock and interacts with 3D Workflow, Architecture Stack, and CE-SOC Card', async () => {
+    const onEnterConsole = vi.fn();
+
+    render(
+      <ThemeProvider>
+        <LandingPage onEnterConsole={onEnterConsole} />
+      </ThemeProvider>
+    );
+
+    // 1. Hero Bottom Dock one-click "Test Live DPI" calls real /api/probe/live-attack
+    const heroDpiBtn = screen.getByRole('button', { name: /Test Live DPI/i });
+    fireEvent.click(heroDpiBtn);
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/probe/live-attack',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({ vector: 'sqli' }),
+        })
+      );
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('Threat Intercepted')).toBeTruthy();
+      expect(screen.getByText(/\/api\/probe\/trap/i)).toBeTruthy();
+    });
+
+    // 2. Interactive 3D Operational Workflow Stage switches steps
+    const workflowRoot = document.getElementById('workflow-stage-3d')!;
+    fireEvent.click(within(workflowRoot).getByRole('button', { name: /03 · Contain/i }));
+    await waitFor(() => {
+      expect(within(workflowRoot).getByText(/Stage 03 · Contain/i)).toBeTruthy();
+    });
+
+    // 3. Exploded 3D Isometric Architecture Stack switches layers
+    const archRoot = document.getElementById('architecture-stack-3d')!;
+    const layer3Buttons = within(archRoot).getAllByRole('button', { name: /Dual-Database Persistence/i });
+    fireEvent.click(layer3Buttons[0]);
+    await waitFor(() => {
+      expect(within(archRoot).getByText(/Layer 03 of 04/i)).toBeTruthy();
+    });
+
+    // 4. Holographic 3D CE-SOC Credential Card shows hydrated registry count
+    await waitFor(() => {
+      expect(screen.getByText(/14 Issued/i)).toBeTruthy();
+    });
+    const qrBtn = screen.getByRole('button', { name: /Open CE-SOC QR Certificate Verifier/i });
+    fireEvent.click(qrBtn);
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Verify Credential/i })).toBeTruthy();
+    });
+  });
 });
+
